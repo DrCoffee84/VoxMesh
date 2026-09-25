@@ -155,13 +155,13 @@ class MicService : Service() {
                 )
             }
 
-            val finalRecord = record
-            if (finalRecord.state != AudioRecord.STATE_INITIALIZED) {
+            if (record.state != AudioRecord.STATE_INITIALIZED) {
+                record.release()
                 return
             }
 
-            audioRecord = finalRecord
-            finalRecord.startRecording()
+            audioRecord = record
+            record.startRecording()
 
             udpSocket = DatagramSocket()
             socket = udpSocket
@@ -186,7 +186,7 @@ class MicService : Service() {
             while (isRunning) {
                 var bytesRead = 0
                 while (bytesRead < FRAME_BYTES && isRunning) {
-                    val read = finalRecord.read(pcmChunk, bytesRead, FRAME_BYTES - bytesRead)
+                    val read = record.read(pcmChunk, bytesRead, FRAME_BYTES - bytesRead)
                     if (read > 0) {
                         bytesRead += read
                     } else {
@@ -211,12 +211,14 @@ class MicService : Service() {
             e.printStackTrace()
         } finally {
             try {
-                record?.stop()
-                record?.release()
-            } catch (_: Exception) {}
+                audioRecord?.stop()
+            } catch (e: Exception) {}
+            try {
+                audioRecord?.release()
+            } catch (e: Exception) {}
             try {
                 udpSocket?.close()
-            } catch (_: Exception) {}
+            } catch (e: Exception) {}
             audioRecord = null
             socket = null
         }
@@ -246,12 +248,12 @@ class MicService : Service() {
         try {
             audioRecord?.stop()
             audioRecord?.release()
-        } catch (_: Exception) {}
+        } catch (e: Exception) {}
         audioRecord = null
 
         try {
             socket?.close()
-        } catch (_: Exception) {}
+        } catch (e: Exception) {}
         socket = null
 
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -276,7 +278,7 @@ class MicService : Service() {
             if (wakeLock?.isHeld == true) {
                 wakeLock?.release()
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {}
         wakeLock = null
     }
 

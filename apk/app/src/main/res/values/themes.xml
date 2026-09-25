@@ -10,3 +10,4 @@
         <item name="android:windowBackground">@color/bg_main</item>
     </style>
 </resources>
+
