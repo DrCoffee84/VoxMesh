@@ -1,0 +1,70 @@
+# ==========================================
+# VoxMesh - .gitignore
+# ==========================================
+
+# --- Binarios y compilados Go ---
+dist/
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# --- Archivos de configuración local y datos de ejecución ---
+voxmesh.json
+*/voxmesh.json
+*.pem
+phone-mic-cert.pem
+phone-mic-key.pem
+
+# --- Logs y registros ---
+logs/
+*.log
+
+# --- Android & Gradle (carpeta apk/) ---
+.gradle/
+**/build/
+!apk/app/build.gradle
+!apk/build.gradle
+
+# Artefactos empaquetados Android
+*.apk
+*.ap_
+*.aab
+*.dex
+*.class
+
+# Configuración local de SDK Android
+local.properties
+Captures/
+.externalNativeBuild/
+.cxx/
+
+# Keystores y llaves privadas de firma
+*.jks
+*.keystore
+
+# --- IDEs y Editores ---
+# Android Studio / IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+.navigation/
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# --- Archivos del Sistema Operativo ---
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+.AppleDouble
+.LSOverride
