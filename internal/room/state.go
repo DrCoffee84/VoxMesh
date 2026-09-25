@@ -16,6 +16,7 @@ type Participant struct {
 	Address     string    `json:"address"`
 	Order       int       `json:"order"`
 	Connected   bool      `json:"connected"`
+	CanBeHost   bool      `json:"can_be_host"`
 	LastSeenUTC time.Time `json:"last_seen_utc"`
 }
 
@@ -32,7 +33,7 @@ func New(name, username string, address *net.UDPAddr) State {
 		Name:         name,
 		Epoch:        1,
 		HostID:       id,
-		Participants: []Participant{{ID: id, Username: username, Address: address.String(), Order: 0, Connected: true, LastSeenUTC: time.Now().UTC()}},
+		Participants: []Participant{{ID: id, Username: username, Address: address.String(), Order: 0, Connected: true, CanBeHost: true, LastSeenUTC: time.Now().UTC()}},
 	}
 }
 
@@ -73,7 +74,7 @@ func (s State) NextHost() (Participant, bool) {
 	participants := append([]Participant(nil), s.Participants...)
 	sort.Slice(participants, func(left, right int) bool { return participants[left].Order < participants[right].Order })
 	for _, participant := range participants {
-		if participant.Connected && participant.ID != s.HostID {
+		if participant.Connected && participant.ID != s.HostID && participant.CanBeHost {
 			return participant, true
 		}
 	}

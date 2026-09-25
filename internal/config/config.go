@@ -60,6 +60,7 @@ type Config struct {
 	ShowStatusBar         bool    `json:"show_status_bar"`
 	SoundboardMuted       bool    `json:"soundboard_muted"`
 	EventSoundsEnabled    bool    `json:"event_sounds_enabled"`
+	AllowHostMigration    bool    `json:"allow_host_migration"`
 }
 
 func Default() Config {
@@ -90,7 +91,7 @@ func Default() Config {
 		VADHoldMS:             250,
 		GateHoldMS:            250,
 		LiveMonitoring:        false,
-		ListenAddress:         ":0",
+		ListenAddress:         ":47830",
 		InputDevice:           "Sistema predeterminado",
 		OutputDevice:          "Sistema predeterminado",
 		PhoneMicBufferEnabled: true,
@@ -98,6 +99,7 @@ func Default() Config {
 		PhoneMicPort:          47831,
 		ShowStatusBar:         true,
 		EventSoundsEnabled:    true,
+		AllowHostMigration:    true,
 	}
 }
 

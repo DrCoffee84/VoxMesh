@@ -8,7 +8,9 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.media.AudioDeviceInfo
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Build
@@ -33,6 +35,8 @@ class MicService : Service() {
         const val EXTRA_HOST = "extra_host"
         const val EXTRA_PORT = "extra_port"
         const val EXTRA_TOKEN = "extra_token"
+        const val EXTRA_AUDIO_SOURCE = "extra_audio_source"
+        const val EXTRA_DEVICE_ID = "extra_device_id"
 
         private const val NOTIFICATION_ID = 47831
         private const val CHANNEL_ID = "voxmesh_mic_channel"
@@ -59,6 +63,8 @@ class MicService : Service() {
     private var host: String = ""
     private var port: Int = 47831
     private var token: String = ""
+    private var audioSource: Int = MediaRecorder.AudioSource.UNPROCESSED
+    private var deviceId: Int = -1
 
     private var audioRecord: AudioRecord? = null
     private var socket: DatagramSocket? = null
@@ -75,6 +81,8 @@ class MicService : Service() {
                 host = intent.getStringExtra(EXTRA_HOST) ?: ""
                 port = intent.getIntExtra(EXTRA_PORT, 47831)
                 token = intent.getStringExtra(EXTRA_TOKEN) ?: ""
+                audioSource = intent.getIntExtra(EXTRA_AUDIO_SOURCE, MediaRecorder.AudioSource.UNPROCESSED)
+                deviceId = intent.getIntExtra(EXTRA_DEVICE_ID, -1)
                 if (host.isNotEmpty() && !isRunning) {
                     startStreaming()
                 }
@@ -129,38 +137,54 @@ class MicService : Service() {
             )
             val bufferSize = minBuf.coerceAtLeast(FRAME_BYTES * 4)
 
-            var record: AudioRecord = try {
-                AudioRecord(
-                    MediaRecorder.AudioSource.VOICE_RECOGNITION,
-                    SAMPLE_RATE,
-                    AudioFormat.CHANNEL_IN_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT,
-                    bufferSize
-                )
-            } catch (e: Exception) {
-                AudioRecord(
-                    MediaRecorder.AudioSource.MIC,
-                    SAMPLE_RATE,
-                    AudioFormat.CHANNEL_IN_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT,
-                    bufferSize
-                )
+            // Intentar con la fuente solicitada y hacer fallback progresivo si falla el HAL
+            val sourcesToTry = mutableListOf<Int>()
+            sourcesToTry.add(audioSource)
+            if (audioSource != MediaRecorder.AudioSource.VOICE_RECOGNITION) {
+                sourcesToTry.add(MediaRecorder.AudioSource.VOICE_RECOGNITION)
+            }
+            if (audioSource != MediaRecorder.AudioSource.MIC) {
+                sourcesToTry.add(MediaRecorder.AudioSource.MIC)
             }
 
-            if (record.state != AudioRecord.STATE_INITIALIZED) {
-                record.release()
-                record = AudioRecord(
-                    MediaRecorder.AudioSource.MIC,
-                    SAMPLE_RATE,
-                    AudioFormat.CHANNEL_IN_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT,
-                    bufferSize
-                )
+            var record: AudioRecord? = null
+            for (src in sourcesToTry) {
+                try {
+                    val candidate = AudioRecord(
+                        src,
+                        SAMPLE_RATE,
+                        AudioFormat.CHANNEL_IN_MONO,
+                        AudioFormat.ENCODING_PCM_16BIT,
+                        bufferSize
+                    )
+                    if (candidate.state == AudioRecord.STATE_INITIALIZED) {
+                        record = candidate
+                        break
+                    } else {
+                        candidate.release()
+                    }
+                } catch (e: Exception) {
+                    // Continuar al siguiente candidato
+                }
             }
 
-            if (record.state != AudioRecord.STATE_INITIALIZED) {
-                record.release()
+            if (record == null || record.state != AudioRecord.STATE_INITIALIZED) {
+                record?.release()
                 return
+            }
+
+            // Seleccionar dispositivo físico si se especificó
+            if (deviceId != -1) {
+                try {
+                    val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                    val devices = audioManager?.getDevices(AudioManager.GET_DEVICES_INPUTS)
+                    val targetDevice = devices?.firstOrNull { it.id == deviceId }
+                    if (targetDevice != null) {
+                        record.setPreferredDevice(targetDevice)
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
             }
 
             audioRecord = record

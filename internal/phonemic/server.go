@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -188,28 +189,36 @@ func (s *Server) listenUDP() {
 		if err != nil {
 			return
 		}
-		// Discovery: "VMIC_DISCOVER"
+		// Descartar de inmediato paquetes maliciosos o con prefijo incorrecto
+		if n < 4 || string(buf[:4]) != "VMIC" {
+			continue
+		}
+		// Descubrimiento LAN: "VMIC_DISCOVER" (no expone el token de seguridad)
 		if n >= 13 && string(buf[:13]) == "VMIC_DISCOVER" {
-			resp := fmt.Sprintf("VMIC_OFFER:%s:%s", s.token, s.username)
+			resp := fmt.Sprintf("VMIC_OFFER:%s", s.username)
 			_, _ = s.udpConn.WriteToUDP([]byte(resp), srcAddr)
 			continue
 		}
-		// Data packet: "VMIC" (4 bytes) + tokenLen (1 byte) + token (tokenLen bytes) + PCM (1920 bytes)
-		if n >= 5 && string(buf[:4]) == "VMIC" {
-			tokenLen := int(buf[4])
-			headerSize := 5 + tokenLen
-			if tokenLen > 0 && n >= headerSize+frameBytes {
-				packetToken := string(buf[5 : 5+tokenLen])
-				if packetToken == s.token {
-					lastSeenMu.Lock()
-					lastSeen = time.Now()
-					lastSeenMu.Unlock()
-					s.setConnected(true)
-					pcm := buf[headerSize : headerSize+frameBytes]
-					s.enqueueFrame(pcm)
-				}
-			}
+		// Paquete de audio: "VMIC" (4 bytes) + tokenLen (1 byte) + token (tokenLen bytes) + PCM (1920 bytes)
+		if n < 5 {
+			continue
 		}
+		tokenLen := int(buf[4])
+		headerSize := 5 + tokenLen
+		if tokenLen <= 0 || n != headerSize+frameBytes {
+			continue
+		}
+		packetToken := buf[5:headerSize]
+		if subtle.ConstantTimeCompare(packetToken, []byte(s.token)) != 1 {
+			continue
+		}
+
+		lastSeenMu.Lock()
+		lastSeen = time.Now()
+		lastSeenMu.Unlock()
+		s.setConnected(true)
+		pcm := buf[headerSize : headerSize+frameBytes]
+		s.enqueueFrame(pcm)
 	}
 }
 

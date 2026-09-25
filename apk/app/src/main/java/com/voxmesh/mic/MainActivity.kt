@@ -5,9 +5,13 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
+import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.widget.ArrayAdapter
 import android.widget.SeekBar
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -17,6 +21,14 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import com.voxmesh.mic.databinding.ActivityMainBinding
+
+data class AudioSourceOption(val source: Int, val label: String) {
+    override fun toString(): String = label
+}
+
+data class AudioDeviceOption(val id: Int, val label: String) {
+    override fun toString(): String = label
+}
 
 class MainActivity : AppCompatActivity() {
 
@@ -29,6 +41,8 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_PORT = "saved_port"
         private const val KEY_TOKEN = "saved_token"
         private const val KEY_GAIN_STEP = "saved_gain_step"
+        private const val KEY_AUDIO_SOURCE = "saved_audio_source"
+        private const val KEY_DEVICE_ID = "saved_device_id"
     }
 
     private val permissionLauncher = registerForActivityResult(
@@ -49,6 +63,7 @@ class MainActivity : AppCompatActivity() {
 
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
+        setupAudioSpinners()
         loadSavedSettings()
         setupListeners()
         updateUiState(MicService.isRunning, MicService.isMuted)
@@ -56,6 +71,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        refreshDeviceList()
         updateUiState(MicService.isRunning, MicService.isMuted)
         MicService.onStateChanged = { running, muted ->
             runOnUiThread { updateUiState(running, muted) }
@@ -71,6 +87,54 @@ class MainActivity : AppCompatActivity() {
         super.onPause()
         MicService.onStateChanged = null
         MicService.onAudioLevel = null
+    }
+
+    private fun setupAudioSpinners() {
+        val sourceOptions = listOf(
+            AudioSourceOption(MediaRecorder.AudioSource.UNPROCESSED, "Estudio / Sin procesar (UNPROCESSED)"),
+            AudioSourceOption(MediaRecorder.AudioSource.VOICE_RECOGNITION, "Voz Optimizada (VOICE_RECOGNITION)"),
+            AudioSourceOption(MediaRecorder.AudioSource.MIC, "Mic Estándar (MIC)"),
+            AudioSourceOption(MediaRecorder.AudioSource.VOICE_COMMUNICATION, "Comunicación / VoIP (VOICE_COMMUNICATION)")
+        )
+        val sourceAdapter = ArrayAdapter(this, R.layout.spinner_item, sourceOptions)
+        sourceAdapter.setDropDownViewResource(R.layout.spinner_dropdown_item)
+        binding.spAudioSource.adapter = sourceAdapter
+
+        val savedSource = prefs.getInt(KEY_AUDIO_SOURCE, MediaRecorder.AudioSource.UNPROCESSED)
+        val sourceIndex = sourceOptions.indexOfFirst { it.source == savedSource }.let { if (it >= 0) it else 0 }
+        binding.spAudioSource.setSelection(sourceIndex)
+
+        refreshDeviceList()
+    }
+
+    private fun refreshDeviceList() {
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        val deviceList = mutableListOf<AudioDeviceOption>()
+        deviceList.add(AudioDeviceOption(-1, "Automático / Por defecto"))
+
+        if (audioManager != null) {
+            val devices = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
+            for (dev in devices) {
+                val typeName = when (dev.type) {
+                    AudioDeviceInfo.TYPE_BUILTIN_MIC -> "Micrófono Integrado"
+                    AudioDeviceInfo.TYPE_WIRED_HEADSET -> "Auricular con Cable"
+                    AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "Bluetooth"
+                    AudioDeviceInfo.TYPE_USB_DEVICE, AudioDeviceInfo.TYPE_USB_HEADSET -> "USB"
+                    else -> "Entrada de Audio"
+                }
+                val name = if (dev.productName.isNotEmpty()) dev.productName.toString() else typeName
+                val label = "$typeName ($name)"
+                deviceList.add(AudioDeviceOption(dev.id, label))
+            }
+        }
+
+        val deviceAdapter = ArrayAdapter(this, R.layout.spinner_item, deviceList)
+        deviceAdapter.setDropDownViewResource(R.layout.spinner_dropdown_item)
+        binding.spAudioDevice.adapter = deviceAdapter
+
+        val savedDeviceId = prefs.getInt(KEY_DEVICE_ID, -1)
+        val deviceIndex = deviceList.indexOfFirst { it.id == savedDeviceId }.let { if (it >= 0) it else 0 }
+        binding.spAudioDevice.setSelection(deviceIndex)
     }
 
     private fun gainFactorForStep(step: Int): Float = when (step) {
@@ -210,13 +274,25 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        val selectedSourceOpt = binding.spAudioSource.selectedItem as? AudioSourceOption
+        val selectedSource = selectedSourceOpt?.source ?: MediaRecorder.AudioSource.UNPROCESSED
+
+        val selectedDeviceOpt = binding.spAudioDevice.selectedItem as? AudioDeviceOption
+        val selectedDeviceId = selectedDeviceOpt?.id ?: -1
+
         saveSettings(host, port, token)
+        prefs.edit()
+            .putInt(KEY_AUDIO_SOURCE, selectedSource)
+            .putInt(KEY_DEVICE_ID, selectedDeviceId)
+            .apply()
 
         val intent = Intent(this, MicService::class.java).apply {
             action = MicService.ACTION_START
             putExtra(MicService.EXTRA_HOST, host)
             putExtra(MicService.EXTRA_PORT, port)
             putExtra(MicService.EXTRA_TOKEN, token)
+            putExtra(MicService.EXTRA_AUDIO_SOURCE, selectedSource)
+            putExtra(MicService.EXTRA_DEVICE_ID, selectedDeviceId)
         }
 
         ContextCompat.startForegroundService(this, intent)
@@ -245,6 +321,8 @@ class MainActivity : AppCompatActivity() {
             binding.etPort.isEnabled = false
             binding.etToken.isEnabled = false
             binding.btnScanQr.isEnabled = false
+            binding.spAudioSource.isEnabled = false
+            binding.spAudioDevice.isEnabled = false
         } else {
             binding.btnToggleStream.text = getString(R.string.start_streaming)
             binding.btnToggleStream.background = ContextCompat.getDrawable(this, R.drawable.bg_button_green)
@@ -262,6 +340,8 @@ class MainActivity : AppCompatActivity() {
             binding.etPort.isEnabled = true
             binding.etToken.isEnabled = true
             binding.btnScanQr.isEnabled = true
+            binding.spAudioSource.isEnabled = true
+            binding.spAudioDevice.isEnabled = true
         }
     }
 }
