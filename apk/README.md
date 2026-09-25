@@ -1,4 +1,4 @@
-﻿# VoxMesh Mic (Android) 📱🎙️
+# VoxMesh Mic (Android) 📱🎙️
 
 Mini aplicación nativa de Android para usar el celular como micrófono de alta fidelidad en **VoxMesh** sin cortes, con transmisión por UDP en tiempo real y soporte para grabar con la pantalla bloqueada o la app en segundo plano.
 
