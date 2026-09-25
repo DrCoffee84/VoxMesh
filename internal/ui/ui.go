@@ -23,6 +23,7 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	"github.com/atotto/clipboard"
@@ -75,6 +76,7 @@ type App struct {
 	chatBox         *fyne.Container
 	chatInput       *widget.Entry
 	chatSearch      *widget.Entry
+	chatSearchCount *widget.Label
 	chatMessages    []history.Message
 	chatMu          sync.RWMutex
 	selfNameLabel   *widget.Label
@@ -146,30 +148,13 @@ func (a *App) flashVoiceIndicator() {
 	if a.voiceTimer != nil {
 		a.voiceTimer.Stop()
 	}
-	if !a.voiceActive.Swap(true) {
-		a.markPeerSpeaking(a.participantID, "")
-		fyne.Do(func() {
-			if a.voiceIndicator == nil {
-				return
-			}
-			a.voiceIndicator.FillColor = color.NRGBA{R: 128, G: 239, B: 128, A: 255}
-			a.voiceIndicator.StrokeColor = color.NRGBA{R: 80, G: 190, B: 80, A: 255}
-			a.voiceIndicator.Refresh()
-		})
-	}
-	a.voiceTimer = time.AfterFunc(250*time.Millisecond, func() {
+	a.markPeerSpeaking(a.participantID, "")
+	a.voiceActive.Store(true)
+	a.voiceTimer = time.AfterFunc(350*time.Millisecond, func() {
 		a.voiceTimerMu.Lock()
 		a.voiceActive.Store(false)
 		a.voiceTimerMu.Unlock()
 		a.sweepSpeakingPeers()
-		fyne.Do(func() {
-			if a.voiceIndicator == nil {
-				return
-			}
-			a.voiceIndicator.FillColor = color.NRGBA{R: 150, G: 160, B: 165, A: 255}
-			a.voiceIndicator.StrokeColor = color.NRGBA{R: 110, G: 120, B: 125, A: 255}
-			a.voiceIndicator.Refresh()
-		})
 	})
 	a.voiceTimerMu.Unlock()
 }
@@ -249,18 +234,18 @@ func (a *App) content() fyne.CanvasObject {
 		defer a.peerMu.RUnlock()
 		return len(a.peerNames)
 	}, func() fyne.CanvasObject {
-		avatarBg := canvas.NewCircle(color.NRGBA{R: 55, G: 62, B: 75, A: 255})
-		avatarBg.Resize(fyne.NewSize(22, 22))
+		avatarBg := canvas.NewCircle(color.NRGBA{R: 60, G: 70, B: 85, A: 255})
+		avatarBg.Resize(fyne.NewSize(26, 26))
 		avatarText := canvas.NewText("U", color.White)
 		avatarText.TextStyle = fyne.TextStyle{Bold: true}
-		avatarText.TextSize = 11
+		avatarText.TextSize = 12
 		avatarText.Alignment = fyne.TextAlignCenter
 		avatarStack := container.NewStack(avatarBg, container.NewCenter(avatarText))
-		avatarBox := container.NewGridWrap(fyne.NewSize(22, 22), avatarStack)
+		avatarBox := container.NewGridWrap(fyne.NewSize(26, 26), avatarStack)
 
 		nameLabel := widget.NewLabel("")
 		lagLabel := widget.NewLabel("")
-		return container.NewBorder(nil, nil, avatarBox, lagLabel, nameLabel)
+		return container.NewHBox(avatarBox, nameLabel, layout.NewSpacer(), lagLabel)
 	}, func(item widget.ListItemID, object fyne.CanvasObject) {
 		a.peerMu.RLock()
 		defer a.peerMu.RUnlock()
@@ -269,17 +254,19 @@ func (a *App) content() fyne.CanvasObject {
 		}
 		peer := a.peerNames[item]
 		row := object.(*fyne.Container)
-		avatarBox := row.Objects[1].(*fyne.Container)
+		avatarBox := row.Objects[0].(*fyne.Container)
+		nameLabel := row.Objects[1].(*widget.Label)
+		lagLabel := row.Objects[3].(*widget.Label)
+
 		avatarStack := avatarBox.Objects[0].(*fyne.Container)
 		avatarBg := avatarStack.Objects[0].(*canvas.Circle)
-		avatarText := avatarStack.Objects[1].(*fyne.Container).Objects[0].(*canvas.Text)
-		lagLabel := row.Objects[2].(*widget.Label)
-		nameLabel := row.Objects[0].(*widget.Label)
+		avatarCenter := avatarStack.Objects[1].(*fyne.Container)
+		avatarText := avatarCenter.Objects[0].(*canvas.Text)
 
 		initial := "U"
 		trimmedName := strings.TrimSpace(peer.name)
 		if len(trimmedName) > 0 {
-			initial = strings.ToUpper(string([]rune(trimmedName)[0]))
+			initial = strings.ToUpper(string([]rune(trimmedName)[:1]))
 		}
 		avatarText.Text = initial
 
@@ -288,8 +275,8 @@ func (a *App) content() fyne.CanvasObject {
 			avatarBg.FillColor = color.NRGBA{R: 46, G: 204, B: 113, A: 255}
 			avatarText.Color = color.NRGBA{R: 15, G: 35, B: 15, A: 255}
 		} else {
-			avatarBg.FillColor = color.NRGBA{R: 55, G: 62, B: 75, A: 255}
-			avatarText.Color = color.NRGBA{R: 200, G: 205, B: 215, A: 255}
+			avatarBg.FillColor = color.NRGBA{R: 60, G: 70, B: 85, A: 255}
+			avatarText.Color = color.NRGBA{R: 240, G: 245, B: 255, A: 255}
 		}
 		avatarBg.Refresh()
 		avatarText.Refresh()
@@ -347,10 +334,11 @@ func (a *App) content() fyne.CanvasObject {
 	a.chatSearch = widget.NewEntry()
 	a.chatSearch.SetPlaceHolder("🔍 Buscar en el chat...")
 	a.chatSearch.OnChanged = func(string) { a.refreshChat() }
+	a.chatSearchCount = widget.NewLabel("")
 	clearSearch := widget.NewButtonWithIcon("", theme.CancelIcon(), func() {
 		a.chatSearch.SetText("")
 	})
-	searchBar := container.NewBorder(nil, nil, nil, clearSearch, a.chatSearch)
+	searchBar := container.NewBorder(nil, nil, nil, container.NewHBox(a.chatSearchCount, clearSearch), a.chatSearch)
 	chatTop := container.NewBorder(nil, nil, widget.NewLabelWithStyle("Chat de la sala", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), nil, a.roomSelect)
 	chatHeader := container.NewVBox(chatTop, searchBar)
 
@@ -1301,14 +1289,17 @@ func (a *App) refreshChat() {
 			searchFilter = strings.ToLower(strings.TrimSpace(a.chatSearch.Text))
 		}
 
+		matchCount := 0
 		objects := make([]fyne.CanvasObject, 0, len(msgs))
 		for _, msg := range msgs {
 			m := msg
+			isMatch := false
 			if searchFilter != "" {
 				lowerText := strings.ToLower(m.Text)
 				lowerUser := strings.ToLower(m.Username)
-				if !strings.Contains(lowerText, searchFilter) && !strings.Contains(lowerUser, searchFilter) {
-					continue
+				if strings.Contains(lowerText, searchFilter) || strings.Contains(lowerUser, searchFilter) {
+					isMatch = true
+					matchCount++
 				}
 			}
 
@@ -1321,13 +1312,22 @@ func (a *App) refreshChat() {
 			if m.Kind == "image" {
 				text = "📷 Imagen compartida (haz clic para ampliar)"
 			}
-			lbl := widget.NewLabel(fmt.Sprintf("[%s] %s: %s", stamp, prefix, text))
+
+			matchPrefix := ""
+			if isMatch {
+				matchPrefix = "🔎 "
+			}
+			lbl := widget.NewLabel(fmt.Sprintf("%s[%s] %s: %s", matchPrefix, stamp, prefix, text))
 			lbl.Wrapping = fyne.TextWrapWord
+			if isMatch {
+				lbl.TextStyle = fyne.TextStyle{Bold: true}
+			}
 
 			imagePath := ""
 			if m.Kind == "image" && a.historyStore != nil {
 				imagePath = a.historyStore.ImagePath(m.ImageID, m.ImageExt)
 			}
+			var itemBox *fyne.Container
 			if imagePath != "" && fileExists(imagePath) {
 				img := &canvas.Image{File: imagePath, FillMode: canvas.ImageFillContain}
 				img.SetMinSize(fyne.NewSize(240, 160))
@@ -1335,19 +1335,37 @@ func (a *App) refreshChat() {
 				clickableThumb := newTappableImage(img, func() {
 					a.showLightbox(p)
 				})
-				imgContainer := container.NewVBox(
+				itemBox = container.NewVBox(
 					lbl,
 					container.NewHBox(clickableThumb),
 					widget.NewSeparator(),
 				)
-				objects = append(objects, imgContainer)
 			} else {
-				objects = append(objects, container.NewVBox(lbl))
+				itemBox = container.NewVBox(lbl)
+			}
+
+			if isMatch {
+				highlightBg := canvas.NewRectangle(color.NRGBA{R: 70, G: 65, B: 30, A: 255})
+				highlightBg.CornerRadius = 4
+				objects = append(objects, container.NewStack(highlightBg, container.NewPadded(itemBox)))
+			} else {
+				objects = append(objects, itemBox)
 			}
 		}
+
+		if a.chatSearchCount != nil {
+			if searchFilter == "" {
+				a.chatSearchCount.SetText("")
+			} else if matchCount == 0 {
+				a.chatSearchCount.SetText("(0)")
+			} else {
+				a.chatSearchCount.SetText(fmt.Sprintf("(%d)", matchCount))
+			}
+		}
+
 		a.chatBox.Objects = objects
 		a.chatBox.Refresh()
-		if a.chatScroll != nil {
+		if a.chatScroll != nil && searchFilter == "" {
 			a.chatScroll.ScrollToBottom()
 		}
 	})
@@ -2163,7 +2181,7 @@ func (a *App) stopConnection() {
 		return
 	}
 	a.playEventSound(audio.SFXDisconnect)
-	time.Sleep(120 * time.Millisecond)
+	time.Sleep(300 * time.Millisecond)
 	udp := a.transport
 	if a.audioEngine != nil {
 		a.audioEngine.Stop()
@@ -2232,37 +2250,74 @@ func (a *App) createHost() {
 	root, _ := os.UserConfigDir()
 	existingRooms, _ := history.ListRooms(filepath.Join(root, "VoxMesh"))
 
-	roomEntry := widget.NewEntry()
-	roomEntry.SetText(a.cfg.RoomName)
-	roomEntry.SetPlaceHolder("Ej: Mi sala, Gaming...")
+	var d dialog.Dialog
 
-	items := make([]fyne.CanvasObject, 0)
-	if len(existingRooms) > 0 {
-		existingSelect := widget.NewSelect(existingRooms, func(selected string) {
-			roomEntry.SetText(selected)
-		})
-		existingSelect.PlaceHolder = "Elegir sala guardada..."
-		items = append(items, widget.NewLabel("Salas guardadas:"), existingSelect)
-	}
-	items = append(items, widget.NewLabel("Nombre de la sala:"), roomEntry)
+	newRoomEntry := widget.NewEntry()
+	newRoomEntry.SetPlaceHolder("Ej: Charla, Gaming...")
+	newRoomEntry.SetText(a.cfg.RoomName)
 
-	content := container.NewVBox(items...)
-
-	dialog.ShowCustomConfirm("Iniciar sala", "Iniciar", "Cancelar", content, func(confirmed bool) {
-		if !confirmed {
-			return
-		}
-		roomName := strings.TrimSpace(roomEntry.Text)
+	btnCreate := widget.NewButtonWithIcon("Crear y abrir", theme.ContentAddIcon(), func() {
+		roomName := strings.TrimSpace(newRoomEntry.Text)
 		if roomName == "" {
-			a.setStatus("El nombre de la sala es obligatorio.")
+			a.setStatus("Escribe un nombre para la nueva sala.")
 			return
 		}
+		d.Hide()
 		username := strings.TrimSpace(a.cfg.Username)
 		if username == "" {
 			username = "Usuario"
 		}
 		a.openHost(roomName, username)
-	}, a.window)
+	})
+	newRoomEntry.OnSubmitted = func(string) {
+		btnCreate.OnTapped()
+	}
+
+	var content *fyne.Container
+
+	if len(existingRooms) > 0 {
+		existingSelect := widget.NewSelect(existingRooms, nil)
+		existingSelect.PlaceHolder = "Seleccionar de la lista..."
+		if a.cfg.RoomName != "" {
+			for _, r := range existingRooms {
+				if r == a.cfg.RoomName {
+					existingSelect.SetSelected(r)
+					break
+				}
+			}
+		}
+
+		btnOpenExisting := widget.NewButtonWithIcon("Abrir seleccionada", theme.MediaPlayIcon(), func() {
+			roomName := strings.TrimSpace(existingSelect.Selected)
+			if roomName == "" {
+				a.setStatus("Selecciona una sala guardada de la lista.")
+				return
+			}
+			d.Hide()
+			username := strings.TrimSpace(a.cfg.Username)
+			if username == "" {
+				username = "Usuario"
+			}
+			a.openHost(roomName, username)
+		})
+
+		content = container.NewVBox(
+			widget.NewLabelWithStyle("Salas guardadas", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+			container.NewBorder(nil, nil, nil, btnOpenExisting, existingSelect),
+			widget.NewSeparator(),
+			widget.NewLabelWithStyle("Nueva sala", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+			container.NewBorder(nil, nil, nil, btnCreate, newRoomEntry),
+		)
+	} else {
+		content = container.NewVBox(
+			widget.NewLabelWithStyle("Nueva sala", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+			container.NewBorder(nil, nil, nil, btnCreate, newRoomEntry),
+		)
+	}
+
+	d = dialog.NewCustom("Iniciar Sala", "Cancelar", content, a.window)
+	d.Resize(fyne.NewSize(440, 220))
+	d.Show()
 }
 
 func (a *App) openHost(roomName, username string) {
@@ -2992,7 +3047,9 @@ func (a *App) markPeerSpeaking(id, address string) {
 	for i := range a.peerNames {
 		p := &a.peerNames[i]
 		match := false
-		if id != "" && p.id == id {
+		if p.isSelf && (id == "" || id == a.participantID) {
+			match = true
+		} else if id != "" && p.id == id {
 			match = true
 		} else if address != "" && (p.address == address || strings.Contains(p.address, address) || strings.Contains(address, p.address)) {
 			match = true

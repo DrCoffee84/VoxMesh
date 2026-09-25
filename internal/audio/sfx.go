@@ -5,7 +5,7 @@ import "math"
 // SFX bytes are 48kHz, 16-bit mono PCM.
 var (
 	SFXConnect    = generateTwoTone(523.25, 659.25, 0.09, 0.14, 0.65) // C5 -> E5
-	SFXDisconnect = generateTwoTone(659.25, 523.25, 0.09, 0.14, 0.65) // E5 -> C5 (reverse)
+	SFXDisconnect = generateTwoTone(659.25, 440.00, 0.09, 0.14, 0.65) // E5 -> A4
 	SFXMessage    = generateBlip(880.0, 0.06, 0.55)                   // A5 blip
 )
 
