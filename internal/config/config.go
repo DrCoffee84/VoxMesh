@@ -119,6 +119,12 @@ func Load(path string) (Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return Default(), err
 	}
+	if cfg.ListenAddress == "" || cfg.ListenAddress == ":0" {
+		cfg.ListenAddress = ":47830"
+	}
+	if cfg.PhoneMicPort <= 0 {
+		cfg.PhoneMicPort = 47831
+	}
 	return cfg, nil
 }
 
