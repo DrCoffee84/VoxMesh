@@ -1,0 +1,12 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.VoxMeshMic" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/accent_green</item>
+        <item name="colorPrimaryVariant">@color/accent_green_hover</item>
+        <item name="colorOnPrimary">@color/bg_main</item>
+        <item name="colorSecondary">@color/accent_blue</item>
+        <item name="colorSecondaryVariant">@color/accent_blue</item>
+        <item name="colorOnSecondary">@color/text_primary</item>
+        <item name="android:statusBarColor">@color/bg_main</item>
+        <item name="android:windowBackground">@color/bg_main</item>
+    </style>
+</resources>
