@@ -116,7 +116,6 @@ class MicService : Service() {
     }
 
     private fun runAudioLoop() {
-        var record: AudioRecord? = null
         var udpSocket: DatagramSocket? = null
 
         try {
@@ -127,7 +126,7 @@ class MicService : Service() {
             )
             val bufferSize = minBuf.coerceAtLeast(FRAME_BYTES * 4)
 
-            record = try {
+            var record: AudioRecord = try {
                 AudioRecord(
                     MediaRecorder.AudioSource.VOICE_COMMUNICATION,
                     SAMPLE_RATE,
@@ -156,8 +155,13 @@ class MicService : Service() {
                 )
             }
 
-            audioRecord = record
-            record.startRecording()
+            val finalRecord = record
+            if (finalRecord.state != AudioRecord.STATE_INITIALIZED) {
+                return
+            }
+
+            audioRecord = finalRecord
+            finalRecord.startRecording()
 
             udpSocket = DatagramSocket()
             socket = udpSocket
@@ -182,7 +186,7 @@ class MicService : Service() {
             while (isRunning) {
                 var bytesRead = 0
                 while (bytesRead < FRAME_BYTES && isRunning) {
-                    val read = record.read(pcmChunk, bytesRead, FRAME_BYTES - bytesRead)
+                    val read = finalRecord.read(pcmChunk, bytesRead, FRAME_BYTES - bytesRead)
                     if (read > 0) {
                         bytesRead += read
                     } else {

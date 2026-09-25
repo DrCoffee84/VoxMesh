@@ -12,8 +12,8 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import com.google.android.gms.code.scanner.GmsBarcodeScannerOptions
-import com.google.android.gms.code.scanner.GmsBarcodeScanning
+import com.google.android.gms.mlkit.vision.codescanner.GmsBarcodeScannerOptions
+import com.google.android.gms.mlkit.vision.codescanner.GmsBarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.voxmesh.mic.databinding.ActivityMainBinding
 
@@ -114,13 +114,13 @@ class MainActivity : AppCompatActivity() {
 
         val scanner = GmsBarcodeScanning.getClient(this, options)
         scanner.startScan()
-            .addOnSuccessListener { barcode ->
+            .addOnSuccessListener { barcode: Barcode ->
                 val raw = barcode.rawValue
                 if (!raw.isNullOrBlank()) {
                     parseQrContent(raw)
                 }
             }
-            .addOnFailureListener { e ->
+            .addOnFailureListener { e: Exception ->
                 Toast.makeText(this, "No se pudo escanear: ${e.message}", Toast.LENGTH_SHORT).show()
             }
     }
