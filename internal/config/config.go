@@ -59,6 +59,7 @@ type Config struct {
 	PhoneMicPort          int     `json:"phone_mic_port"`
 	ShowStatusBar         bool    `json:"show_status_bar"`
 	SoundboardMuted       bool    `json:"soundboard_muted"`
+	SoundboardVolume      float32 `json:"soundboard_volume"`
 	EventSoundsEnabled    bool    `json:"event_sounds_enabled"`
 	AllowHostMigration    bool    `json:"allow_host_migration"`
 }
@@ -98,6 +99,7 @@ func Default() Config {
 		PhoneMicBufferMS:      100,
 		PhoneMicPort:          47831,
 		ShowStatusBar:         true,
+		SoundboardVolume:      1.0,
 		EventSoundsEnabled:    true,
 		AllowHostMigration:    true,
 	}
@@ -124,6 +126,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.PhoneMicPort <= 0 {
 		cfg.PhoneMicPort = 47831
+	}
+	if cfg.SoundboardVolume <= 0 {
+		cfg.SoundboardVolume = 1.0
 	}
 	return cfg, nil
 }

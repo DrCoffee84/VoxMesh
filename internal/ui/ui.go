@@ -74,6 +74,7 @@ type App struct {
 	chatScroll      *container.Scroll
 	chatBox         *fyne.Container
 	chatInput       *widget.Entry
+	chatSearch      *widget.Entry
 	chatMessages    []history.Message
 	chatMu          sync.RWMutex
 	selfNameLabel   *widget.Label
@@ -110,6 +111,7 @@ type peerView struct {
 	lag       time.Duration
 	speaking  bool
 	speakStop time.Time
+	isSelf    bool
 }
 
 const phoneMicInput = "Micrófono del celular"
@@ -145,6 +147,7 @@ func (a *App) flashVoiceIndicator() {
 		a.voiceTimer.Stop()
 	}
 	if !a.voiceActive.Swap(true) {
+		a.markPeerSpeaking(a.participantID, "")
 		fyne.Do(func() {
 			if a.voiceIndicator == nil {
 				return
@@ -158,6 +161,7 @@ func (a *App) flashVoiceIndicator() {
 		a.voiceTimerMu.Lock()
 		a.voiceActive.Store(false)
 		a.voiceTimerMu.Unlock()
+		a.sweepSpeakingPeers()
 		fyne.Do(func() {
 			if a.voiceIndicator == nil {
 				return
@@ -245,7 +249,18 @@ func (a *App) content() fyne.CanvasObject {
 		defer a.peerMu.RUnlock()
 		return len(a.peerNames)
 	}, func() fyne.CanvasObject {
-		return widget.NewLabel("")
+		avatarBg := canvas.NewCircle(color.NRGBA{R: 55, G: 62, B: 75, A: 255})
+		avatarBg.Resize(fyne.NewSize(22, 22))
+		avatarText := canvas.NewText("U", color.White)
+		avatarText.TextStyle = fyne.TextStyle{Bold: true}
+		avatarText.TextSize = 11
+		avatarText.Alignment = fyne.TextAlignCenter
+		avatarStack := container.NewStack(avatarBg, container.NewCenter(avatarText))
+		avatarBox := container.NewGridWrap(fyne.NewSize(22, 22), avatarStack)
+
+		nameLabel := widget.NewLabel("")
+		lagLabel := widget.NewLabel("")
+		return container.NewBorder(nil, nil, avatarBox, lagLabel, nameLabel)
 	}, func(item widget.ListItemID, object fyne.CanvasObject) {
 		a.peerMu.RLock()
 		defer a.peerMu.RUnlock()
@@ -253,22 +268,48 @@ func (a *App) content() fyne.CanvasObject {
 			return
 		}
 		peer := a.peerNames[item]
-		dot := "🟢"
-		lag := "--"
-		if peer.lag > 0 {
-			ms := int(peer.lag / time.Millisecond)
-			lag = fmt.Sprintf("%d ms", ms)
-			if ms > 150 {
-				dot = "🔴"
-			} else if ms > 70 {
-				dot = "🟡"
-			}
+		row := object.(*fyne.Container)
+		avatarBox := row.Objects[1].(*fyne.Container)
+		avatarStack := avatarBox.Objects[0].(*fyne.Container)
+		avatarBg := avatarStack.Objects[0].(*canvas.Circle)
+		avatarText := avatarStack.Objects[1].(*fyne.Container).Objects[0].(*canvas.Text)
+		lagLabel := row.Objects[2].(*widget.Label)
+		nameLabel := row.Objects[0].(*widget.Label)
+
+		initial := "U"
+		trimmedName := strings.TrimSpace(peer.name)
+		if len(trimmedName) > 0 {
+			initial = strings.ToUpper(string([]rune(trimmedName)[0]))
 		}
-		icon := dot
-		if peer.speaking && time.Now().Before(peer.speakStop) {
-			icon = "🔊"
+		avatarText.Text = initial
+
+		isSpeaking := peer.speaking && time.Now().Before(peer.speakStop)
+		if isSpeaking {
+			avatarBg.FillColor = color.NRGBA{R: 46, G: 204, B: 113, A: 255}
+			avatarText.Color = color.NRGBA{R: 15, G: 35, B: 15, A: 255}
+		} else {
+			avatarBg.FillColor = color.NRGBA{R: 55, G: 62, B: 75, A: 255}
+			avatarText.Color = color.NRGBA{R: 200, G: 205, B: 215, A: 255}
 		}
-		object.(*widget.Label).SetText(fmt.Sprintf("%s  %s   •   %s", icon, peer.name, lag))
+		avatarBg.Refresh()
+		avatarText.Refresh()
+
+		displayName := peer.name
+		if peer.isSelf {
+			displayName = fmt.Sprintf("%s (Tú)", peer.name)
+		}
+		if isSpeaking {
+			displayName = "🔊 " + displayName
+		}
+		nameLabel.SetText(displayName)
+
+		if peer.isSelf {
+			lagLabel.SetText("Local")
+		} else if peer.lag > 0 {
+			lagLabel.SetText(fmt.Sprintf("%d ms", int(peer.lag/time.Millisecond)))
+		} else {
+			lagLabel.SetText("--")
+		}
 	})
 	a.chatInput = widget.NewEntry()
 	a.chatInput.SetPlaceHolder("Escribe un mensaje")
@@ -279,13 +320,6 @@ func (a *App) content() fyne.CanvasObject {
 	a.chatScroll = container.NewVScroll(a.chatBox)
 	a.roomSelect = widget.NewSelect(nil, func(selected string) { a.viewRoom(selected) })
 	a.roomSelect.PlaceHolder = "Ver otra sala..."
-
-	a.voiceIndicator = canvas.NewCircle(color.NRGBA{R: 150, G: 160, B: 165, A: 255})
-	a.voiceIndicator.StrokeColor = color.NRGBA{R: 110, G: 120, B: 125, A: 255}
-	a.voiceIndicator.StrokeWidth = 2
-	a.voiceIndicator.Resize(fyne.NewSize(18, 18))
-	a.selfNameLabel = widget.NewLabel(a.cfg.Username)
-	selfRow := container.NewHBox(a.voiceIndicator, a.selfNameLabel)
 
 	hostContent := container.NewVBox(
 		widget.NewLabelWithStyle("Host", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
@@ -305,12 +339,22 @@ func (a *App) content() fyne.CanvasObject {
 
 	a.connectionPanel = container.NewVBox(a.hostPanel, a.clientPanel)
 
-	a.usersSection = widget.NewAccordion(widget.NewAccordionItem("Usuarios conectados", a.peerList))
-	selfHeader := container.NewBorder(nil, nil, widget.NewLabelWithStyle("Mi Estado", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), nil, selfRow)
-	statusCard := uiCard(container.NewVBox(selfHeader, a.usersSection))
+	usersAccItem := widget.NewAccordionItem("Usuarios conectados", a.peerList)
+	usersAccItem.Open = true
+	a.usersSection = widget.NewAccordion(usersAccItem)
+	statusCard := uiCard(a.usersSection)
+
+	a.chatSearch = widget.NewEntry()
+	a.chatSearch.SetPlaceHolder("🔍 Buscar en el chat...")
+	a.chatSearch.OnChanged = func(string) { a.refreshChat() }
+	clearSearch := widget.NewButtonWithIcon("", theme.CancelIcon(), func() {
+		a.chatSearch.SetText("")
+	})
+	searchBar := container.NewBorder(nil, nil, nil, clearSearch, a.chatSearch)
+	chatTop := container.NewBorder(nil, nil, widget.NewLabelWithStyle("Chat de la sala", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), nil, a.roomSelect)
+	chatHeader := container.NewVBox(chatTop, searchBar)
 
 	chatComposer := container.NewBorder(nil, nil, attachImage, sendChat, a.chatInput)
-	chatHeader := container.NewBorder(nil, nil, widget.NewLabelWithStyle("Chat de la sala", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), nil, a.roomSelect)
 	chatCard := uiCard(container.NewBorder(chatHeader, chatComposer, nil, nil, a.chatScroll))
 
 	a.buildSoundPanel()
@@ -1187,6 +1231,62 @@ func (a *App) playRecording(name string) {
 	}()
 }
 
+type tappableImage struct {
+	widget.BaseWidget
+	image    *canvas.Image
+	onTapped func()
+}
+
+func newTappableImage(img *canvas.Image, onTapped func()) *tappableImage {
+	t := &tappableImage{image: img, onTapped: onTapped}
+	t.ExtendBaseWidget(t)
+	return t
+}
+
+func (t *tappableImage) CreateRenderer() fyne.WidgetRenderer {
+	return widget.NewSimpleRenderer(t.image)
+}
+
+func (t *tappableImage) Tapped(_ *fyne.PointEvent) {
+	if t.onTapped != nil {
+		t.onTapped()
+	}
+}
+
+func (t *tappableImage) MinSize() fyne.Size {
+	if t.image != nil {
+		return t.image.MinSize()
+	}
+	return fyne.NewSize(0, 0)
+}
+
+func (a *App) showLightbox(imagePath string) {
+	if a.window == nil {
+		return
+	}
+	cSize := a.window.Canvas().Size()
+	targetW := float32(float64(cSize.Width) * 0.85)
+	targetH := float32(float64(cSize.Height) * 0.85)
+	if targetW < 320 {
+		targetW = 320
+	}
+	if targetH < 220 {
+		targetH = 220
+	}
+
+	largeImg := &canvas.Image{File: imagePath, FillMode: canvas.ImageFillContain}
+	largeImg.SetMinSize(fyne.NewSize(targetW, targetH))
+
+	var pop *widget.PopUp
+	tapImg := newTappableImage(largeImg, func() {
+		if pop != nil {
+			pop.Hide()
+		}
+	})
+	pop = widget.NewPopUp(tapImg, a.window.Canvas())
+	pop.Show()
+}
+
 func (a *App) refreshChat() {
 	fyne.Do(func() {
 		if a.chatBox == nil {
@@ -1196,9 +1296,22 @@ func (a *App) refreshChat() {
 		msgs := append([]history.Message(nil), a.chatMessages...)
 		a.chatMu.RUnlock()
 
+		var searchFilter string
+		if a.chatSearch != nil {
+			searchFilter = strings.ToLower(strings.TrimSpace(a.chatSearch.Text))
+		}
+
 		objects := make([]fyne.CanvasObject, 0, len(msgs))
 		for _, msg := range msgs {
 			m := msg
+			if searchFilter != "" {
+				lowerText := strings.ToLower(m.Text)
+				lowerUser := strings.ToLower(m.Username)
+				if !strings.Contains(lowerText, searchFilter) && !strings.Contains(lowerUser, searchFilter) {
+					continue
+				}
+			}
+
 			stamp := m.Timestamp.Local().Format("15:04")
 			prefix := m.Username
 			if m.System {
@@ -1206,7 +1319,7 @@ func (a *App) refreshChat() {
 			}
 			text := m.Text
 			if m.Kind == "image" {
-				text = "📷 Imagen compartida"
+				text = "📷 Imagen compartida (haz clic para ampliar)"
 			}
 			lbl := widget.NewLabel(fmt.Sprintf("[%s] %s: %s", stamp, prefix, text))
 			lbl.Wrapping = fyne.TextWrapWord
@@ -1217,18 +1330,14 @@ func (a *App) refreshChat() {
 			}
 			if imagePath != "" && fileExists(imagePath) {
 				img := &canvas.Image{File: imagePath, FillMode: canvas.ImageFillContain}
-				img.SetMinSize(fyne.NewSize(260, 180))
-				fullBtn := widget.NewButtonWithIcon("Ver imagen completa", theme.ZoomFitIcon(), func() {
-					fullImg := &canvas.Image{File: imagePath, FillMode: canvas.ImageFillContain}
-					fullImg.SetMinSize(fyne.NewSize(600, 450))
-					d := dialog.NewCustom("Imagen", "Cerrar", container.NewVScroll(fullImg), a.window)
-					d.Resize(fyne.NewSize(640, 500))
-					d.Show()
+				img.SetMinSize(fyne.NewSize(240, 160))
+				p := imagePath
+				clickableThumb := newTappableImage(img, func() {
+					a.showLightbox(p)
 				})
 				imgContainer := container.NewVBox(
 					lbl,
-					container.NewPadded(container.NewHBox(img)),
-					container.NewHBox(fullBtn),
+					container.NewHBox(clickableThumb),
 					widget.NewSeparator(),
 				)
 				objects = append(objects, imgContainer)
@@ -1413,12 +1522,34 @@ func (a *App) buildSoundPanel() {
 		_ = config.Save(a.cfgPath, a.cfg)
 	})
 	muteCheck.SetChecked(a.cfg.SoundboardMuted)
+
+	volVal := a.cfg.SoundboardVolume
+	if volVal <= 0.01 {
+		volVal = 1.0
+	}
+	volLabel := widget.NewLabel(fmt.Sprintf("Volumen: %d%%", int(volVal*100)))
+	volSlider := widget.NewSlider(0, 1)
+	volSlider.Step = 0.05
+	volSlider.Value = float64(volVal)
+	volSlider.OnChanged = func(val float64) {
+		a.cfg.SoundboardVolume = float32(val)
+		volLabel.SetText(fmt.Sprintf("Volumen: %d%%", int(val*100)))
+		_ = config.Save(a.cfgPath, a.cfg)
+	}
+
 	stopButton := widget.NewButton("⏹ Detener sonido", a.stopSoundboard)
 	addButton := widget.NewButton("➕ Agregar sonido", a.pickAndAddSound)
 	a.soundGrid = container.NewVBox()
 	soundScroll := container.NewVScroll(a.soundGrid)
-	soundScroll.SetMinSize(fyne.NewSize(180, 200))
-	soundHeader := container.NewVBox(title, muteCheck, stopButton, widget.NewSeparator())
+	soundScroll.SetMinSize(fyne.NewSize(180, 160))
+	soundHeader := container.NewVBox(
+		title,
+		muteCheck,
+		volLabel,
+		volSlider,
+		stopButton,
+		widget.NewSeparator(),
+	)
 	soundContent := container.NewBorder(soundHeader, addButton, nil, nil, soundScroll)
 	a.soundPanel = uiCard(soundContent)
 	a.rebuildSoundboard()
@@ -1571,8 +1702,8 @@ func (a *App) showSoundTrimDialog(defaultName string, pcm []byte) {
 	}
 
 	slicePCM := func() []byte {
-		s := int(startSlider.Value * 96000) &^ 1
-		e := int(endSlider.Value * 96000) &^ 1
+		s := int(startSlider.Value*96000) &^ 1
+		e := int(endSlider.Value*96000) &^ 1
 		if s < 0 {
 			s = 0
 		}
@@ -1692,10 +1823,36 @@ func (a *App) ensureSoundPlayer() *audio.Player {
 	return player
 }
 
+func applyVolume(pcm []byte, volume float32) []byte {
+	if volume >= 0.99 && volume <= 1.01 {
+		return pcm
+	}
+	if volume <= 0.01 {
+		return make([]byte, len(pcm))
+	}
+	out := make([]byte, len(pcm))
+	for i := 0; i+1 < len(pcm); i += 2 {
+		sample := int16(binary.LittleEndian.Uint16(pcm[i : i+2]))
+		scaled := int32(float32(sample) * volume)
+		if scaled > 32767 {
+			scaled = 32767
+		} else if scaled < -32768 {
+			scaled = -32768
+		}
+		binary.LittleEndian.PutUint16(out[i:i+2], uint16(int16(scaled)))
+	}
+	return out
+}
+
 func (a *App) playSoundPCM(data []byte) {
+	vol := a.cfg.SoundboardVolume
+	if vol <= 0.01 {
+		vol = 1.0
+	}
+	scaled := applyVolume(data, vol)
 	if player := a.ensureSoundPlayer(); player != nil {
 		player.Clear()
-		player.Play(data)
+		player.Play(scaled)
 	}
 }
 
@@ -1888,15 +2045,29 @@ func (a *App) refreshPeersFromRoom() {
 		lagByAddress[peer.address] = peer.lag
 	}
 	a.peerNames = nil
+	if a.transport != nil {
+		selfName := a.cfg.Username
+		if selfName == "" {
+			selfName = "Usuario"
+		}
+		a.peerNames = append(a.peerNames, peerView{
+			id:        a.participantID,
+			name:      selfName,
+			address:   "127.0.0.1",
+			isSelf:    true,
+			speaking:  a.voiceActive.Load(),
+			speakStop: time.Now().Add(250 * time.Millisecond),
+		})
+	}
 	for _, participant := range a.roomState.Participants {
 		if participant.ID == a.participantID || !participant.Connected {
 			continue
 		}
 		a.peerNames = append(a.peerNames, peerView{
-			id:        participant.ID,
-			name:      participant.Username,
-			address:   participant.Address,
-			lag:       lagByAddress[participant.Address],
+			id:      participant.ID,
+			name:    participant.Username,
+			address: participant.Address,
+			lag:     lagByAddress[participant.Address],
 		})
 	}
 	a.peerMu.Unlock()
@@ -1991,6 +2162,8 @@ func (a *App) stopConnection() {
 		a.setStatus("No hay una sala o conexión activa.")
 		return
 	}
+	a.playEventSound(audio.SFXDisconnect)
+	time.Sleep(120 * time.Millisecond)
 	udp := a.transport
 	if a.audioEngine != nil {
 		a.audioEngine.Stop()
@@ -2059,84 +2232,37 @@ func (a *App) createHost() {
 	root, _ := os.UserConfigDir()
 	existingRooms, _ := history.ListRooms(filepath.Join(root, "VoxMesh"))
 
-	existingSelect := widget.NewSelect(existingRooms, nil)
-	existingSelect.PlaceHolder = "Seleccionar sala existente..."
+	roomEntry := widget.NewEntry()
+	roomEntry.SetText(a.cfg.RoomName)
+	roomEntry.SetPlaceHolder("Ej: Mi sala, Gaming...")
+
+	items := make([]fyne.CanvasObject, 0)
 	if len(existingRooms) > 0 {
-		found := false
-		for _, r := range existingRooms {
-			if r == a.cfg.RoomName {
-				existingSelect.SetSelected(r)
-				found = true
-				break
-			}
-		}
-		if !found {
-			existingSelect.SetSelected(existingRooms[0])
-		}
+		existingSelect := widget.NewSelect(existingRooms, func(selected string) {
+			roomEntry.SetText(selected)
+		})
+		existingSelect.PlaceHolder = "Elegir sala guardada..."
+		items = append(items, widget.NewLabel("Salas guardadas:"), existingSelect)
 	}
+	items = append(items, widget.NewLabel("Nombre de la sala:"), roomEntry)
 
-	newRoomEntry := widget.NewEntry()
-	newRoomEntry.SetPlaceHolder("Ej: Charla, Amigos, Gaming...")
+	content := container.NewVBox(items...)
 
-	var d dialog.Dialog
-
-	btnOpenExisting := widget.NewButtonWithIcon("Abrir sala seleccionada", theme.MediaPlayIcon(), func() {
-		roomName := strings.TrimSpace(existingSelect.Selected)
-		if roomName == "" {
-			a.setStatus("Por favor selecciona una sala guardada.")
+	dialog.ShowCustomConfirm("Iniciar sala", "Iniciar", "Cancelar", content, func(confirmed bool) {
+		if !confirmed {
 			return
 		}
-		d.Hide()
+		roomName := strings.TrimSpace(roomEntry.Text)
+		if roomName == "" {
+			a.setStatus("El nombre de la sala es obligatorio.")
+			return
+		}
 		username := strings.TrimSpace(a.cfg.Username)
 		if username == "" {
 			username = "Usuario"
 		}
 		a.openHost(roomName, username)
-	})
-
-	btnCreateNew := widget.NewButtonWithIcon("Crear y abrir sala", theme.ContentAddIcon(), func() {
-		roomName := strings.TrimSpace(newRoomEntry.Text)
-		if roomName == "" {
-			a.setStatus("Escribe un nombre para la nueva sala.")
-			return
-		}
-		d.Hide()
-		username := strings.TrimSpace(a.cfg.Username)
-		if username == "" {
-			username = "Usuario"
-		}
-		a.openHost(roomName, username)
-	})
-	newRoomEntry.OnSubmitted = func(string) {
-		btnCreateNew.OnTapped()
-	}
-
-	if len(existingRooms) == 0 {
-		existingSelect.Disable()
-		btnOpenExisting.Disable()
-	}
-
-	optExisting := container.NewVBox(
-		widget.NewLabelWithStyle("📂 Opción A: Abrir sala guardada", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		existingSelect,
-		btnOpenExisting,
-	)
-
-	optNew := container.NewVBox(
-		widget.NewLabelWithStyle("✨ Opción B: Crear una nueva sala", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		newRoomEntry,
-		btnCreateNew,
-	)
-
-	content := container.NewVBox(
-		optExisting,
-		widget.NewSeparator(),
-		optNew,
-	)
-
-	d = dialog.NewCustom("Iniciar Sala (Host)", "Cancelar", content, a.window)
-	d.Resize(fyne.NewSize(420, 310))
-	d.Show()
+	}, a.window)
 }
 
 func (a *App) openHost(roomName, username string) {
@@ -2173,6 +2299,7 @@ func (a *App) openHost(roomName, username string) {
 	a.roomState = state
 	a.roomStore = room.NewStore(state)
 	a.initHistory(roomName)
+	a.refreshPeersFromRoom()
 	a.pingStop = make(chan struct{})
 	a.createButton.Disable()
 	a.stopButton.Enable()
@@ -2290,6 +2417,7 @@ func (a *App) connectClient(raw string) {
 		LastSeenUTC: time.Now().UTC(),
 	}}}
 	a.initHistory(a.cfg.RoomName)
+	a.refreshPeersFromRoom()
 	a.cfg.LastPeer = raw
 	_ = config.Save(a.cfgPath, a.cfg)
 	if a.endpointEntry != nil {
