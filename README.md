@@ -109,11 +109,3 @@ El archivo para compartir es `dist\voxmesh.exe`. Incrementa `$build` en cada com
 
 La IP pública no implica que el router acepte tráfico entrante. UPnP puede estar deshabilitado; en ese caso hay que reenviar el puerto UDP mostrado por la app hacia el PC host. La versión de producción debería añadir una clave de sala, autenticación de paquetes, cifrado AEAD y límites de tamaño antes de exponerla a Internet.
 
-
-TODO:
-
-revisar seguridad de puertos abiertos
-mejorar interfaz (que diga bien el lag, usuarios conectados) (esto lo puedo hacer solo)
-mejorar sonido de celular (se escucha entre cortado y se pierde) 
-QA con andresito
-que si el mismo usuario manda dos veces el mismo audio lo corte y vuelva a reproducir (es gracioso)

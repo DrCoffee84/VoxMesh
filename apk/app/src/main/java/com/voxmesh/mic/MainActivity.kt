@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.widget.SeekBar
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -27,6 +28,7 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_HOST = "saved_host"
         private const val KEY_PORT = "saved_port"
         private const val KEY_TOKEN = "saved_token"
+        private const val KEY_GAIN_STEP = "saved_gain_step"
     }
 
     private val permissionLauncher = registerForActivityResult(
@@ -71,10 +73,25 @@ class MainActivity : AppCompatActivity() {
         MicService.onAudioLevel = null
     }
 
+    private fun gainFactorForStep(step: Int): Float = when (step) {
+        0 -> 1.0f
+        1 -> 1.5f
+        2 -> 2.0f
+        3 -> 2.5f
+        4 -> 3.0f
+        else -> 1.5f
+    }
+
     private fun loadSavedSettings() {
         binding.etHost.setText(prefs.getString(KEY_HOST, ""))
         binding.etPort.setText(prefs.getInt(KEY_PORT, 47831).toString())
         binding.etToken.setText(prefs.getString(KEY_TOKEN, ""))
+
+        val savedStep = prefs.getInt(KEY_GAIN_STEP, 1)
+        binding.seekBarGain.progress = savedStep
+        val factor = gainFactorForStep(savedStep)
+        binding.tvGain.text = "Ganancia: ${factor}x"
+        MicService.gainFactor = factor
     }
 
     private fun saveSettings(host: String, port: Int, token: String) {
@@ -86,6 +103,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupListeners() {
+        binding.seekBarGain.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                val factor = gainFactorForStep(progress)
+                binding.tvGain.text = "Ganancia: ${factor}x"
+                MicService.gainFactor = factor
+                if (fromUser) {
+                    prefs.edit().putInt(KEY_GAIN_STEP, progress).apply()
+                }
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+
         binding.btnScanQr.setOnClickListener {
             launchQrScanner()
         }

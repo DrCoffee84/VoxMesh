@@ -14,13 +14,13 @@
     <string name="mute">Silenciar</string>
     <string name="unmute">Activar Voz</string>
     
-    <string name="status_disconnected">Estado: Desconectado</string>
-    <string name="status_connecting">Estado: Conectando...</string>
-    <string name="status_streaming">Estado: Transmitiendo a la PC (Pantalla bloqueable)</string>
-    <string name="status_muted">Estado: Micrófono silenciado</string>
+    <string name="status_disconnected">Desconectado</string>
+    <string name="status_connecting">Conectando...</string>
+    <string name="status_streaming">Transmitiendo audio</string>
+    <string name="status_muted">Micrófono silenciado</string>
     
     <string name="notification_channel_name">VoxMesh Micrófono</string>
-    <string name="notification_channel_desc">Mantiene la transmisión de voz activa con pantalla bloqueada</string>
+    <string name="notification_channel_desc">Transmisión de voz para VoxMesh</string>
     <string name="notification_title">VoxMesh: Micrófono Activo</string>
     <string name="notification_text">Transmitiendo audio en vivo a la PC</string>
     <string name="action_stop">Detener</string>

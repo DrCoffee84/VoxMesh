@@ -49,6 +49,9 @@ class MicService : Service() {
         var isMuted: Boolean = false
             private set
 
+        @Volatile
+        var gainFactor: Float = 1.5f
+
         var onStateChanged: ((running: Boolean, muted: Boolean) -> Unit)? = null
         var onAudioLevel: ((level: Int) -> Unit)? = null
     }
@@ -128,7 +131,7 @@ class MicService : Service() {
 
             var record: AudioRecord = try {
                 AudioRecord(
-                    MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                    MediaRecorder.AudioSource.VOICE_RECOGNITION,
                     SAMPLE_RATE,
                     AudioFormat.CHANNEL_IN_MONO,
                     AudioFormat.ENCODING_PCM_16BIT,
@@ -195,6 +198,18 @@ class MicService : Service() {
                 }
 
                 if (bytesRead == FRAME_BYTES) {
+                    val currentGain = gainFactor
+                    if (currentGain != 1.0f) {
+                        val samples = FRAME_BYTES / 2
+                        for (i in 0 until samples) {
+                            val idx = i * 2
+                            val s = ((pcmChunk[idx].toInt() and 0xFF) or (pcmChunk[idx + 1].toInt() shl 8)).toShort()
+                            val amplified = (s * currentGain).toInt().coerceIn(-32768, 32767).toShort()
+                            pcmChunk[idx] = (amplified.toInt() and 0xFF).toByte()
+                            pcmChunk[idx + 1] = (amplified.toInt() shr 8).toByte()
+                        }
+                    }
+
                     val level = calculateAudioLevel(pcmChunk)
                     onAudioLevel?.invoke(level)
 

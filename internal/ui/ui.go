@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"image/color"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -221,12 +222,22 @@ func (a *App) content() fyne.CanvasObject {
 	}, func(item widget.ListItemID, object fyne.CanvasObject) {
 		a.peerMu.RLock()
 		defer a.peerMu.RUnlock()
+		if item >= len(a.peerNames) {
+			return
+		}
 		peer := a.peerNames[item]
+		dot := "🟢"
 		lag := "--"
 		if peer.lag > 0 {
-			lag = strconv.Itoa(int(peer.lag/time.Millisecond)) + " ms"
+			ms := int(peer.lag / time.Millisecond)
+			lag = fmt.Sprintf("%d ms", ms)
+			if ms > 150 {
+				dot = "🔴"
+			} else if ms > 70 {
+				dot = "🟡"
+			}
 		}
-		object.(*widget.Label).SetText(fmt.Sprintf("%s  |  lag: %s", peer.name, lag))
+		object.(*widget.Label).SetText(fmt.Sprintf("%s  %s   •   %s", dot, peer.name, lag))
 	})
 	a.chatInput = widget.NewEntry()
 	a.chatInput.SetPlaceHolder("Escribe un mensaje")
@@ -886,9 +897,12 @@ func (a *App) showSettings() {
 		container.NewHBox(phoneBufferCheck, container.NewGridWrap(fyne.NewSize(76, 36), phoneBufferMS), container.NewGridWrap(fyne.NewSize(36, 36), bufferSave)),
 		container.NewGridWithColumns(2, showQR, stopPhone),
 	))
+	eventSoundsCheck := widget.NewCheck("Sonidos de eventos (conexión, desconexión, chat)", func(checked bool) { a.cfg.EventSoundsEnabled = checked })
+	eventSoundsCheck.SetChecked(a.cfg.EventSoundsEnabled)
 	interfaceCard := uiCard(container.NewVBox(
 		widget.NewLabelWithStyle("⚙️ Interfaz y Sistema", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		showStatusBarCheck,
+		eventSoundsCheck,
 	))
 	settingsBody := container.NewVScroll(container.NewVBox(
 		profileCard,
@@ -921,8 +935,7 @@ func (a *App) showPhoneMic() {
 	address.SetText(server.URL())
 	address.Disable()
 	content := container.NewVBox(
-		widget.NewLabel("Escaneá el QR con el celular conectado a la misma Wi-Fi."),
-		widget.NewLabel("Aceptá la advertencia del certificado local y permití el micrófono."),
+		widget.NewLabel("Escaneá el código QR desde la app VoxMesh Mic (misma Wi-Fi):"),
 		container.NewCenter(container.NewGridWrap(fyne.NewSize(280, 280), qr)),
 		address,
 	)
@@ -1202,6 +1215,9 @@ func (a *App) handleChatPacket(payload []byte) {
 	case room.ChatMessage:
 		if envelope.Message != nil {
 			a.addChatMessage(*envelope.Message)
+			if envelope.Message.SenderID != a.participantID {
+				a.playEventSound(audio.SFXMessage)
+			}
 		}
 	case room.SoundAddMessage:
 		if envelope.Sound != nil {
@@ -1422,6 +1438,100 @@ func (a *App) pickAndAddSound() {
 		return
 	}
 	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	a.showSoundTrimDialog(name, pcm)
+}
+
+func (a *App) showSoundTrimDialog(defaultName string, pcm []byte) {
+	totalSec := float64(len(pcm)) / 96000.0
+	if totalSec <= 0.1 {
+		a.saveAndBroadcastSound(defaultName, pcm)
+		return
+	}
+
+	nameEntry := widget.NewEntry()
+	nameEntry.SetText(defaultName)
+
+	durationLabel := widget.NewLabel(fmt.Sprintf("Duración total: %.2f s", totalSec))
+	startLabel := widget.NewLabel("Inicio: 0.00 s")
+	endLabel := widget.NewLabel(fmt.Sprintf("Fin: %.2f s", totalSec))
+
+	startSlider := widget.NewSlider(0, totalSec)
+	startSlider.SetValue(0)
+
+	endSlider := widget.NewSlider(0, totalSec)
+	endSlider.SetValue(totalSec)
+
+	startSlider.OnChanged = func(v float64) {
+		if v >= endSlider.Value {
+			v = math.Max(0, endSlider.Value-0.1)
+			startSlider.SetValue(v)
+		}
+		startLabel.SetText(fmt.Sprintf("Inicio: %.2f s", v))
+	}
+
+	endSlider.OnChanged = func(v float64) {
+		if v <= startSlider.Value {
+			v = math.Min(totalSec, startSlider.Value+0.1)
+			endSlider.SetValue(v)
+		}
+		endLabel.SetText(fmt.Sprintf("Fin: %.2f s", v))
+	}
+
+	slicePCM := func() []byte {
+		s := int(startSlider.Value * 96000) &^ 1
+		e := int(endSlider.Value * 96000) &^ 1
+		if s < 0 {
+			s = 0
+		}
+		if e > len(pcm) {
+			e = len(pcm)
+		}
+		if e <= s {
+			e = len(pcm)
+		}
+		return append([]byte(nil), pcm[s:e]...)
+	}
+
+	previewBtn := widget.NewButton("▶ Probar recorte", func() {
+		trimmed := slicePCM()
+		if len(trimmed) > 0 {
+			a.playSoundPCM(trimmed)
+		}
+	})
+
+	stopBtn := widget.NewButton("⏹ Detener", func() {
+		a.stopSoundboard()
+	})
+
+	controls := container.NewVBox(
+		widget.NewLabel("Nombre del sonido:"),
+		nameEntry,
+		durationLabel,
+		startLabel,
+		startSlider,
+		endLabel,
+		endSlider,
+		container.NewGridWithColumns(2, previewBtn, stopBtn),
+	)
+
+	dialog.ShowCustomConfirm("Recortar sonido", "Guardar sonido", "Cancelar", controls, func(confirmed bool) {
+		a.stopSoundboard()
+		if !confirmed {
+			return
+		}
+		soundName := strings.TrimSpace(nameEntry.Text)
+		if soundName == "" {
+			soundName = defaultName
+		}
+		trimmed := slicePCM()
+		a.saveAndBroadcastSound(soundName, trimmed)
+	}, a.window)
+}
+
+func (a *App) saveAndBroadcastSound(name string, pcm []byte) {
+	if a.historyStore == nil || a.transport == nil {
+		return
+	}
 	sound := room.Sound{ID: history.NewID(a.participantID), Ext: ".pcm", Name: name}
 	if _, saveErr := a.historyStore.SaveSound(history.SoundMeta{ID: sound.ID, Ext: sound.Ext, Name: sound.Name}, pcm); saveErr != nil {
 		a.setStatus("No se pudo guardar el sonido: " + saveErr.Error())
@@ -1491,7 +1601,19 @@ func (a *App) ensureSoundPlayer() *audio.Player {
 
 func (a *App) playSoundPCM(data []byte) {
 	if player := a.ensureSoundPlayer(); player != nil {
+		player.Clear()
 		player.Play(data)
+	}
+}
+
+func (a *App) playEventSound(sfx []byte) {
+	if !a.cfg.EventSoundsEnabled || len(sfx) == 0 {
+		return
+	}
+	if a.audioEngine != nil {
+		a.audioEngine.Play(sfx)
+	} else if player := a.ensureSoundPlayer(); player != nil {
+		player.Play(sfx)
 	}
 }
 
@@ -1797,6 +1919,12 @@ func (a *App) stopConnection() {
 			_ = udp.Send(peer, transport.Packet{Kind: transport.PacketRoomLeave, Sequence: a.sequence.Add(1), Payload: payload})
 		}
 	} else if a.hostMode.Load() {
+		localPort := uint16(udp.Address().Port)
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_ = netinfo.UnmapUDP(ctx, localPort)
+		}()
 		participant := room.Participant{ID: a.participantID, Username: a.cfg.Username, Address: udp.Address().String()}
 		payload, _ := room.Encode(room.Envelope{Kind: room.LeaveMessage, Participant: &participant})
 		udp.Broadcast(transport.Packet{Kind: transport.PacketRoomLeave, Sequence: a.sequence.Add(1), Payload: payload}, nil)
@@ -2151,6 +2279,7 @@ func (a *App) receiveLoop(udp *transport.UDP) {
 				a.refreshPeersFromRoom()
 				logging.Infof("Cliente conectado: %s (%s)", envelope.Participant.Username, addr.String())
 				a.addSystemMessage(envelope.Participant.Username + " se conectó.")
+				a.playEventSound(audio.SFXConnect)
 				udp.Broadcast(transport.Packet{Kind: transport.PacketRoomState, Sequence: a.sequence.Add(1), Payload: statePayload}, addr)
 			} else if packet.Kind == transport.PacketRoomLeave {
 				envelope, err := room.Decode(packet.Payload)
@@ -2166,9 +2295,12 @@ func (a *App) receiveLoop(udp *transport.UDP) {
 				if username == "" {
 					username = "Usuario"
 				}
-				if a.addPeer(username + " (" + addr.String() + ")") {
-					go audio.PlayTestTone(a.cfg.OutputDevice, 250*time.Millisecond)
+				if a.addPeer(username, addr.String()) {
+					a.playEventSound(audio.SFXConnect)
 				}
+			}
+			if packet.Kind == transport.PacketPing && len(packet.Payload) == 8 {
+				_ = udp.Send(addr, transport.Packet{Kind: transport.PacketPong, Sequence: packet.Sequence, Payload: packet.Payload})
 			}
 			if packet.Kind == transport.PacketPong && len(packet.Payload) == 8 {
 				timestamp := int64(binary.BigEndian.Uint64(packet.Payload))
@@ -2197,6 +2329,9 @@ func (a *App) receiveLoop(udp *transport.UDP) {
 		} else if packet.Kind == transport.PacketPing {
 			a.lastHostSeen.Store(time.Now().UnixNano())
 			_ = udp.Send(addr, transport.Packet{Kind: transport.PacketPong, Sequence: packet.Sequence, Payload: packet.Payload})
+		} else if packet.Kind == transport.PacketPong && len(packet.Payload) == 8 {
+			timestamp := int64(binary.BigEndian.Uint64(packet.Payload))
+			a.updatePeerLag(addr.String(), time.Since(time.Unix(0, timestamp)))
 		} else if packet.Kind == transport.PacketRoomState {
 			envelope, err := room.Decode(packet.Payload)
 			if err == nil && envelope.Room != nil {
@@ -2210,6 +2345,7 @@ func (a *App) receiveLoop(udp *transport.UDP) {
 			}
 			logging.Infof("Notificación de desconexión recibida: %s", username)
 			a.addSystemMessage(username + " se desconectó.")
+			a.playEventSound(audio.SFXDisconnect)
 			if envelope.Participant != nil {
 				a.roomState.MarkDisconnected(envelope.Participant.ID)
 				a.refreshPeersFromRoom()
@@ -2266,6 +2402,7 @@ func (a *App) handleParticipantLeave(participantID, username string, addr *net.U
 	logging.Infof("Cliente desconectado: %s (%s)", username, addrStr)
 	a.refreshPeersFromRoom()
 	a.addSystemMessage(username + " se desconectó.")
+	a.playEventSound(audio.SFXDisconnect)
 	if a.roomStore != nil {
 		a.roomStore.Replace(a.roomState)
 	}
@@ -2275,6 +2412,21 @@ func (a *App) handleParticipantLeave(participantID, username string, addr *net.U
 
 func (a *App) handleRoomState(state room.State, udp *transport.UDP) {
 	previousHost := a.roomState.HostID
+	for _, p := range state.Participants {
+		if p.ID == a.participantID || !p.Connected {
+			continue
+		}
+		wasConnected := false
+		for _, prev := range a.roomState.Participants {
+			if prev.ID == p.ID && prev.Connected {
+				wasConnected = true
+				break
+			}
+		}
+		if !wasConnected && len(a.roomState.Participants) > 1 {
+			a.playEventSound(audio.SFXConnect)
+		}
+	}
 	a.roomState = state
 	a.refreshPeersFromRoom()
 	if state.Name != "" && state.Name != a.activeRoomName {
@@ -2322,6 +2474,13 @@ func (a *App) monitorHost(udp *transport.UDP, stop <-chan struct{}) {
 		case <-stop:
 			return
 		case <-ticker.C:
+			if !a.hostMode.Load() && a.endpoint != "" {
+				if hostAddr, err := net.ResolveUDPAddr("udp", a.endpoint); err == nil {
+					payload := make([]byte, 8)
+					binary.BigEndian.PutUint64(payload, uint64(time.Now().UnixNano()))
+					_ = udp.Send(hostAddr, transport.Packet{Kind: transport.PacketPing, Sequence: a.sequence.Add(1), Payload: payload})
+				}
+			}
 			if a.hostMode.Load() || time.Since(time.Unix(0, a.lastHostSeen.Load())) < 6*time.Second {
 				continue
 			}
@@ -2411,15 +2570,19 @@ func (a *App) pingPeers(udp *transport.UDP, stop <-chan struct{}) {
 	}
 }
 
-func (a *App) addPeer(name string) bool {
+func (a *App) addPeer(name, address string) bool {
 	a.peerMu.Lock()
 	defer a.peerMu.Unlock()
-	for _, peer := range a.peerNames {
-		if peer.name == name {
+	for index, peer := range a.peerNames {
+		if (address != "" && peer.address == address) || peer.name == name {
+			a.peerNames[index].name = name
+			if address != "" {
+				a.peerNames[index].address = address
+			}
 			return false
 		}
 	}
-	a.peerNames = append(a.peerNames, peerView{name: name})
+	a.peerNames = append(a.peerNames, peerView{name: name, address: address})
 	fyne.Do(func() {
 		if a.peerList != nil {
 			a.peerList.Refresh()
@@ -2431,7 +2594,7 @@ func (a *App) addPeer(name string) bool {
 func (a *App) updatePeerLag(address string, lag time.Duration) {
 	a.peerMu.Lock()
 	for index := range a.peerNames {
-		if strings.Contains(a.peerNames[index].name, "("+address+")") {
+		if a.peerNames[index].address == address || strings.Contains(a.peerNames[index].name, "("+address+")") {
 			a.peerNames[index].lag = lag
 			item := widget.ListItemID(index)
 			a.peerMu.Unlock()

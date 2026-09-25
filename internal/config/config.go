@@ -59,6 +59,7 @@ type Config struct {
 	PhoneMicPort          int     `json:"phone_mic_port"`
 	ShowStatusBar         bool    `json:"show_status_bar"`
 	SoundboardMuted       bool    `json:"soundboard_muted"`
+	EventSoundsEnabled    bool    `json:"event_sounds_enabled"`
 }
 
 func Default() Config {
@@ -96,6 +97,7 @@ func Default() Config {
 		PhoneMicBufferMS:      100,
 		PhoneMicPort:          47831,
 		ShowStatusBar:         true,
+		EventSoundsEnabled:    true,
 	}
 }
 

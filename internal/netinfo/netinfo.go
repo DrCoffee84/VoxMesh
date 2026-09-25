@@ -43,6 +43,7 @@ func PublicIP(ctx context.Context) (net.IP, error) {
 
 type portMapper interface {
 	AddPortMappingCtx(context.Context, string, uint16, string, uint16, string, bool, string, uint32) error
+	DeletePortMappingCtx(context.Context, string, uint16, string) error
 }
 
 type clientFactory func(*goupnp.RootDevice, *url.URL) ([]portMapper, error)
@@ -147,6 +148,60 @@ func asPortMappers[T portMapper](clients []T) []portMapper {
 		mappers[index] = client
 	}
 	return mappers
+}
+
+// UnmapUDP removes the UPnP port forwarding rule for the specified local port.
+func UnmapUDP(ctx context.Context, localPort uint16) error {
+	attempts := []struct {
+		name    string
+		urn     string
+		clients clientFactory
+	}{
+		{
+			name: "WANIPConnection v1",
+			urn:  internetgateway1.URN_WANIPConnection_1,
+			clients: func(root *goupnp.RootDevice, location *url.URL) ([]portMapper, error) {
+				clients, err := internetgateway1.NewWANIPConnection1ClientsFromRootDevice(root, location)
+				return asPortMappers(clients), err
+			},
+		},
+		{
+			name: "WANPPPConnection v1",
+			urn:  internetgateway1.URN_WANPPPConnection_1,
+			clients: func(root *goupnp.RootDevice, location *url.URL) ([]portMapper, error) {
+				clients, err := internetgateway1.NewWANPPPConnection1ClientsFromRootDevice(root, location)
+				return asPortMappers(clients), err
+			},
+		},
+		{
+			name: "WANIPConnection v2",
+			urn:  internetgateway2.URN_WANIPConnection_2,
+			clients: func(root *goupnp.RootDevice, location *url.URL) ([]portMapper, error) {
+				clients, err := internetgateway2.NewWANIPConnection2ClientsFromRootDevice(root, location)
+				return asPortMappers(clients), err
+			},
+		},
+	}
+
+	for _, attempt := range attempts {
+		devices, err := goupnp.DiscoverDevicesCtx(ctx, attempt.urn)
+		if err != nil || len(devices) == 0 {
+			continue
+		}
+		for _, device := range devices {
+			if device.Err != nil {
+				continue
+			}
+			mappers, err := attempt.clients(device.Root, device.Location)
+			if err != nil {
+				continue
+			}
+			for _, mapper := range mappers {
+				_ = mapper.DeletePortMappingCtx(ctx, "", localPort, "UDP")
+			}
+		}
+	}
+	return nil
 }
 
 func LocalIPv4() (net.IP, error) {

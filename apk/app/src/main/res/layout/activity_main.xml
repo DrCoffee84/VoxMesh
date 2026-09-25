@@ -150,13 +150,39 @@
                 android:textSize="14sp"
                 android:layout_marginBottom="14dp" />
 
-            <TextView
-                android:layout_width="wrap_content"
+            <LinearLayout
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Nivel de Entrada:"
-                android:textColor="@color/text_muted"
-                android:textSize="12sp"
-                android:layout_marginBottom="4dp" />
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="4dp">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Nivel de Entrada:"
+                    android:textColor="@color/text_muted"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/tvGain"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Ganancia: 1.5x"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp" />
+            </LinearLayout>
+
+            <SeekBar
+                android:id="@+id/seekBarGain"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:max="4"
+                android:progress="1"
+                android:progressTint="@color/accent_green"
+                android:thumbTint="@color/accent_green"
+                android:layout_marginBottom="8dp" />
 
             <ProgressBar
                 android:id="@+id/progressBarAudio"
@@ -192,16 +218,6 @@
                 android:textSize="14sp"
                 android:enabled="false" />
         </LinearLayout>
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="💡 Cuando el micrófono esté iniciado, podés apagar la pantalla con el botón de bloqueo o minimizar la app: el micrófono seguirá transmitiendo sin interrupciones a tu PC."
-            android:textColor="@color/text_muted"
-            android:textSize="12sp"
-            android:lineSpacingExtra="3dp"
-            android:gravity="center"
-            android:paddingHorizontal="8dp" />
 
     </LinearLayout>
 </ScrollView>

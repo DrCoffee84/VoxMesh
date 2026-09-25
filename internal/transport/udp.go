@@ -39,12 +39,14 @@ func encode(packet Packet) []byte {
 	return data
 }
 
+const MaxPayloadSize = 65507 - HeaderSize
+
 func decode(data []byte) (Packet, error) {
-	if len(data) < HeaderSize || string(data[:4]) != magic {
+	if len(data) < HeaderSize || len(data) > 65507 || string(data[:4]) != magic {
 		return Packet{}, fmt.Errorf("invalid VoxMesh packet")
 	}
 	payloadLength := int(binary.BigEndian.Uint32(data[12:16]))
-	if payloadLength != len(data)-HeaderSize {
+	if payloadLength < 0 || payloadLength > MaxPayloadSize || payloadLength != len(data)-HeaderSize {
 		return Packet{}, fmt.Errorf("invalid payload length")
 	}
 	return Packet{Kind: data[4], Sequence: binary.BigEndian.Uint32(data[8:12]), Payload: data[HeaderSize:]}, nil
