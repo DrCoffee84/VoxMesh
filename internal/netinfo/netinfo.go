@@ -115,7 +115,7 @@ func mapDevices(ctx context.Context, localPort uint16, lifetime uint32, name str
 		localIP := device.LocalAddr.To4()
 		if localIP == nil {
 			var err error
-			localIP, err = localIPv4()
+			localIP, err = LocalIPv4()
 			if err != nil {
 				failures = append(failures, fmt.Errorf("%s local address: %w", name, err))
 				continue
@@ -149,7 +149,7 @@ func asPortMappers[T portMapper](clients []T) []portMapper {
 	return mappers
 }
 
-func localIPv4() (net.IP, error) {
+func LocalIPv4() (net.IP, error) {
 	conn, err := net.Dial("udp", "1.1.1.1:53")
 	if err != nil {
 		return nil, err
