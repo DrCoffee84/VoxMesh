@@ -1,0 +1,29 @@
+﻿<resources>
+    <string name="app_name">VoxMesh Mic</string>
+    <string name="app_subtitle">Micrófono UDP de alta fidelidad para PC</string>
+    
+    <string name="connection_card_title">Conexión con VoxMesh PC</string>
+    <string name="scan_qr_button">📷 Escanear Código QR</string>
+    <string name="or_manual_input">o configurar manualmente:</string>
+    <string name="hint_host">IP de la PC (ej: 192.168.1.50)</string>
+    <string name="hint_port">Puerto UDP (ej: 47831)</string>
+    <string name="hint_token">Token de emparejamiento</string>
+    
+    <string name="start_streaming">Iniciar Micrófono</string>
+    <string name="stop_streaming">Detener Micrófono</string>
+    <string name="mute">Silenciar</string>
+    <string name="unmute">Activar Voz</string>
+    
+    <string name="status_disconnected">Estado: Desconectado</string>
+    <string name="status_connecting">Estado: Conectando...</string>
+    <string name="status_streaming">Estado: Transmitiendo a la PC (Pantalla bloqueable)</string>
+    <string name="status_muted">Estado: Micrófono silenciado</string>
+    
+    <string name="notification_channel_name">VoxMesh Micrófono</string>
+    <string name="notification_channel_desc">Mantiene la transmisión de voz activa con pantalla bloqueada</string>
+    <string name="notification_title">VoxMesh: Micrófono Activo</string>
+    <string name="notification_text">Transmitiendo audio en vivo a la PC</string>
+    <string name="action_stop">Detener</string>
+    <string name="action_mute">Silenciar</string>
+    <string name="action_unmute">Reanudar</string>
+</resources>
