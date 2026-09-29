@@ -40,6 +40,7 @@ import (
 	"voxmesh/internal/phonemic"
 	"voxmesh/internal/room"
 	"voxmesh/internal/transport"
+	"voxmesh/internal/updater"
 	"voxmesh/internal/version"
 )
 
@@ -250,6 +251,10 @@ func (a *App) Run() {
 		}
 	}
 	a.startHotkeyListener()
+	go func() {
+		time.Sleep(3 * time.Second)
+		a.checkForUpdates(false)
+	}()
 	a.window.ShowAndRun()
 }
 
@@ -1176,11 +1181,14 @@ func (a *App) renderSettingsView(devices audio.DeviceLists) {
 			a.setStatus("No se pudo abrir la carpeta de logs: " + err.Error())
 		}
 	})
+	checkUpdatesButton := widget.NewButtonWithIcon("Buscar actualizaciones", theme.ViewRefreshIcon(), func() {
+		go a.checkForUpdates(true)
+	})
 	interfaceCard := uiCard(container.NewVBox(
 		widget.NewLabelWithStyle("⚙️ Interfaz y Sistema", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		showStatusBarCheck,
 		eventSoundsCheck,
-		container.NewGridWithColumns(2, openDataDirButton, openLogsDirButton),
+		container.NewGridWithColumns(3, openDataDirButton, openLogsDirButton, checkUpdatesButton),
 	))
 	settingsBody := container.NewVScroll(container.NewVBox(
 		profileCard,
@@ -3872,3 +3880,74 @@ func (a *App) sweepSpeakingPeers() {
 		a.refreshPeerAvatars()
 	}
 }
+
+func (a *App) checkForUpdates(manual bool) {
+	if manual {
+		a.setStatus("Buscando actualizaciones...")
+	}
+	info, err := updater.CheckForUpdate(version.Value)
+	if err != nil {
+		if manual {
+			fyne.Do(func() {
+				a.setStatus("Error al buscar actualizaciones.")
+				dialog.ShowError(err, a.window)
+			})
+		} else {
+			logging.Errorf("verificar actualizaciones: %v", err)
+		}
+		return
+	}
+	if info == nil {
+		if manual {
+			fyne.Do(func() {
+				a.setStatus("Tienes la versión más reciente.")
+				dialog.ShowInformation("Actualizaciones", "Ya tienes instalada la versión más reciente ("+version.Value+").", a.window)
+			})
+		}
+		return
+	}
+
+	fyne.Do(func() {
+		a.promptUpdate(info)
+	})
+}
+
+func (a *App) promptUpdate(info *updater.ReleaseInfo) {
+	msg := fmt.Sprintf("¡Hay una nueva versión disponible!\n\nVersión nueva: %s\nVersión actual: %s", info.Version, version.Value)
+	if info.Changelog != "" {
+		msg += "\n\nNovedades:\n" + info.Changelog
+	}
+	msg += "\n\n¿Deseas actualizar ahora automáticamente?"
+
+	dialog.ShowConfirm("Actualización disponible", msg, func(confirm bool) {
+		if !confirm {
+			return
+		}
+		a.executeAutoUpdate(info)
+	}, a.window)
+}
+
+func (a *App) executeAutoUpdate(info *updater.ReleaseInfo) {
+	progress := widget.NewProgressBar()
+	progress.SetValue(0)
+	statusText := widget.NewLabel("Descargando " + info.Version + "...")
+	box := container.NewVBox(statusText, progress)
+
+	updateDialog := dialog.NewCustomWithoutButtons("Actualizando VoxMesh", box, a.window)
+	updateDialog.Show()
+
+	go func() {
+		err := updater.ApplyUpdate(info.DownloadURL, func(fraction float64) {
+			fyne.Do(func() {
+				progress.SetValue(fraction)
+			})
+		})
+		if err != nil {
+			fyne.Do(func() {
+				updateDialog.Hide()
+				dialog.ShowError(fmt.Errorf("no se pudo completar la actualización: %w", err), a.window)
+			})
+		}
+	}()
+}
+
