@@ -6,11 +6,14 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"image"
 	"image/color"
 	"math"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -48,13 +51,13 @@ type App struct {
 	sequence        atomic.Uint32
 	endpoint        string
 	status          *widget.Label
-	peerList        *widget.List
-	usersSection    *widget.Accordion
+	peerHBox        *fyne.Container
 	hostPanel       *fyne.Container
 	createButton    *widget.Button
 	stopButton      *widget.Button
 	connectButton   *widget.Button
 	leaveButton     *widget.Button
+	topHangupBtn    *widget.Button
 	endpointEntry   *widget.Entry
 	peerNames       []peerView
 	peerMu          sync.RWMutex
@@ -84,6 +87,9 @@ type App struct {
 	voiceTimerMu    sync.Mutex
 	voiceTimer      *time.Timer
 	voiceActive     atomic.Bool
+	audioSeqMu      sync.Mutex
+	peerAudioSeq    map[string]uint32
+	peerAudioTime   map[string]time.Time
 	phoneMicMu      sync.RWMutex
 	phoneMic        *phonemic.Server
 	previewMu       sync.RWMutex
@@ -98,9 +104,17 @@ type App struct {
 	roomSelect      *widget.Select
 	activeRoomName  string
 	viewingRoomName string
+	activityBox     *fyne.Container
+	activityScroll  *container.Scroll
+	stagedBar       *fyne.Container
+	stagedLabel     *widget.Label
+	stagedExt       string
+	stagedData      []byte
+	stagedName      string
 	soundPanel      *fyne.Container
 	soundGrid       *fyne.Container
 	soundPlayer     *audio.Player
+	stopBindBtn     *widget.Button
 	soundMu         sync.RWMutex
 	sounds          []room.Sound
 	pendingPlays    map[string]struct{}
@@ -122,7 +136,16 @@ func New(executable string) *App {
 	cfgPath := config.Path(executable)
 	cfg, _ := config.Load(cfgPath)
 	voiceProcessor, _ := audio.NewRNNoise()
-	return &App{cfg: cfg, cfgPath: cfgPath, voiceProcessor: voiceProcessor, effects: &audio.Effects{}, outputEffects: &audio.Effects{}, assetAssembler: assets.NewAssembler()}
+	return &App{
+		cfg:            cfg,
+		cfgPath:        cfgPath,
+		voiceProcessor: voiceProcessor,
+		effects:        &audio.Effects{},
+		outputEffects:  &audio.Effects{},
+		assetAssembler: assets.NewAssembler(),
+		peerAudioSeq:   make(map[string]uint32),
+		peerAudioTime:  make(map[string]time.Time),
+	}
 }
 
 func (a *App) setStatus(text string) {
@@ -141,22 +164,55 @@ func (a *App) setStatus(text string) {
 }
 
 func (a *App) flashVoiceIndicator() {
-	if a.voiceIndicator == nil {
-		return
+	wasActive := a.voiceActive.Swap(true)
+	if !wasActive && a.voiceIndicator != nil {
+		fyne.Do(func() {
+			a.voiceIndicator.FillColor = color.NRGBA{R: 46, G: 204, B: 113, A: 255}
+			a.voiceIndicator.Refresh()
+		})
 	}
+	a.markPeerSpeaking(a.participantID, "")
 	a.voiceTimerMu.Lock()
 	if a.voiceTimer != nil {
 		a.voiceTimer.Stop()
 	}
-	a.markPeerSpeaking(a.participantID, "")
-	a.voiceActive.Store(true)
 	a.voiceTimer = time.AfterFunc(350*time.Millisecond, func() {
 		a.voiceTimerMu.Lock()
 		a.voiceActive.Store(false)
 		a.voiceTimerMu.Unlock()
+		if a.voiceIndicator != nil {
+			fyne.Do(func() {
+				a.voiceIndicator.FillColor = color.NRGBA{R: 100, G: 110, B: 120, A: 255}
+				a.voiceIndicator.Refresh()
+			})
+		}
 		a.sweepSpeakingPeers()
 	})
 	a.voiceTimerMu.Unlock()
+}
+
+func (a *App) isAudioSequenceValid(senderID string, seq uint32) bool {
+	a.audioSeqMu.Lock()
+	defer a.audioSeqMu.Unlock()
+
+	lastSeq, exists := a.peerAudioSeq[senderID]
+	lastTime := a.peerAudioTime[senderID]
+	now := time.Now()
+
+	if !exists || now.Sub(lastTime) > 800*time.Millisecond {
+		a.peerAudioSeq[senderID] = seq
+		a.peerAudioTime[senderID] = now
+		return true
+	}
+
+	diff := int32(seq - lastSeq)
+	if diff <= 0 {
+		return false // Discard duplicate or out-of-order late arrival
+	}
+
+	a.peerAudioSeq[senderID] = seq
+	a.peerAudioTime[senderID] = now
+	return true
 }
 
 func (a *App) Run() {
@@ -193,8 +249,40 @@ func (a *App) Run() {
 			a.setStatus("No se pudo iniciar el servidor del celular: " + err.Error())
 		}
 	}
+	a.startHotkeyListener()
 	a.window.ShowAndRun()
 }
+
+func newScrollableEntry() *widget.Entry {
+	e := widget.NewEntry()
+	e.Wrapping = fyne.TextWrapOff
+	e.Scroll = fyne.ScrollNone
+	return e
+}
+
+type chatInputEntry struct {
+	widget.Entry
+	app *App
+}
+
+func newChatInputEntry(app *App) *chatInputEntry {
+	e := &chatInputEntry{app: app}
+	e.Wrapping = fyne.TextWrapOff
+	e.Scroll = fyne.ScrollNone
+	e.ExtendBaseWidget(e)
+	return e
+}
+
+func (e *chatInputEntry) TypedShortcut(s fyne.Shortcut) {
+	if _, ok := s.(*fyne.ShortcutPaste); ok {
+		if e.app != nil && e.app.tryPasteImage() {
+			return
+		}
+	}
+	e.Entry.TypedShortcut(s)
+}
+
+var urlRegex = regexp.MustCompile(`https?://[^\s<>"'()]+`)
 
 func (a *App) content() fyne.CanvasObject {
 	a.status = widget.NewLabel("Listo. Crea una sala o conecta con un host.")
@@ -204,7 +292,7 @@ func (a *App) content() fyne.CanvasObject {
 			a.setStatus("No se pudo abrir la carpeta de logs: " + err.Error())
 		}
 	})
-	endpoint := widget.NewEntry()
+	endpoint := newScrollableEntry()
 	endpoint.SetPlaceHolder("IP del host (puerto por defecto 47830)")
 	if a.cfg.LastPeer != "" {
 		endpoint.SetText(a.cfg.LastPeer)
@@ -229,80 +317,23 @@ func (a *App) content() fyne.CanvasObject {
 		a.setStatus("Dirección copiada: " + a.endpoint)
 	})
 
-	a.peerList = widget.NewList(func() int {
-		a.peerMu.RLock()
-		defer a.peerMu.RUnlock()
-		return len(a.peerNames)
-	}, func() fyne.CanvasObject {
-		avatarBg := canvas.NewCircle(color.NRGBA{R: 60, G: 70, B: 85, A: 255})
-		avatarBg.Resize(fyne.NewSize(26, 26))
-		avatarText := canvas.NewText("U", color.White)
-		avatarText.TextStyle = fyne.TextStyle{Bold: true}
-		avatarText.TextSize = 12
-		avatarText.Alignment = fyne.TextAlignCenter
-		avatarStack := container.NewStack(avatarBg, container.NewCenter(avatarText))
-		avatarBox := container.NewGridWrap(fyne.NewSize(26, 26), avatarStack)
+	chatInput := newChatInputEntry(a)
+	chatInput.SetPlaceHolder("Escribe un mensaje...")
+	chatInput.OnSubmitted = func(text string) { a.submitChat() }
+	a.chatInput = &chatInput.Entry
 
-		nameLabel := widget.NewLabel("")
-		lagLabel := widget.NewLabel("")
-		return container.NewHBox(avatarBox, nameLabel, layout.NewSpacer(), lagLabel)
-	}, func(item widget.ListItemID, object fyne.CanvasObject) {
-		a.peerMu.RLock()
-		defer a.peerMu.RUnlock()
-		if item >= len(a.peerNames) {
-			return
-		}
-		peer := a.peerNames[item]
-		row := object.(*fyne.Container)
-		avatarBox := row.Objects[0].(*fyne.Container)
-		nameLabel := row.Objects[1].(*widget.Label)
-		lagLabel := row.Objects[3].(*widget.Label)
+	sendChat := widget.NewButton("Enviar", a.submitChat)
+	attachImage := widget.NewButton("📎", a.selectChatImage)
 
-		avatarStack := avatarBox.Objects[0].(*fyne.Container)
-		avatarBg := avatarStack.Objects[0].(*canvas.Circle)
-		avatarCenter := avatarStack.Objects[1].(*fyne.Container)
-		avatarText := avatarCenter.Objects[0].(*canvas.Text)
+	a.stagedLabel = widget.NewLabel("")
+	clearStagedBtn := widget.NewButtonWithIcon("", theme.CancelIcon(), a.clearStagedImage)
+	clearStagedBtn.Importance = widget.LowImportance
+	a.stagedBar = container.NewBorder(nil, nil, a.stagedLabel, clearStagedBtn)
+	a.stagedBar.Hide()
 
-		initial := "U"
-		trimmedName := strings.TrimSpace(peer.name)
-		if len(trimmedName) > 0 {
-			initial = strings.ToUpper(string([]rune(trimmedName)[:1]))
-		}
-		avatarText.Text = initial
+	composerInput := container.NewVBox(a.stagedBar, chatInput)
+	chatComposer := container.NewBorder(nil, nil, attachImage, sendChat, composerInput)
 
-		isSpeaking := peer.speaking && time.Now().Before(peer.speakStop)
-		if isSpeaking {
-			avatarBg.FillColor = color.NRGBA{R: 46, G: 204, B: 113, A: 255}
-			avatarText.Color = color.NRGBA{R: 15, G: 35, B: 15, A: 255}
-		} else {
-			avatarBg.FillColor = color.NRGBA{R: 60, G: 70, B: 85, A: 255}
-			avatarText.Color = color.NRGBA{R: 240, G: 245, B: 255, A: 255}
-		}
-		avatarBg.Refresh()
-		avatarText.Refresh()
-
-		displayName := peer.name
-		if peer.isSelf {
-			displayName = fmt.Sprintf("%s (Tú)", peer.name)
-		}
-		if isSpeaking {
-			displayName = "🔊 " + displayName
-		}
-		nameLabel.SetText(displayName)
-
-		if peer.isSelf {
-			lagLabel.SetText("Local")
-		} else if peer.lag > 0 {
-			lagLabel.SetText(fmt.Sprintf("%d ms", int(peer.lag/time.Millisecond)))
-		} else {
-			lagLabel.SetText("--")
-		}
-	})
-	a.chatInput = widget.NewEntry()
-	a.chatInput.SetPlaceHolder("Escribe un mensaje")
-	a.chatInput.OnSubmitted = func(text string) { a.sendChatMessage(text) }
-	sendChat := widget.NewButton("Enviar", func() { a.sendChatMessage(a.chatInput.Text) })
-	attachImage := widget.NewButton("📎", func() { a.selectChatImage() })
 	a.chatBox = container.NewVBox()
 	a.chatScroll = container.NewVScroll(a.chatBox)
 	a.roomSelect = widget.NewSelect(nil, func(selected string) { a.viewRoom(selected) })
@@ -324,14 +355,34 @@ func (a *App) content() fyne.CanvasObject {
 	)
 	a.clientPanel = uiCard(clientContent)
 
-	a.connectionPanel = container.NewVBox(a.hostPanel, a.clientPanel)
+	topControls := container.NewVBox(a.hostPanel, a.clientPanel)
 
-	usersAccItem := widget.NewAccordionItem("Usuarios conectados", a.peerList)
-	usersAccItem.Open = true
-	a.usersSection = widget.NewAccordion(usersAccItem)
-	statusCard := uiCard(a.usersSection)
+	a.activityBox = container.NewVBox()
+	a.activityScroll = container.NewVScroll(a.activityBox)
+	a.activityScroll.SetMinSize(fyne.NewSize(180, 120))
+	clearLogsBtn := widget.NewButtonWithIcon("", theme.DeleteIcon(), func() {
+		fyne.Do(func() {
+			if a.activityBox != nil {
+				a.activityBox.Objects = nil
+				a.activityBox.Refresh()
+			}
+		})
+	})
+	clearLogsBtn.Importance = widget.LowImportance
+	activityHeader := container.NewBorder(nil, nil, widget.NewLabelWithStyle("Registro de actividad", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), clearLogsBtn)
+	activityCard := uiCard(container.NewBorder(activityHeader, nil, nil, nil, a.activityScroll))
 
-	a.chatSearch = widget.NewEntry()
+	a.connectionPanel = container.NewBorder(topControls, nil, nil, nil, activityCard)
+
+	a.peerHBox = container.NewHBox()
+	a.refreshPeerAvatars()
+	peerLabel := widget.NewLabelWithStyle("En sala:", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	peerScroll := container.NewHScroll(a.peerHBox)
+	peerScroll.SetMinSize(fyne.NewSize(120, 32))
+	peersRow := container.NewBorder(nil, nil, peerLabel, nil, peerScroll)
+	statusCard := uiCard(peersRow)
+
+	a.chatSearch = newScrollableEntry()
 	a.chatSearch.SetPlaceHolder("🔍 Buscar en el chat...")
 	a.chatSearch.OnChanged = func(string) { a.refreshChat() }
 	a.chatSearchCount = widget.NewLabel("")
@@ -342,17 +393,24 @@ func (a *App) content() fyne.CanvasObject {
 	chatTop := container.NewBorder(nil, nil, widget.NewLabelWithStyle("Chat de la sala", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), nil, a.roomSelect)
 	chatHeader := container.NewVBox(chatTop, searchBar)
 
-	chatComposer := container.NewBorder(nil, nil, attachImage, sendChat, a.chatInput)
 	chatCard := uiCard(container.NewBorder(chatHeader, chatComposer, nil, nil, a.chatScroll))
 
 	a.buildSoundPanel()
+	toggleRoomsBtn := widget.NewButtonWithIcon("", theme.MenuIcon(), a.toggleConnectionPanels)
+	toggleRoomsBtn.Importance = widget.LowImportance
+
+	hangupRedIcon := fyne.NewStaticResource("call_end.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path fill="#e74c3c" d="M12 9c-2.3 0-4.47.58-6.37 1.62-.43.23-.71.69-.71 1.18 0 .42.19.82.52 1.09l2.4 1.95c.34.28.81.33 1.19.13 1.11-.58 2.34-.97 3.65-.97s2.54.39 3.65.97c.38.2.85.15 1.19-.13l2.4-1.95c.33-.27.52-.67.52-1.09 0-.49-.28-.95-.71-1.18C16.47 9.58 14.3 9 12 9z"/></svg>`))
+	a.topHangupBtn = widget.NewButtonWithIcon("", hangupRedIcon, a.stopConnection)
+	a.topHangupBtn.Importance = widget.LowImportance
+	a.topHangupBtn.Disable()
+
 	title := widget.NewLabelWithStyle("VoxMesh", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-	toolbar := widget.NewToolbar(
-		widget.NewToolbarAction(theme.MenuIcon(), a.toggleConnectionPanels),
-		widget.NewToolbarAction(theme.CancelIcon(), a.stopConnection),
-		widget.NewToolbarAction(theme.SettingsIcon(), a.showSettings),
-	)
-	topBar := container.NewBorder(title, nil, nil, toolbar, nil)
+
+	settingsBtn := widget.NewButtonWithIcon("", theme.SettingsIcon(), a.showSettings)
+	settingsBtn.Importance = widget.LowImportance
+
+	leftTop := container.NewHBox(toggleRoomsBtn, a.topHangupBtn, title)
+	topBar := container.NewBorder(nil, nil, leftTop, settingsBtn, nil)
 	centerPanel := container.NewBorder(statusCard, nil, nil, nil, chatCard)
 	main := container.NewBorder(nil, nil, a.connectionPanel, a.soundPanel, centerPanel)
 	a.bottomBar = container.NewBorder(nil, nil, a.status, container.NewHBox(buildVersion, openLogs), nil)
@@ -411,12 +469,146 @@ func (a *App) toggleConnectionPanels() {
 	}
 }
 
-func (a *App) showSettings() {
-	devices, err := audio.ListDevices()
-	if err != nil {
-		a.setStatus("No se pudieron enumerar los dispositivos: " + err.Error())
+func (a *App) stageImage(ext string, data []byte, name string) {
+	if len(data) > assets.MaxBytes {
+		a.setStatus(fmt.Sprintf("La imagen supera el límite de %d MiB.", assets.MaxBytes/1024/1024))
 		return
 	}
+	a.stagedExt = ext
+	a.stagedData = data
+	a.stagedName = name
+	kb := len(data) / 1024
+	fyne.Do(func() {
+		if a.stagedLabel != nil {
+			a.stagedLabel.SetText(fmt.Sprintf("📷 Imagen lista para enviar: %s (%d KB)", name, kb))
+		}
+		if a.stagedBar != nil {
+			a.stagedBar.Show()
+		}
+	})
+	a.setStatus(fmt.Sprintf("Imagen adjuntada (%s, %d KB). Presiona Enviar para transmitirla.", name, kb))
+}
+
+func (a *App) clearStagedImage() {
+	a.stagedExt = ""
+	a.stagedData = nil
+	a.stagedName = ""
+	fyne.Do(func() {
+		if a.stagedBar != nil {
+			a.stagedBar.Hide()
+		}
+	})
+}
+
+func (a *App) tryPasteImage() bool {
+	ext, data, name, err := readClipboardImage()
+	if err != nil || len(data) == 0 {
+		return false
+	}
+	a.stageImage(ext, data, name)
+	return true
+}
+
+func (a *App) submitChat() {
+	var txt string
+	if a.chatInput != nil {
+		txt = a.chatInput.Text
+	}
+	hasText := strings.TrimSpace(txt) != ""
+	hasImage := len(a.stagedData) > 0
+
+	if !hasText && !hasImage {
+		return
+	}
+
+	if a.transport == nil {
+		a.setStatus("Conecta a una sala antes de enviar un mensaje.")
+		return
+	}
+
+	if a.chatInput != nil {
+		a.chatInput.SetText("")
+	}
+
+	if hasImage {
+		ext := a.stagedExt
+		data := a.stagedData
+		a.clearStagedImage()
+		go a.sendChatImageBytes(ext, data, txt)
+		return
+	}
+
+	if hasText {
+		a.sendChatMessage(txt)
+	}
+}
+
+func (a *App) sendChatImageBytes(ext string, data []byte, caption string) {
+	if a.historyStore == nil || a.transport == nil {
+		return
+	}
+	imageID := history.NewID(a.participantID)
+	if ext == "" {
+		ext = ".png"
+	}
+	filePath, saveErr := a.historyStore.SaveImage(imageID, ext, data)
+	if saveErr != nil {
+		logging.Errorf("guardar imagen %q: %s", imageID, logging.FormatError(saveErr))
+		a.setStatus("No se pudo guardar la imagen: " + saveErr.Error())
+		return
+	}
+	message := history.Message{
+		ID:        history.NewID(a.participantID),
+		Timestamp: time.Now().UTC(),
+		SenderID:  a.participantID,
+		Username:  a.cfg.Username,
+		Kind:      "image",
+		ImageID:   imageID,
+		ImageExt:  ext,
+		ImagePath: filePath,
+		Text:      caption,
+	}
+	a.addChatMessage(message)
+	a.playEventSound(audio.SFXMessage)
+	payload, encodeErr := room.Encode(room.Envelope{Kind: room.ChatMessage, Message: &message})
+	if encodeErr == nil {
+		a.sendChatPayload(payload)
+	}
+	a.sendAsset(assets.KindImage, imageID, ext, data)
+}
+
+func (a *App) addActivity(text string) {
+	stamp := time.Now().Format("15:04")
+	fyne.Do(func() {
+		if a.activityBox == nil {
+			return
+		}
+		lbl := widget.NewLabel(fmt.Sprintf("%s %s", stamp, text))
+		lbl.Wrapping = fyne.TextWrapWord
+		a.activityBox.Add(lbl)
+		if a.activityScroll != nil {
+			a.activityScroll.ScrollToBottom()
+		}
+	})
+}
+
+func (a *App) showSettings() {
+	a.setStatus("Cargando opciones y dispositivos de audio...")
+	go func() {
+		devices, err := audio.ListDevices()
+		if err != nil {
+			fyne.Do(func() {
+				a.setStatus("No se pudieron enumerar los dispositivos: " + err.Error())
+			})
+			return
+		}
+		fyne.Do(func() {
+			a.renderSettingsView(devices)
+		})
+	}()
+}
+
+func (a *App) renderSettingsView(devices audio.DeviceLists) {
 	inputOptions := append([]string{"Sistema predeterminado", phoneMicInput}, devices.Inputs...)
 	outputOptions := append([]string{"Sistema predeterminado"}, devices.Outputs...)
 	username := widget.NewEntry()
@@ -806,10 +998,12 @@ func (a *App) showSettings() {
 	closeSettings := func() {
 		closeOnce.Do(func() {
 			close(phoneStatusStop)
-			stopPreview()
-			if monitor != nil {
-				monitor.Stop()
-			}
+			go func() {
+				stopPreview()
+				if monitor != nil {
+					monitor.Stop()
+				}
+			}()
 			a.settingsStatus = nil
 			a.window.SetContent(a.mainView)
 		})
@@ -860,14 +1054,6 @@ func (a *App) showSettings() {
 		if p, err := strconv.Atoi(strings.TrimSpace(phonePortEntry.Text)); err == nil && p > 0 && p < 65536 {
 			a.cfg.PhoneMicPort = p
 		}
-		if err := config.Save(a.cfgPath, a.cfg); err != nil {
-			logging.Errorf("guardar configuración: %s", logging.FormatError(err))
-			a.setStatus("No se pudo guardar la configuración.")
-			return
-		}
-		if a.transport != nil && (oldInput != a.cfg.InputDevice || oldOutput != a.cfg.OutputDevice) {
-			a.restartAudioInRoom()
-		}
 		if a.bottomBar != nil {
 			if a.cfg.ShowStatusBar {
 				a.bottomBar.Show()
@@ -877,6 +1063,19 @@ func (a *App) showSettings() {
 		}
 		a.setStatus("Configuración guardada.")
 		closeSettings()
+
+		go func() {
+			if err := config.Save(a.cfgPath, a.cfg); err != nil {
+				logging.Errorf("guardar configuración: %s", logging.FormatError(err))
+				fyne.Do(func() {
+					a.setStatus("No se pudo guardar la configuración.")
+				})
+				return
+			}
+			if a.transport != nil && (oldInput != a.cfg.InputDevice || oldOutput != a.cfg.OutputDevice) {
+				a.restartAudioInRoom()
+			}
+		}()
 	}
 	outputFilterCheck := widget.NewCheck("Aplicar filtro de salida", func(enabled bool) { a.cfg.OutputFilterEnabled = enabled })
 	outputFilterCheck.SetChecked(a.cfg.OutputFilterEnabled)
@@ -1272,7 +1471,133 @@ func (a *App) showLightbox(imagePath string) {
 		}
 	})
 	pop = widget.NewPopUp(tapImg, a.window.Canvas())
-	pop.Show()
+	posX := (cSize.Width - targetW) / 2
+	posY := (cSize.Height - targetH) / 2
+	if posX < 0 {
+		posX = 0
+	}
+	if posY < 0 {
+		posY = 0
+	}
+	pop.ShowAtPosition(fyne.NewPos(posX, posY))
+}
+
+func buildChatSegments(m history.Message, userColor fyne.ThemeColorName) []widget.RichTextSegment {
+	stamp := m.Timestamp.Local().Format("15:04")
+	prefix := m.Username
+
+	stampStyle := widget.RichTextStyleInline
+	stampStyle.ColorName = theme.ColorNamePlaceHolder
+
+	userStyle := widget.RichTextStyleInline
+	userStyle.TextStyle = fyne.TextStyle{Bold: true}
+	userStyle.ColorName = userColor
+
+	segments := []widget.RichTextSegment{
+		&widget.TextSegment{
+			Text:  stamp + " ",
+			Style: stampStyle,
+		},
+		&widget.TextSegment{
+			Text:  prefix + ": ",
+			Style: userStyle,
+		},
+	}
+
+	text := m.Text
+	if m.Kind == "image" && text == "" {
+		text = "📷 Imagen compartida"
+	}
+
+	matches := urlRegex.FindAllStringIndex(text, -1)
+	if len(matches) == 0 {
+		segments = append(segments, &widget.TextSegment{
+			Text:  text,
+			Style: widget.RichTextStyleInline,
+		})
+		return segments
+	}
+
+	lastIdx := 0
+	for _, loc := range matches {
+		start, end := loc[0], loc[1]
+		if start > lastIdx {
+			segments = append(segments, &widget.TextSegment{
+				Text:  text[lastIdx:start],
+				Style: widget.RichTextStyleInline,
+			})
+		}
+		rawURL := text[start:end]
+		parsedURL, err := url.Parse(rawURL)
+		if err == nil {
+			segments = append(segments, &widget.HyperlinkSegment{
+				Text: rawURL,
+				URL:  parsedURL,
+			})
+		} else {
+			segments = append(segments, &widget.TextSegment{
+				Text:  rawURL,
+				Style: widget.RichTextStyleInline,
+			})
+		}
+		lastIdx = end
+	}
+	if lastIdx < len(text) {
+		segments = append(segments, &widget.TextSegment{
+			Text:  text[lastIdx:],
+			Style: widget.RichTextStyleInline,
+		})
+	}
+	return segments
+}
+
+func (a *App) buildChatMessageObject(m history.Message, isMatch bool) fyne.CanvasObject {
+	var userColor fyne.ThemeColorName
+	if m.SenderID == a.participantID || (a.cfg.Username != "" && m.Username == a.cfg.Username) {
+		userColor = theme.ColorNameSuccess
+	} else {
+		userColor = theme.ColorNamePrimary
+	}
+
+	segments := buildChatSegments(m, userColor)
+	rt := widget.NewRichText(segments...)
+	rt.Wrapping = fyne.TextWrapWord
+
+	copyText := m.Text
+	if copyText == "" && m.Kind == "image" {
+		copyText = "Imagen: " + m.ImageID + m.ImageExt
+	}
+	copyBtn := widget.NewButtonWithIcon("", theme.ContentCopyIcon(), func() {
+		_ = clipboard.WriteAll(copyText)
+		a.setStatus("Mensaje copiado al portapapeles.")
+	})
+	copyBtn.Importance = widget.LowImportance
+	copyWrap := container.NewGridWrap(fyne.NewSize(28, 24), copyBtn)
+
+	headerRow := container.NewBorder(nil, nil, nil, copyWrap, rt)
+	var row fyne.CanvasObject = headerRow
+
+	imagePath := ""
+	if m.Kind == "image" && a.historyStore != nil {
+		imagePath = a.historyStore.ImagePath(m.ImageID, m.ImageExt)
+	}
+	if imagePath != "" && fileExists(imagePath) {
+		img := &canvas.Image{File: imagePath, FillMode: canvas.ImageFillContain}
+		img.SetMinSize(fyne.NewSize(240, 160))
+		p := imagePath
+		clickableThumb := newTappableImage(img, func() {
+			a.showLightbox(p)
+		})
+		row = container.NewVBox(headerRow, container.NewHBox(clickableThumb))
+	}
+
+	if isMatch {
+		highlightBg := canvas.NewRectangle(color.NRGBA{R: 70, G: 65, B: 30, A: 255})
+		highlightBg.CornerRadius = 4
+		row = container.NewStack(highlightBg, container.NewPadded(row))
+	}
+
+	return row
 }
 
 func (a *App) refreshChat() {
@@ -1293,6 +1618,9 @@ func (a *App) refreshChat() {
 		objects := make([]fyne.CanvasObject, 0, len(msgs))
 		for _, msg := range msgs {
 			m := msg
+			if m.System || m.Kind == "system" || strings.EqualFold(m.Username, "SISTEMA") {
+				continue
+			}
 			isMatch := false
 			if searchFilter != "" {
 				lowerText := strings.ToLower(m.Text)
@@ -1303,54 +1631,7 @@ func (a *App) refreshChat() {
 				}
 			}
 
-			stamp := m.Timestamp.Local().Format("15:04")
-			prefix := m.Username
-			if m.System {
-				prefix = "SISTEMA"
-			}
-			text := m.Text
-			if m.Kind == "image" {
-				text = "📷 Imagen compartida (haz clic para ampliar)"
-			}
-
-			matchPrefix := ""
-			if isMatch {
-				matchPrefix = "🔎 "
-			}
-			lbl := widget.NewLabel(fmt.Sprintf("%s[%s] %s: %s", matchPrefix, stamp, prefix, text))
-			lbl.Wrapping = fyne.TextWrapWord
-			if isMatch {
-				lbl.TextStyle = fyne.TextStyle{Bold: true}
-			}
-
-			imagePath := ""
-			if m.Kind == "image" && a.historyStore != nil {
-				imagePath = a.historyStore.ImagePath(m.ImageID, m.ImageExt)
-			}
-			var itemBox *fyne.Container
-			if imagePath != "" && fileExists(imagePath) {
-				img := &canvas.Image{File: imagePath, FillMode: canvas.ImageFillContain}
-				img.SetMinSize(fyne.NewSize(240, 160))
-				p := imagePath
-				clickableThumb := newTappableImage(img, func() {
-					a.showLightbox(p)
-				})
-				itemBox = container.NewVBox(
-					lbl,
-					container.NewHBox(clickableThumb),
-					widget.NewSeparator(),
-				)
-			} else {
-				itemBox = container.NewVBox(lbl)
-			}
-
-			if isMatch {
-				highlightBg := canvas.NewRectangle(color.NRGBA{R: 70, G: 65, B: 30, A: 255})
-				highlightBg.CornerRadius = 4
-				objects = append(objects, container.NewStack(highlightBg, container.NewPadded(itemBox)))
-			} else {
-				objects = append(objects, itemBox)
-			}
+			objects = append(objects, a.buildChatMessageObject(m, isMatch))
 		}
 
 		if a.chatSearchCount != nil {
@@ -1387,8 +1668,16 @@ func (a *App) initHistory(roomName string) {
 	if err != nil {
 		return
 	}
+	chatOnly := make([]history.Message, 0, len(messages))
+	for _, m := range messages {
+		if m.System || m.Kind == "system" || strings.EqualFold(m.Username, "SISTEMA") {
+			a.addActivity(m.Text)
+			continue
+		}
+		chatOnly = append(chatOnly, m)
+	}
 	a.chatMu.Lock()
-	a.chatMessages = messages
+	a.chatMessages = chatOnly
 	a.chatMu.Unlock()
 	sounds, _ := store.ListSounds()
 	a.soundMu.Lock()
@@ -1403,8 +1692,14 @@ func (a *App) initHistory(roomName string) {
 }
 
 func (a *App) addChatMessage(message history.Message) {
+	if message.System || message.Kind == "system" || strings.EqualFold(message.Username, "SISTEMA") {
+		a.addActivity(message.Text)
+		return
+	}
 	if a.historyStore != nil {
-		_ = a.historyStore.Add(message)
+		go func(m history.Message) {
+			_ = a.historyStore.Add(m)
+		}(message)
 	}
 	if a.viewingRoomName != "" && a.activeRoomName != "" && a.viewingRoomName != a.activeRoomName {
 		return
@@ -1418,14 +1713,39 @@ func (a *App) addChatMessage(message history.Message) {
 	}
 	a.chatMessages = append(a.chatMessages, message)
 	a.chatMu.Unlock()
-	a.refreshChat()
+
+	var searchFilter string
+	if a.chatSearch != nil {
+		searchFilter = strings.ToLower(strings.TrimSpace(a.chatSearch.Text))
+	}
+
+	if searchFilter == "" {
+		row := a.buildChatMessageObject(message, false)
+		fyne.Do(func() {
+			if a.chatBox != nil {
+				a.chatBox.Add(row)
+				if a.chatScroll != nil {
+					a.chatScroll.ScrollToBottom()
+				}
+			}
+		})
+	} else {
+		a.refreshChat()
+	}
 }
 
 func (a *App) addSystemMessage(text string) {
-	message := history.Message{ID: history.NewID("system"), Timestamp: time.Now().UTC(), Username: "SISTEMA", Kind: "system", Text: text, System: true}
-	a.addChatMessage(message)
-	payload, _ := room.Encode(room.Envelope{Kind: room.SystemMessage, Message: &message})
+	a.addActivity(text)
 	if a.transport != nil && a.roomState.HostID == a.participantID {
+		message := history.Message{
+			ID:        history.NewID("system"),
+			Timestamp: time.Now().UTC(),
+			Username:  "SISTEMA",
+			Kind:      "system",
+			Text:      text,
+			System:    true,
+		}
+		payload, _ := room.Encode(room.Envelope{Kind: room.SystemMessage, Message: &message})
 		a.transport.Broadcast(transport.Packet{Kind: transport.PacketChat, Sequence: a.sequence.Add(1), Payload: payload}, nil)
 	}
 }
@@ -1438,10 +1758,18 @@ func (a *App) handleChatPacket(payload []byte) {
 	switch envelope.Kind {
 	case room.ChatMessage:
 		if envelope.Message != nil {
-			a.addChatMessage(*envelope.Message)
-			if envelope.Message.SenderID != a.participantID {
-				a.playEventSound(audio.SFXMessage)
+			if envelope.Message.System || envelope.Message.Kind == "system" || strings.EqualFold(envelope.Message.Username, "SISTEMA") {
+				a.addActivity(envelope.Message.Text)
+			} else {
+				a.addChatMessage(*envelope.Message)
+				if envelope.Message.SenderID != a.participantID {
+					a.playEventSound(audio.SFXMessage)
+				}
 			}
+		}
+	case room.SystemMessage:
+		if envelope.Message != nil {
+			a.addActivity(envelope.Message.Text)
 		}
 	case room.SoundAddMessage:
 		if envelope.Sound != nil {
@@ -1467,34 +1795,36 @@ func (a *App) handleAssetChunk(payload []byte, origin string) {
 	if !complete || a.historyStore == nil {
 		return
 	}
-	if chunk.Kind == assets.KindSound {
-		a.soundMu.RLock()
-		name := ""
-		for _, sound := range a.sounds {
-			if sound.ID == chunk.ID {
-				name = sound.Name
-				break
+	go func() {
+		if chunk.Kind == assets.KindSound {
+			a.soundMu.RLock()
+			name := ""
+			for _, sound := range a.sounds {
+				if sound.ID == chunk.ID {
+					name = sound.Name
+					break
+				}
 			}
-		}
-		_, pending := a.pendingPlays[chunk.ID]
-		a.soundMu.RUnlock()
-		if _, saveErr := a.historyStore.SaveSound(history.SoundMeta{ID: chunk.ID, Ext: chunk.Ext, Name: name}, data); saveErr != nil {
-			logging.Errorf("guardar sonido recibido %q: %s", chunk.ID, logging.FormatError(saveErr))
+			_, pending := a.pendingPlays[chunk.ID]
+			a.soundMu.RUnlock()
+			if _, saveErr := a.historyStore.SaveSound(history.SoundMeta{ID: chunk.ID, Ext: chunk.Ext, Name: name}, data); saveErr != nil {
+				logging.Errorf("guardar sonido recibido %q: %s", chunk.ID, logging.FormatError(saveErr))
+				return
+			}
+			if pending {
+				a.soundMu.Lock()
+				delete(a.pendingPlays, chunk.ID)
+				a.soundMu.Unlock()
+				a.playSoundPCM(data)
+			}
 			return
 		}
-		if pending {
-			a.soundMu.Lock()
-			delete(a.pendingPlays, chunk.ID)
-			a.soundMu.Unlock()
-			a.playSoundPCM(data)
+		if _, saveErr := a.historyStore.SaveImage(chunk.ID, chunk.Ext, data); saveErr != nil {
+			logging.Errorf("guardar archivo recibido %q: %s", chunk.ID, logging.FormatError(saveErr))
+			return
 		}
-		return
-	}
-	if _, saveErr := a.historyStore.SaveImage(chunk.ID, chunk.Ext, data); saveErr != nil {
-		logging.Errorf("guardar archivo recibido %q: %s", chunk.ID, logging.FormatError(saveErr))
-		return
-	}
-	a.refreshChat()
+		a.refreshChat()
+	}()
 }
 
 func (a *App) handleAssetMissing(udp *transport.UDP, addr *net.UDPAddr, payload []byte) {
@@ -1502,26 +1832,28 @@ func (a *App) handleAssetMissing(udp *transport.UDP, addr *net.UDPAddr, payload 
 	if err != nil || a.historyStore == nil || addr == nil {
 		return
 	}
-	var data []byte
-	var readErr error
-	if request.Kind == assets.KindSound {
-		data, readErr = a.historyStore.ReadSound(request.ID, request.Ext)
-	} else {
-		data, readErr = a.historyStore.ReadImage(request.ID, request.Ext)
-	}
-	if readErr != nil || len(data) == 0 {
-		return
-	}
-	chunks, splitErr := assets.Split(request.Kind, request.ID, request.Ext, data)
-	if splitErr != nil {
-		return
-	}
-	for _, chunk := range chunks {
-		if len(request.Missing) > 0 && !containsIndex(request.Missing, chunk.Index) {
-			continue
+	go func() {
+		var data []byte
+		var readErr error
+		if request.Kind == assets.KindSound {
+			data, readErr = a.historyStore.ReadSound(request.ID, request.Ext)
+		} else {
+			data, readErr = a.historyStore.ReadImage(request.ID, request.Ext)
 		}
-		_ = udp.Send(addr, transport.Packet{Kind: transport.PacketAssetChunk, Sequence: a.sequence.Add(1), Payload: assets.Encode(chunk)})
-	}
+		if readErr != nil || len(data) == 0 {
+			return
+		}
+		chunks, splitErr := assets.Split(request.Kind, request.ID, request.Ext, data)
+		if splitErr != nil {
+			return
+		}
+		for _, chunk := range chunks {
+			if len(request.Missing) > 0 && !containsIndex(request.Missing, chunk.Index) {
+				continue
+			}
+			_ = udp.Send(addr, transport.Packet{Kind: transport.PacketAssetChunk, Sequence: a.sequence.Add(1), Payload: assets.Encode(chunk)})
+		}
+	}()
 }
 
 func containsIndex(indices []uint32, index uint32) bool {
@@ -1555,17 +1887,28 @@ func (a *App) buildSoundPanel() {
 		_ = config.Save(a.cfgPath, a.cfg)
 	}
 
-	stopButton := widget.NewButton("⏹ Detener sonido", a.stopSoundboard)
+	stopButton := widget.NewButton("⏹ Detener", a.stopSoundboard)
+	stopBindText := "⌨ Bind"
+	if a.cfg.StopSoundBind != "" {
+		stopBindText = "⌨ " + a.cfg.StopSoundBind
+	}
+	a.stopBindBtn = widget.NewButton(stopBindText, a.showStopSoundBindDialog)
+	a.stopBindBtn.Importance = widget.LowImportance
+	stopBindWrap := container.NewGridWrap(fyne.NewSize(96, 34), a.stopBindBtn)
+	delSpacer := container.NewGridWrap(fyne.NewSize(34, 34), layout.NewSpacer())
+	stopActions := container.NewHBox(stopBindWrap, delSpacer)
+	stopRow := container.NewBorder(nil, nil, nil, stopActions, stopButton)
+
 	addButton := widget.NewButton("➕ Agregar sonido", a.pickAndAddSound)
 	a.soundGrid = container.NewVBox()
 	soundScroll := container.NewVScroll(a.soundGrid)
-	soundScroll.SetMinSize(fyne.NewSize(180, 160))
+	soundScroll.SetMinSize(fyne.NewSize(220, 160))
 	soundHeader := container.NewVBox(
 		title,
 		muteCheck,
 		volLabel,
 		volSlider,
-		stopButton,
+		stopRow,
 		widget.NewSeparator(),
 	)
 	soundContent := container.NewBorder(soundHeader, addButton, nil, nil, soundScroll)
@@ -1580,9 +1923,29 @@ func (a *App) rebuildSoundboard() {
 	objects := make([]fyne.CanvasObject, 0, len(sounds))
 	for _, sound := range sounds {
 		captured := sound
-		btnPlay := widget.NewButton(captured.Name, func() { a.triggerSound(captured) })
+		displayName := captured.Name
+		runes := []rune(displayName)
+		if len(runes) > 13 {
+			displayName = string(runes[:11]) + "…"
+		}
+		btnPlay := widget.NewButton(displayName, func() { a.triggerSound(captured) })
 		btnDelete := widget.NewButtonWithIcon("", theme.DeleteIcon(), func() { a.removeSound(captured.ID) })
-		row := container.NewBorder(nil, nil, nil, btnDelete, btnPlay)
+
+		bindText := ""
+		if a.cfg.SoundBinds != nil {
+			bindText = a.cfg.SoundBinds[captured.ID]
+		}
+		bindLabel := "⌨ Bind"
+		if bindText != "" {
+			bindLabel = "⌨ " + bindText
+		}
+		btnBind := widget.NewButton(bindLabel, func() { a.showSoundBindDialog(captured) })
+		btnBind.Importance = widget.LowImportance
+
+		bindWrap := container.NewGridWrap(fyne.NewSize(96, 34), btnBind)
+		delWrap := container.NewGridWrap(fyne.NewSize(34, 34), btnDelete)
+		actions := container.NewHBox(bindWrap, delWrap)
+		row := container.NewBorder(nil, nil, nil, actions, btnPlay)
 		objects = append(objects, row)
 	}
 	fyne.Do(func() {
@@ -1629,6 +1992,11 @@ func (a *App) removeSound(soundID string) {
 	a.sounds = append(a.sounds[:soundIndex], a.sounds[soundIndex+1:]...)
 	a.soundMu.Unlock()
 
+	if a.cfg.SoundBinds != nil {
+		delete(a.cfg.SoundBinds, soundID)
+		_ = config.Save(a.cfgPath, a.cfg)
+	}
+
 	a.rebuildSoundboard()
 
 	if a.historyStore != nil {
@@ -1668,19 +2036,89 @@ func (a *App) pickAndAddSound() {
 		}
 		return
 	}
-	raw, readErr := os.ReadFile(path)
-	if readErr != nil {
-		a.setStatus("No se pudo leer el sonido: " + readErr.Error())
-		return
+	a.setStatus("Cargando y procesando audio...")
+	go func() {
+		raw, readErr := os.ReadFile(path)
+		if readErr != nil {
+			a.setStatus("No se pudo leer el sonido: " + readErr.Error())
+			return
+		}
+		extension := strings.ToLower(filepath.Ext(path))
+		pcm, decodeErr := audio.DecodeSoundFile(extension, raw)
+		if decodeErr != nil {
+			a.setStatus("No se pudo procesar el sonido: " + decodeErr.Error())
+			return
+		}
+		name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+		fyne.Do(func() {
+			a.showSoundTrimDialog(name, pcm)
+		})
+	}()
+}
+
+func renderWaveform(pcm []byte, startFrac, endFrac float64, width, height int) *image.RGBA {
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	bgColor := color.RGBA{R: 24, G: 28, B: 34, A: 255}
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.SetRGBA(x, y, bgColor)
+		}
 	}
-	extension := strings.ToLower(filepath.Ext(path))
-	pcm, decodeErr := audio.DecodeSoundFile(extension, raw)
-	if decodeErr != nil {
-		a.setStatus("No se pudo procesar el sonido: " + decodeErr.Error())
-		return
+	samples, err := audio.DecodePCM(pcm)
+	if err != nil || len(samples) == 0 {
+		return img
 	}
-	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-	a.showSoundTrimDialog(name, pcm)
+	midY := height / 2
+	startX := int(startFrac * float64(width))
+	endX := int(endFrac * float64(width))
+	if startX < 0 {
+		startX = 0
+	}
+	if endX > width {
+		endX = width
+	}
+
+	for x := 0; x < width; x++ {
+		sStart := x * len(samples) / width
+		sEnd := (x + 1) * len(samples) / width
+		if sEnd > len(samples) {
+			sEnd = len(samples)
+		}
+		if sStart >= sEnd {
+			continue
+		}
+
+		maxVal := int16(0)
+		for _, s := range samples[sStart:sEnd] {
+			abs := s
+			if abs < 0 {
+				abs = -abs
+			}
+			if abs > maxVal {
+				maxVal = abs
+			}
+		}
+
+		barHeight := int(float64(maxVal) / 32767.0 * float64(midY-2))
+		if barHeight < 1 {
+			barHeight = 1
+		}
+
+		isSelected := x >= startX && x <= endX
+		var barColor color.RGBA
+		if isSelected {
+			barColor = color.RGBA{R: 46, G: 204, B: 113, A: 255}
+		} else {
+			barColor = color.RGBA{R: 70, G: 80, B: 95, A: 255}
+		}
+
+		for y := midY - barHeight; y <= midY+barHeight; y++ {
+			if y >= 0 && y < height {
+				img.SetRGBA(x, y, barColor)
+			}
+		}
+	}
+	return img
 }
 
 func (a *App) showSoundTrimDialog(defaultName string, pcm []byte) {
@@ -1690,12 +2128,16 @@ func (a *App) showSoundTrimDialog(defaultName string, pcm []byte) {
 		return
 	}
 
+	activePCM := pcm
+
 	nameEntry := widget.NewEntry()
 	nameEntry.SetText(defaultName)
 
-	durationLabel := widget.NewLabel(fmt.Sprintf("Duración total: %.2f s", totalSec))
-	startLabel := widget.NewLabel("Inicio: 0.00 s")
-	endLabel := widget.NewLabel(fmt.Sprintf("Fin: %.2f s", totalSec))
+	durationLabel := widget.NewLabel(fmt.Sprintf("Duración visible: %.2f s", totalSec))
+
+	waveformImg := canvas.NewImageFromImage(renderWaveform(activePCM, 0, 1, 420, 80))
+	waveformImg.SetMinSize(fyne.NewSize(420, 80))
+	waveformImg.FillMode = canvas.ImageFillStretch
 
 	startSlider := widget.NewSlider(0, totalSec)
 	startSlider.SetValue(0)
@@ -1703,20 +2145,133 @@ func (a *App) showSoundTrimDialog(defaultName string, pcm []byte) {
 	endSlider := widget.NewSlider(0, totalSec)
 	endSlider.SetValue(totalSec)
 
-	startSlider.OnChanged = func(v float64) {
+	startEntry := widget.NewEntry()
+	startEntry.SetText("0.00")
+	startEntryBox := container.NewGridWrap(fyne.NewSize(75, 36), startEntry)
+
+	endEntry := widget.NewEntry()
+	endEntry.SetText(fmt.Sprintf("%.2f", totalSec))
+	endEntryBox := container.NewGridWrap(fyne.NewSize(75, 36), endEntry)
+
+	var isUpdating bool
+
+	updateWaveform := func() {
+		curTotal := float64(len(activePCM)) / 96000.0
+		sFrac := 0.0
+		eFrac := 1.0
+		if curTotal > 0 {
+			sFrac = startSlider.Value / curTotal
+			eFrac = endSlider.Value / curTotal
+		}
+		waveformImg.Image = renderWaveform(activePCM, sFrac, eFrac, 420, 80)
+		waveformImg.Refresh()
+	}
+
+	applyStart := func(v float64) {
+		if isUpdating {
+			return
+		}
+		isUpdating = true
+		curTotal := float64(len(activePCM)) / 96000.0
+		if v < 0 {
+			v = 0
+		}
 		if v >= endSlider.Value {
-			v = math.Max(0, endSlider.Value-0.1)
+			v = math.Max(0, endSlider.Value-0.05)
+		}
+		if v > curTotal {
+			v = curTotal
+		}
+		startSlider.SetValue(v)
+		startEntry.SetText(fmt.Sprintf("%.2f", v))
+		isUpdating = false
+		updateWaveform()
+	}
+
+	applyEnd := func(v float64) {
+		if isUpdating {
+			return
+		}
+		isUpdating = true
+		curTotal := float64(len(activePCM)) / 96000.0
+		if v > curTotal {
+			v = curTotal
+		}
+		if v <= startSlider.Value {
+			v = math.Min(curTotal, startSlider.Value+0.05)
+		}
+		endSlider.SetValue(v)
+		endEntry.SetText(fmt.Sprintf("%.2f", v))
+		isUpdating = false
+		updateWaveform()
+	}
+
+	startSlider.OnChanged = func(v float64) {
+		if isUpdating {
+			return
+		}
+		isUpdating = true
+		if v >= endSlider.Value {
+			v = math.Max(0, endSlider.Value-0.05)
 			startSlider.SetValue(v)
 		}
-		startLabel.SetText(fmt.Sprintf("Inicio: %.2f s", v))
+		startEntry.SetText(fmt.Sprintf("%.2f", v))
+		isUpdating = false
+		updateWaveform()
 	}
 
 	endSlider.OnChanged = func(v float64) {
+		if isUpdating {
+			return
+		}
+		isUpdating = true
+		curTotal := float64(len(activePCM)) / 96000.0
 		if v <= startSlider.Value {
-			v = math.Min(totalSec, startSlider.Value+0.1)
+			v = math.Min(curTotal, startSlider.Value+0.05)
 			endSlider.SetValue(v)
 		}
-		endLabel.SetText(fmt.Sprintf("Fin: %.2f s", v))
+		endEntry.SetText(fmt.Sprintf("%.2f", v))
+		isUpdating = false
+		updateWaveform()
+	}
+
+	startEntry.OnSubmitted = func(txt string) {
+		if val, err := strconv.ParseFloat(strings.TrimSpace(txt), 64); err == nil {
+			applyStart(val)
+		}
+	}
+	startEntry.OnChanged = func(txt string) {
+		if isUpdating {
+			return
+		}
+		if val, err := strconv.ParseFloat(strings.TrimSpace(txt), 64); err == nil {
+			if val >= 0 && val < endSlider.Value {
+				isUpdating = true
+				startSlider.SetValue(val)
+				isUpdating = false
+				updateWaveform()
+			}
+		}
+	}
+
+	endEntry.OnSubmitted = func(txt string) {
+		if val, err := strconv.ParseFloat(strings.TrimSpace(txt), 64); err == nil {
+			applyEnd(val)
+		}
+	}
+	endEntry.OnChanged = func(txt string) {
+		if isUpdating {
+			return
+		}
+		curTotal := float64(len(activePCM)) / 96000.0
+		if val, err := strconv.ParseFloat(strings.TrimSpace(txt), 64); err == nil {
+			if val > startSlider.Value && val <= curTotal {
+				isUpdating = true
+				endSlider.SetValue(val)
+				isUpdating = false
+				updateWaveform()
+			}
+		}
 	}
 
 	slicePCM := func() []byte {
@@ -1725,14 +2280,64 @@ func (a *App) showSoundTrimDialog(defaultName string, pcm []byte) {
 		if s < 0 {
 			s = 0
 		}
-		if e > len(pcm) {
-			e = len(pcm)
+		if e > len(activePCM) {
+			e = len(activePCM)
 		}
 		if e <= s {
-			e = len(pcm)
+			e = len(activePCM)
 		}
-		return append([]byte(nil), pcm[s:e]...)
+		return append([]byte(nil), activePCM[s:e]...)
 	}
+
+	var zoomOutBtn *widget.Button
+	var historyPCMs [][]byte
+
+	zoomInBtn := widget.NewButtonWithIcon("Zoom a selección", theme.ZoomInIcon(), func() {
+		trimmed := slicePCM()
+		if len(trimmed) < 4800 { // at least 50 ms
+			return
+		}
+		historyPCMs = append(historyPCMs, activePCM)
+		activePCM = trimmed
+		newTotal := float64(len(activePCM)) / 96000.0
+		durationLabel.SetText(fmt.Sprintf("Duración visible: %.2f s", newTotal))
+		isUpdating = true
+		startSlider.Max = newTotal
+		startSlider.SetValue(0)
+		endSlider.Max = newTotal
+		endSlider.SetValue(newTotal)
+		startEntry.SetText("0.00")
+		endEntry.SetText(fmt.Sprintf("%.2f", newTotal))
+		isUpdating = false
+		if zoomOutBtn != nil {
+			zoomOutBtn.Enable()
+		}
+		updateWaveform()
+	})
+
+	zoomOutBtn = widget.NewButtonWithIcon("Alejar zoom", theme.ZoomOutIcon(), func() {
+		if len(historyPCMs) == 0 {
+			return
+		}
+		prevPCM := historyPCMs[len(historyPCMs)-1]
+		historyPCMs = historyPCMs[:len(historyPCMs)-1]
+		activePCM = prevPCM
+		prevTotal := float64(len(activePCM)) / 96000.0
+		durationLabel.SetText(fmt.Sprintf("Duración visible: %.2f s", prevTotal))
+		isUpdating = true
+		startSlider.Max = prevTotal
+		startSlider.SetValue(0)
+		endSlider.Max = prevTotal
+		endSlider.SetValue(prevTotal)
+		startEntry.SetText("0.00")
+		endEntry.SetText(fmt.Sprintf("%.2f", prevTotal))
+		isUpdating = false
+		if len(historyPCMs) == 0 {
+			zoomOutBtn.Disable()
+		}
+		updateWaveform()
+	})
+	zoomOutBtn.Disable()
 
 	previewBtn := widget.NewButton("▶ Probar recorte", func() {
 		trimmed := slicePCM()
@@ -1745,18 +2350,24 @@ func (a *App) showSoundTrimDialog(defaultName string, pcm []byte) {
 		a.stopSoundboard()
 	})
 
+	startRow := container.NewBorder(nil, nil, widget.NewLabel("Inicio:"), container.NewHBox(startEntryBox, widget.NewLabel("s")), startSlider)
+	endRow := container.NewBorder(nil, nil, widget.NewLabel("Fin:   "), container.NewHBox(endEntryBox, widget.NewLabel("s")), endSlider)
+	zoomToolbar := container.NewHBox(durationLabel, layout.NewSpacer(), zoomInBtn, zoomOutBtn)
+
 	controls := container.NewVBox(
+		widget.NewLabelWithStyle("Onda de audio (verde = área seleccionada):", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		waveformImg,
+		zoomToolbar,
+		widget.NewSeparator(),
+		startRow,
+		endRow,
+		widget.NewSeparator(),
 		widget.NewLabel("Nombre del sonido:"),
 		nameEntry,
-		durationLabel,
-		startLabel,
-		startSlider,
-		endLabel,
-		endSlider,
 		container.NewGridWithColumns(2, previewBtn, stopBtn),
 	)
 
-	dialog.ShowCustomConfirm("Recortar sonido", "Guardar sonido", "Cancelar", controls, func(confirmed bool) {
+	d := dialog.NewCustomConfirm("Recortar sonido", "Guardar sonido", "Cancelar", controls, func(confirmed bool) {
 		a.stopSoundboard()
 		if !confirmed {
 			return
@@ -1768,62 +2379,71 @@ func (a *App) showSoundTrimDialog(defaultName string, pcm []byte) {
 		trimmed := slicePCM()
 		a.saveAndBroadcastSound(soundName, trimmed)
 	}, a.window)
+	d.Resize(fyne.NewSize(520, 480))
+	d.Show()
 }
 
 func (a *App) saveAndBroadcastSound(name string, pcm []byte) {
 	if a.historyStore == nil || a.transport == nil {
 		return
 	}
-	sound := room.Sound{ID: history.NewID(a.participantID), Ext: ".pcm", Name: name}
-	if _, saveErr := a.historyStore.SaveSound(history.SoundMeta{ID: sound.ID, Ext: sound.Ext, Name: sound.Name}, pcm); saveErr != nil {
-		a.setStatus("No se pudo guardar el sonido: " + saveErr.Error())
-		return
-	}
-	a.addSound(sound)
-	payload, encodeErr := room.Encode(room.Envelope{Kind: room.SoundAddMessage, Sound: &sound})
-	if encodeErr == nil {
-		a.sendChatPayload(payload)
-	}
-	a.sendAsset(assets.KindSound, sound.ID, sound.Ext, pcm)
-	a.setStatus("Sonido agregado: " + name)
+	a.setStatus("Guardando sonido: " + name + "...")
+	go func() {
+		sound := room.Sound{ID: history.NewID(a.participantID), Ext: ".pcm", Name: name}
+		if _, saveErr := a.historyStore.SaveSound(history.SoundMeta{ID: sound.ID, Ext: sound.Ext, Name: sound.Name}, pcm); saveErr != nil {
+			a.setStatus("No se pudo guardar el sonido: " + saveErr.Error())
+			return
+		}
+		a.addSound(sound)
+		payload, encodeErr := room.Encode(room.Envelope{Kind: room.SoundAddMessage, Sound: &sound})
+		if encodeErr == nil {
+			a.sendChatPayload(payload)
+		}
+		a.sendAsset(assets.KindSound, sound.ID, sound.Ext, pcm)
+		a.setStatus("Sonido agregado: " + name)
+	}()
 }
 
 func (a *App) triggerSound(sound room.Sound) {
-	if a.historyStore != nil {
-		if data, readErr := a.historyStore.ReadSound(sound.ID, sound.Ext); readErr == nil {
-			a.playSoundPCM(data)
+	go func() {
+		if a.historyStore != nil {
+			if data, readErr := a.historyStore.ReadSound(sound.ID, sound.Ext); readErr == nil {
+				a.playSoundPCM(data)
+			}
 		}
-	}
-	payload, err := room.Encode(room.Envelope{Kind: room.SoundPlayMessage, Sound: &sound})
-	if err == nil {
-		a.sendChatPayload(payload)
-	}
+		payload, err := room.Encode(room.Envelope{Kind: room.SoundPlayMessage, Sound: &sound})
+		if err == nil {
+			a.sendChatPayload(payload)
+		}
+	}()
 }
 
 func (a *App) playIncomingSound(sound room.Sound) {
 	if a.cfg.SoundboardMuted || a.historyStore == nil {
 		return
 	}
-	data, readErr := a.historyStore.ReadSound(sound.ID, sound.Ext)
-	if readErr == nil {
-		a.playSoundPCM(data)
-		return
-	}
-	a.soundMu.Lock()
-	if a.pendingPlays == nil {
-		a.pendingPlays = make(map[string]struct{})
-	}
-	a.pendingPlays[sound.ID] = struct{}{}
-	a.soundMu.Unlock()
-	if a.transport == nil || a.roomState.HostID == a.participantID {
-		return
-	}
-	peer, resolveErr := net.ResolveUDPAddr("udp", a.endpoint)
-	if resolveErr != nil {
-		return
-	}
-	request := assets.MissingRequest{Kind: assets.KindSound, ID: sound.ID, Ext: sound.Ext}
-	_ = a.transport.Send(peer, transport.Packet{Kind: transport.PacketAssetMissing, Sequence: a.sequence.Add(1), Payload: assets.EncodeMissing(request)})
+	go func() {
+		data, readErr := a.historyStore.ReadSound(sound.ID, sound.Ext)
+		if readErr == nil {
+			a.playSoundPCM(data)
+			return
+		}
+		a.soundMu.Lock()
+		if a.pendingPlays == nil {
+			a.pendingPlays = make(map[string]struct{})
+		}
+		a.pendingPlays[sound.ID] = struct{}{}
+		a.soundMu.Unlock()
+		if a.transport == nil || a.roomState.HostID == a.participantID {
+			return
+		}
+		peer, resolveErr := net.ResolveUDPAddr("udp", a.endpoint)
+		if resolveErr != nil {
+			return
+		}
+		request := assets.MissingRequest{Kind: assets.KindSound, ID: sound.ID, Ext: sound.Ext}
+		_ = a.transport.Send(peer, transport.Packet{Kind: transport.PacketAssetMissing, Sequence: a.sequence.Add(1), Payload: assets.EncodeMissing(request)})
+	}()
 }
 
 func (a *App) ensureSoundPlayer() *audio.Player {
@@ -1910,8 +2530,15 @@ func (a *App) viewRoom(roomName string) {
 		return
 	}
 	messages, _ := store.Load()
+	chatOnly := make([]history.Message, 0, len(messages))
+	for _, m := range messages {
+		if m.System || m.Kind == "system" || strings.EqualFold(m.Username, "SISTEMA") {
+			continue
+		}
+		chatOnly = append(chatOnly, m)
+	}
 	a.chatMu.Lock()
-	a.chatMessages = messages
+	a.chatMessages = chatOnly
 	a.chatMu.Unlock()
 	a.refreshChat()
 }
@@ -1957,17 +2584,25 @@ func (a *App) sendAsset(kind byte, id, ext string, data []byte) {
 	if a.transport == nil {
 		return
 	}
-	for _, chunk := range chunks {
-		packet := transport.Packet{Kind: transport.PacketAssetChunk, Sequence: a.sequence.Add(1), Payload: assets.Encode(chunk)}
-		if a.roomState.HostID == a.participantID {
-			a.transport.Broadcast(packet, nil)
-			continue
+	go func() {
+		for i, chunk := range chunks {
+			if a.transport == nil {
+				return
+			}
+			packet := transport.Packet{Kind: transport.PacketAssetChunk, Sequence: a.sequence.Add(1), Payload: assets.Encode(chunk)}
+			if a.roomState.HostID == a.participantID {
+				a.transport.Broadcast(packet, nil)
+			} else {
+				peer, resolveErr := net.ResolveUDPAddr("udp", a.endpoint)
+				if resolveErr == nil {
+					_ = a.transport.Send(peer, packet)
+				}
+			}
+			if i%4 == 3 {
+				time.Sleep(2 * time.Millisecond)
+			}
 		}
-		peer, resolveErr := net.ResolveUDPAddr("udp", a.endpoint)
-		if resolveErr == nil {
-			_ = a.transport.Send(peer, packet)
-		}
-	}
+	}()
 }
 
 func (a *App) sweepAssetLoop(udp *transport.UDP, stop <-chan struct{}) {
@@ -1982,7 +2617,7 @@ func (a *App) sweepAssetLoop(udp *transport.UDP, stop <-chan struct{}) {
 			if a.assetAssembler == nil {
 				continue
 			}
-			for _, notice := range a.assetAssembler.Sweep(600*time.Millisecond, 10) {
+			for _, notice := range a.assetAssembler.Sweep(600*time.Millisecond, 32) {
 				addr, resolveErr := net.ResolveUDPAddr("udp", notice.Origin)
 				if resolveErr != nil {
 					continue
@@ -2089,11 +2724,7 @@ func (a *App) refreshPeersFromRoom() {
 		})
 	}
 	a.peerMu.Unlock()
-	fyne.Do(func() {
-		if a.peerList != nil {
-			a.peerList.Refresh()
-		}
-	})
+	a.refreshPeerAvatars()
 }
 
 func (a *App) sendChatMessage(text string) {
@@ -2103,6 +2734,7 @@ func (a *App) sendChatMessage(text string) {
 	}
 	message := history.Message{ID: history.NewID(a.participantID), Timestamp: time.Now().UTC(), SenderID: a.participantID, Username: a.cfg.Username, Kind: "text", Text: text}
 	a.addChatMessage(message)
+	a.playEventSound(audio.SFXMessage)
 	payload, err := room.Encode(room.Envelope{Kind: room.ChatMessage, Message: &message})
 	if err != nil {
 		return
@@ -2168,6 +2800,7 @@ func (a *App) selectChatImage() {
 	}
 	message := history.Message{ID: history.NewID(a.participantID), Timestamp: time.Now().UTC(), SenderID: a.participantID, Username: a.cfg.Username, Kind: "image", ImageID: imageID, ImageExt: extension, ImagePath: path}
 	a.addChatMessage(message)
+	a.playEventSound(audio.SFXMessage)
 	payload, encodeErr := room.Encode(room.Envelope{Kind: room.ChatMessage, Message: &message})
 	if encodeErr == nil {
 		a.sendChatPayload(payload)
@@ -2180,58 +2813,23 @@ func (a *App) stopConnection() {
 		a.setStatus("No hay una sala o conexión activa.")
 		return
 	}
-	a.playEventSound(audio.SFXDisconnect)
-	time.Sleep(300 * time.Millisecond)
 	udp := a.transport
-	if a.audioEngine != nil {
-		a.audioEngine.Stop()
-		a.audioEngine = nil
-	}
-	a.soundMu.Lock()
-	if a.soundPlayer != nil {
-		a.soundPlayer.Stop()
-		a.soundPlayer = nil
-	}
-	a.soundMu.Unlock()
-	if a.pingStop != nil {
-		close(a.pingStop)
-		a.pingStop = nil
-	}
-	if !a.hostMode.Load() && a.endpoint != "" {
-		peer, err := net.ResolveUDPAddr("udp", a.endpoint)
-		if err == nil {
-			participant := room.Participant{ID: a.participantID, Username: a.cfg.Username, Address: udp.Address().String()}
-			payload, _ := room.Encode(room.Envelope{Kind: room.LeaveMessage, Participant: &participant})
-			_ = udp.Send(peer, transport.Packet{Kind: transport.PacketRoomLeave, Sequence: a.sequence.Add(1), Payload: payload})
-		}
-	} else if a.hostMode.Load() {
-		localPort := uint16(udp.Address().Port)
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			_ = netinfo.UnmapUDP(ctx, localPort)
-		}()
-		participant := room.Participant{ID: a.participantID, Username: a.cfg.Username, Address: udp.Address().String()}
-		payload, _ := room.Encode(room.Envelope{Kind: room.LeaveMessage, Participant: &participant})
-		udp.Broadcast(transport.Packet{Kind: transport.PacketRoomLeave, Sequence: a.sequence.Add(1), Payload: payload}, nil)
-	}
-	if err := udp.Close(); err != nil {
-		logging.Errorf("cerrar UDP: %s", logging.FormatError(err))
-	}
+	oldEndpoint := a.endpoint
 	a.transport = nil
 	a.endpoint = ""
 	a.activeRoomName = ""
 	a.peerMu.Lock()
 	a.peerNames = nil
 	a.peerMu.Unlock()
-	if a.peerList != nil {
-		a.peerList.Refresh()
-	}
+	a.refreshPeerAvatars()
 	if a.createButton != nil {
 		a.createButton.Enable()
 	}
 	if a.stopButton != nil {
 		a.stopButton.Disable()
+	}
+	if a.topHangupBtn != nil {
+		a.topHangupBtn.Disable()
 	}
 	if a.connectButton != nil {
 		a.connectButton.Enable()
@@ -2244,6 +2842,44 @@ func (a *App) stopConnection() {
 		a.endpointEntry.SetText(a.cfg.LastPeer)
 	}
 	a.setStatus("Sala detenida.")
+
+	go func() {
+		a.playEventSound(audio.SFXDisconnect)
+		time.Sleep(150 * time.Millisecond)
+		if a.audioEngine != nil {
+			a.audioEngine.Stop()
+			a.audioEngine = nil
+		}
+		a.soundMu.Lock()
+		if a.soundPlayer != nil {
+			a.soundPlayer.Stop()
+			a.soundPlayer = nil
+		}
+		a.soundMu.Unlock()
+		if a.pingStop != nil {
+			close(a.pingStop)
+			a.pingStop = nil
+		}
+		if !a.hostMode.Load() && oldEndpoint != "" {
+			peer, err := net.ResolveUDPAddr("udp", oldEndpoint)
+			if err == nil {
+				participant := room.Participant{ID: a.participantID, Username: a.cfg.Username, Address: udp.Address().String()}
+				payload, _ := room.Encode(room.Envelope{Kind: room.LeaveMessage, Participant: &participant})
+				_ = udp.Send(peer, transport.Packet{Kind: transport.PacketRoomLeave, Sequence: a.sequence.Add(1), Payload: payload})
+			}
+		} else if a.hostMode.Load() {
+			localPort := uint16(udp.Address().Port)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			_ = netinfo.UnmapUDP(ctx, localPort)
+			cancel()
+			participant := room.Participant{ID: a.participantID, Username: a.cfg.Username, Address: udp.Address().String()}
+			payload, _ := room.Encode(room.Envelope{Kind: room.LeaveMessage, Participant: &participant})
+			udp.Broadcast(transport.Packet{Kind: transport.PacketRoomLeave, Sequence: a.sequence.Add(1), Payload: payload}, nil)
+		}
+		if err := udp.Close(); err != nil {
+			logging.Errorf("cerrar UDP: %s", logging.FormatError(err))
+		}
+	}()
 }
 
 func (a *App) createHost() {
@@ -2329,15 +2965,18 @@ func (a *App) openHost(roomName, username string) {
 	if listenAddr == "" {
 		listenAddr = ":47830"
 	}
-	udp, err := transport.Listen(listenAddr)
+	var udp *transport.UDP
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		udp, err = transport.Listen(listenAddr)
+		if err == nil {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 	if err != nil {
-		if listenAddr != ":0" {
-			udp, err = transport.Listen(":0")
-		}
-		if err != nil {
-			a.setStatus("No se pudo abrir UDP: " + err.Error())
-			return
-		}
+		a.setStatus(fmt.Sprintf("No se pudo abrir el puerto %s: %s (comprueba que no haya otra copia de VoxMesh abierta)", listenAddr, err.Error()))
+		return
 	}
 	a.transport = udp
 	a.hostMode.Store(true)
@@ -2358,6 +2997,9 @@ func (a *App) openHost(roomName, username string) {
 	a.pingStop = make(chan struct{})
 	a.createButton.Disable()
 	a.stopButton.Enable()
+	if a.topHangupBtn != nil {
+		a.topHangupBtn.Enable()
+	}
 	a.hideConnectionPanels()
 	port := udp.Address().Port
 	localIP, err := netinfo.LocalIPv4()
@@ -2457,6 +3099,9 @@ func (a *App) connectClient(raw string) {
 	a.hostMode.Store(false)
 	a.connectButton.Disable()
 	a.leaveButton.Enable()
+	if a.topHangupBtn != nil {
+		a.topHangupBtn.Enable()
+	}
 	a.cfg.RoomName = strings.TrimSpace(a.cfg.RoomName)
 	if a.selfNameLabel != nil {
 		a.selfNameLabel.SetText(a.cfg.Username)
@@ -2646,6 +3291,27 @@ func (a *App) receiveLoop(udp *transport.UDP) {
 				envelope.Participant.Address = addr.String()
 				envelope.Participant.Connected = true
 				envelope.Participant.LastSeenUTC = time.Now().UTC()
+
+				// Asegurar nombre único: si ya existe otro participante conectado con el mismo nombre, añadir _PUTO
+				candidateName := strings.TrimSpace(envelope.Participant.Username)
+				if candidateName == "" {
+					candidateName = "Usuario"
+				}
+				for {
+					taken := false
+					for _, p := range a.roomState.Participants {
+						if p.Connected && p.ID != envelope.Participant.ID && strings.EqualFold(strings.TrimSpace(p.Username), candidateName) {
+							taken = true
+							break
+						}
+					}
+					if !taken {
+						break
+					}
+					candidateName += "_PUTO"
+				}
+				envelope.Participant.Username = candidateName
+
 				a.roomState.Participants = append([]room.Participant(nil), a.roomState.Participants...)
 				if a.roomStore != nil {
 					a.roomStore.Replace(a.roomState)
@@ -2676,7 +3342,13 @@ func (a *App) receiveLoop(udp *transport.UDP) {
 					}
 				}
 				logging.Infof("Cliente conectado: %s (%s)", envelope.Participant.Username, addr.String())
-				a.addSystemMessage(envelope.Participant.Username + " se conectó.")
+				joinedUser := envelope.Participant.Username
+				go func(uName string) {
+					if a.roomStore != nil {
+						a.roomStore.Replace(a.roomState)
+					}
+					a.addSystemMessage(uName + " se conectó.")
+				}(joinedUser)
 				a.playEventSound(audio.SFXConnect)
 				udp.Broadcast(transport.Packet{Kind: transport.PacketRoomState, Sequence: a.sequence.Add(1), Payload: statePayload}, addr)
 			} else if packet.Kind == transport.PacketRoomLeave {
@@ -2693,7 +3365,26 @@ func (a *App) receiveLoop(udp *transport.UDP) {
 				if username == "" {
 					username = "Usuario"
 				}
-				if a.addPeer(username, addr.String()) {
+				candidate := username
+				a.peerMu.Lock()
+				for {
+					taken := false
+					for _, p := range a.peerNames {
+						if p.address != addr.String() && strings.EqualFold(p.name, candidate) {
+							taken = true
+							break
+						}
+					}
+					if !taken && strings.EqualFold(a.cfg.Username, candidate) {
+						taken = true
+					}
+					if !taken {
+						break
+					}
+					candidate += "_PUTO"
+				}
+				a.peerMu.Unlock()
+				if a.addPeer(candidate, addr.String()) {
 					a.playEventSound(audio.SFXConnect)
 				}
 			}
@@ -2712,9 +3403,11 @@ func (a *App) receiveLoop(udp *transport.UDP) {
 					senderID = string(packet.Payload[1 : 1+idLen])
 					pcm = packet.Payload[1+idLen:]
 				}
-				a.markPeerSpeaking(senderID, addr.String())
-				if a.audioEngine != nil {
-					a.audioEngine.Play(a.prepareIncomingPCM(pcm))
+				if len(pcm) >= 960 && len(pcm)%2 == 0 && a.isAudioSequenceValid(senderID, packet.Sequence) {
+					a.markPeerSpeaking(senderID, addr.String())
+					if a.audioEngine != nil {
+						a.audioEngine.PlayStream(senderID, a.prepareIncomingPCM(pcm))
+					}
 				}
 				udp.Broadcast(packet, addr)
 			}
@@ -2750,7 +3443,7 @@ func (a *App) receiveLoop(udp *transport.UDP) {
 				username = envelope.Participant.Username
 			}
 			logging.Infof("Notificación de desconexión recibida: %s", username)
-			a.addSystemMessage(username + " se desconectó.")
+			go a.addSystemMessage(username + " se desconectó.")
 			a.playEventSound(audio.SFXDisconnect)
 			if envelope.Participant != nil {
 				a.roomState.MarkDisconnected(envelope.Participant.ID)
@@ -2774,9 +3467,11 @@ func (a *App) receiveLoop(udp *transport.UDP) {
 				senderID = string(packet.Payload[1 : 1+idLen])
 				pcm = packet.Payload[1+idLen:]
 			}
-			a.markPeerSpeaking(senderID, addr.String())
-			if a.audioEngine != nil {
-				a.audioEngine.Play(a.prepareIncomingPCM(pcm))
+			if len(pcm) >= 960 && len(pcm)%2 == 0 && a.isAudioSequenceValid(senderID, packet.Sequence) {
+				a.markPeerSpeaking(senderID, addr.String())
+				if a.audioEngine != nil {
+					a.audioEngine.PlayStream(senderID, a.prepareIncomingPCM(pcm))
+				}
 			}
 		}
 	}
@@ -2815,11 +3510,14 @@ func (a *App) handleParticipantLeave(participantID, username string, addr *net.U
 	}
 	logging.Infof("Cliente desconectado: %s (%s)", username, addrStr)
 	a.refreshPeersFromRoom()
-	a.addSystemMessage(username + " se desconectó.")
+	leftName := username
+	go func(uName string) {
+		a.addSystemMessage(uName + " se desconectó.")
+		if a.roomStore != nil {
+			a.roomStore.Replace(a.roomState)
+		}
+	}(leftName)
 	a.playEventSound(audio.SFXDisconnect)
-	if a.roomStore != nil {
-		a.roomStore.Replace(a.roomState)
-	}
 	statePayload, _ := room.Encode(room.Envelope{Kind: room.StateMessage, Room: &a.roomState})
 	udp.Broadcast(transport.Packet{Kind: transport.PacketRoomState, Sequence: a.sequence.Add(1), Payload: statePayload}, addr)
 }
@@ -2827,7 +3525,21 @@ func (a *App) handleParticipantLeave(participantID, username string, addr *net.U
 func (a *App) handleRoomState(state room.State, udp *transport.UDP) {
 	previousHost := a.roomState.HostID
 	for _, p := range state.Participants {
-		if p.ID == a.participantID || !p.Connected {
+		if p.ID == a.participantID {
+			if p.Username != "" && p.Username != a.cfg.Username {
+				oldName := a.cfg.Username
+				a.cfg.Username = p.Username
+				_ = config.Save(a.cfgPath, a.cfg)
+				if a.selfNameLabel != nil {
+					a.selfNameLabel.SetText(p.Username)
+				}
+				a.setStatus("Nombre en uso. Tu nuevo nombre es: " + p.Username)
+				a.addSystemMessage("Tu nombre de usuario se cambió a " + p.Username + " porque ya existía otro en la sala.")
+				logging.Infof("Nombre cambiado por el host de '%s' a '%s' por duplicado", oldName, p.Username)
+			}
+			continue
+		}
+		if !p.Connected {
 			continue
 		}
 		wasConnected := false
@@ -3002,6 +3714,93 @@ func (a *App) pingPeers(udp *transport.UDP, stop <-chan struct{}) {
 	}
 }
 
+func (a *App) refreshPeerAvatars() {
+	if a.peerHBox == nil {
+		return
+	}
+	fyne.Do(func() {
+		a.peerMu.RLock()
+		defer a.peerMu.RUnlock()
+		if len(a.peerNames) == 0 {
+			a.peerHBox.Objects = []fyne.CanvasObject{widget.NewLabel("Sin usuarios")}
+			a.peerHBox.Refresh()
+			return
+		}
+		now := time.Now()
+		if len(a.peerHBox.Objects) == len(a.peerNames) {
+			canUpdateInPlace := true
+			for i, peer := range a.peerNames {
+				grid, ok := a.peerHBox.Objects[i].(*fyne.Container)
+				if !ok || len(grid.Objects) == 0 {
+					canUpdateInPlace = false
+					break
+				}
+				stack, ok := grid.Objects[0].(*fyne.Container)
+				if !ok || len(stack.Objects) < 2 {
+					canUpdateInPlace = false
+					break
+				}
+				circle, okCircle := stack.Objects[0].(*canvas.Circle)
+				center, okCenter := stack.Objects[1].(*fyne.Container)
+				if !okCircle || !okCenter || len(center.Objects) == 0 {
+					canUpdateInPlace = false
+					break
+				}
+				txt, okTxt := center.Objects[0].(*canvas.Text)
+				if !okTxt {
+					canUpdateInPlace = false
+					break
+				}
+
+				isSpeaking := peer.speaking && now.Before(peer.speakStop)
+				targetCircleColor := color.NRGBA{R: 60, G: 70, B: 85, A: 255}
+				targetTxtColor := color.NRGBA{R: 240, G: 245, B: 255, A: 255}
+				if isSpeaking {
+					targetCircleColor = color.NRGBA{R: 46, G: 204, B: 113, A: 255}
+					targetTxtColor = color.NRGBA{R: 15, G: 35, B: 15, A: 255}
+				}
+				if circle.FillColor != targetCircleColor {
+					circle.FillColor = targetCircleColor
+					circle.Refresh()
+				}
+				if txt.Color != targetTxtColor {
+					txt.Color = targetTxtColor
+					txt.Refresh()
+				}
+			}
+			if canUpdateInPlace {
+				return
+			}
+		}
+
+		objects := make([]fyne.CanvasObject, 0, len(a.peerNames))
+		for _, peer := range a.peerNames {
+			p := peer
+			initial := "U"
+			trimmed := strings.TrimSpace(p.name)
+			if len(trimmed) > 0 {
+				initial = strings.ToUpper(string([]rune(trimmed)[:1]))
+			}
+			isSpeaking := p.speaking && now.Before(p.speakStop)
+			bg := canvas.NewCircle(color.NRGBA{R: 60, G: 70, B: 85, A: 255})
+			bg.Resize(fyne.NewSize(28, 28))
+			txt := canvas.NewText(initial, color.NRGBA{R: 240, G: 245, B: 255, A: 255})
+			if isSpeaking {
+				bg.FillColor = color.NRGBA{R: 46, G: 204, B: 113, A: 255}
+				txt.Color = color.NRGBA{R: 15, G: 35, B: 15, A: 255}
+			}
+			txt.TextStyle = fyne.TextStyle{Bold: true}
+			txt.TextSize = 13
+			txt.Alignment = fyne.TextAlignCenter
+			avatarStack := container.NewStack(bg, container.NewCenter(txt))
+			avatarBox := container.NewGridWrap(fyne.NewSize(28, 28), avatarStack)
+			objects = append(objects, avatarBox)
+		}
+		a.peerHBox.Objects = objects
+		a.peerHBox.Refresh()
+	})
+}
+
 func (a *App) addPeer(name, address string) bool {
 	a.peerMu.Lock()
 	defer a.peerMu.Unlock()
@@ -3015,30 +3814,19 @@ func (a *App) addPeer(name, address string) bool {
 		}
 	}
 	a.peerNames = append(a.peerNames, peerView{name: name, address: address})
-	fyne.Do(func() {
-		if a.peerList != nil {
-			a.peerList.Refresh()
-		}
-	})
+	a.refreshPeerAvatars()
 	return true
 }
 
 func (a *App) updatePeerLag(address string, lag time.Duration) {
 	a.peerMu.Lock()
+	defer a.peerMu.Unlock()
 	for index := range a.peerNames {
 		if a.peerNames[index].address == address || strings.Contains(a.peerNames[index].name, "("+address+")") {
 			a.peerNames[index].lag = lag
-			item := widget.ListItemID(index)
-			a.peerMu.Unlock()
-			fyne.Do(func() {
-				if a.peerList != nil {
-					a.peerList.RefreshItem(item)
-				}
-			})
 			return
 		}
 	}
-	a.peerMu.Unlock()
 }
 
 func (a *App) markPeerSpeaking(id, address string) {
@@ -3058,17 +3846,10 @@ func (a *App) markPeerSpeaking(id, address string) {
 			wasSpeaking := p.speaking
 			p.speaking = true
 			p.speakStop = now.Add(350 * time.Millisecond)
-			if !wasSpeaking {
-				item := widget.ListItemID(i)
-				a.peerMu.Unlock()
-				fyne.Do(func() {
-					if a.peerList != nil {
-						a.peerList.RefreshItem(item)
-					}
-				})
-				return
-			}
 			a.peerMu.Unlock()
+			if !wasSpeaking {
+				a.refreshPeerAvatars()
+			}
 			return
 		}
 	}
@@ -3078,23 +3859,16 @@ func (a *App) markPeerSpeaking(id, address string) {
 func (a *App) sweepSpeakingPeers() {
 	a.peerMu.Lock()
 	now := time.Now()
-	itemsToRefresh := make([]widget.ListItemID, 0)
+	changed := false
 	for i := range a.peerNames {
 		p := &a.peerNames[i]
-		if p.speaking && now.After(p.speakStop) {
+		if p.speaking && (now.After(p.speakStop) || p.speakStop.Sub(now) < 50*time.Millisecond) {
 			p.speaking = false
-			itemsToRefresh = append(itemsToRefresh, widget.ListItemID(i))
+			changed = true
 		}
 	}
 	a.peerMu.Unlock()
-	if len(itemsToRefresh) > 0 {
-		fyne.Do(func() {
-			if a.peerList == nil {
-				return
-			}
-			for _, item := range itemsToRefresh {
-				a.peerList.RefreshItem(item)
-			}
-		})
+	if changed {
+		a.refreshPeerAvatars()
 	}
 }

@@ -55,6 +55,7 @@ type Effects struct {
 	notchY1, notchY2      float64
 	vadHoldFrames         int
 	gateHoldFrames        int
+	wasOpen               bool
 }
 
 func (e *Effects) KeepVoiceOpen(vadOpen, gateOpen bool, settings FilterSettings) bool {
@@ -78,6 +79,50 @@ func holdFrames(milliseconds int) int {
 		return 0
 	}
 	return milliseconds / 20
+}
+
+func (e *Effects) SmoothTransition(samples []int16, open bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	rampLen := 144 // ~3 ms at 48 kHz
+	if len(samples) < rampLen {
+		rampLen = len(samples)
+	}
+	if !e.wasOpen && open {
+		for i := 0; i < rampLen; i++ {
+			factor := float64(i) / float64(rampLen)
+			samples[i] = int16(float64(samples[i]) * factor)
+		}
+	} else if e.wasOpen && !open {
+		start := len(samples) - rampLen
+		for i := 0; i < rampLen; i++ {
+			factor := 1.0 - (float64(i) / float64(rampLen))
+			samples[start+i] = int16(float64(samples[start+i]) * factor)
+		}
+	}
+	e.wasOpen = open
+}
+
+func ApplyPeakCeiling(samples []int16, ceiling int16) {
+	if ceiling <= 0 {
+		ceiling = 27000 // ~ -1.7 dBFS ceiling
+	}
+	maxVal := int16(0)
+	for _, s := range samples {
+		abs := s
+		if abs < 0 {
+			abs = -abs
+		}
+		if abs > maxVal {
+			maxVal = abs
+		}
+	}
+	if maxVal > ceiling {
+		scale := float64(ceiling) / float64(maxVal)
+		for i := range samples {
+			samples[i] = int16(float64(samples[i]) * scale)
+		}
+	}
 }
 
 func (e *Effects) Apply(data []byte, settings FilterSettings) ([]byte, error) {
@@ -145,11 +190,14 @@ func applyDynamics(value float64, settings FilterSettings) float64 {
 	}
 	if settings.LimiterEnabled {
 		limit := math.Pow(10, float64(settings.LimiterThreshold)/20)
-		if value > limit {
-			return limit
-		}
-		if value < -limit {
-			return -limit
+		absVal := math.Abs(value)
+		if absVal > limit {
+			sign := 1.0
+			if value < 0 {
+				sign = -1.0
+			}
+			excess := absVal - limit
+			value = sign * (limit + math.Tanh(excess*1.5)*0.1*limit)
 		}
 	}
 	return value

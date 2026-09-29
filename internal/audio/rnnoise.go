@@ -103,6 +103,10 @@ func PrepareOutgoingPCMWithFilters(data []byte, denoiser *RNNoise, gate NoiseGat
 		if effects != nil {
 			keepOpen = effects.KeepVoiceOpen(true, gateOpen, settings)
 		}
+		if effects != nil {
+			effects.SmoothTransition(samples, keepOpen)
+			ApplyPeakCeiling(samples, 27000)
+		}
 		if !keepOpen {
 			return nil, false, nil
 		}
@@ -117,11 +121,16 @@ func PrepareOutgoingPCMWithFilters(data []byte, denoiser *RNNoise, gate NoiseGat
 		return nil, false, err
 	}
 	gateOpen := !settings.NoiseGateEnabled || gate.Open(samples)
-	if effects != nil && !effects.KeepVoiceOpen(hasSpeech, gateOpen, settings) {
+	keepOpen := (!hasSpeech || !gateOpen)
+	if effects != nil {
+		keepOpen = effects.KeepVoiceOpen(hasSpeech, gateOpen, settings)
+		effects.SmoothTransition(samples, keepOpen)
+		ApplyPeakCeiling(samples, 27000)
+	} else {
+		keepOpen = hasSpeech && gateOpen
+	}
+	if !keepOpen {
 		return nil, false, nil
 	}
-	if effects == nil && (!hasSpeech || !gateOpen) {
-		return nil, false, nil
-	}
-	return filtered, true, nil
+	return EncodePCM(samples), true, nil
 }

@@ -1,10 +1,12 @@
 package transport
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"net"
 	"sync"
+	"syscall"
 )
 
 const (
@@ -59,13 +61,26 @@ type UDP struct {
 }
 
 func Listen(address string) (*UDP, error) {
-	addr, err := net.ResolveUDPAddr("udp", address)
+	lc := net.ListenConfig{
+		Control: func(network, address string, c syscall.RawConn) error {
+			var controlErr error
+			err := c.Control(func(fd uintptr) {
+				controlErr = setReusePort(fd)
+			})
+			if err != nil {
+				return err
+			}
+			return controlErr
+		},
+	}
+	packetConn, err := lc.ListenPacket(context.Background(), "udp", address)
 	if err != nil {
 		return nil, err
 	}
-	conn, err := net.ListenUDP("udp", addr)
-	if err != nil {
-		return nil, err
+	conn, ok := packetConn.(*net.UDPConn)
+	if !ok {
+		_ = packetConn.Close()
+		return nil, fmt.Errorf("no es una conexión UDP válida")
 	}
 	return &UDP{conn: conn, peers: make(map[string]*net.UDPAddr)}, nil
 }
