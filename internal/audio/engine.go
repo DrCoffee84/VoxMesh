@@ -24,17 +24,18 @@ type audioStream struct {
 }
 
 type Engine struct {
-	context       *malgo.AllocatedContext
-	capture       *malgo.Device
-	playback      *malgo.Device
-	captureFrames chan []byte
-	captureBuffer []byte
-	captureMu     sync.Mutex
-	stopOnce      sync.Once
+	context        *malgo.AllocatedContext
+	capture        *malgo.Device
+	playback       *malgo.Device
+	captureFrames  chan []byte
+	captureBuffer  []byte
+	captureMu      sync.Mutex
+	stopOnce       sync.Once
 
-	streams    map[string]*audioStream
-	mixBuffer  []int32
-	playbackMu sync.Mutex
+	streams        map[string]*audioStream
+	mixBuffer      []int32
+	playbackMu     sync.Mutex
+	jitterBufferMS int
 }
 
 func applyFadeIn(pcm []byte, ramp int) {
@@ -70,15 +71,27 @@ func softClip(sample int32) int16 {
 	return int16(sample)
 }
 
+func (e *Engine) SetJitterBufferMS(ms int) {
+	if ms < 40 {
+		ms = 40
+	} else if ms > 500 {
+		ms = 500
+	}
+	e.playbackMu.Lock()
+	e.jitterBufferMS = ms
+	e.playbackMu.Unlock()
+}
+
 func NewEngine(inputName, outputName string, onFrame func([]byte)) (*Engine, error) {
 	context, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("inicializar motor de audio: %w", err)
 	}
 	engine := &Engine{
-		context:       context,
-		captureFrames: make(chan []byte, 8),
-		streams:       make(map[string]*audioStream),
+		context:        context,
+		captureFrames:  make(chan []byte, 8),
+		streams:        make(map[string]*audioStream),
+		jitterBufferMS: 120,
 	}
 	inputID, err := findDeviceID(context, malgo.Capture, inputName)
 	if err != nil {
@@ -139,7 +152,6 @@ func NewEngine(inputName, outputName string, onFrame func([]byte)) (*Engine, err
 				return
 			}
 
-			// Asegurar buffer de mezcla con capacidad suficiente sin nuevas asignaciones
 			if len(engine.mixBuffer) < samples {
 				engine.mixBuffer = make([]int32, samples)
 			} else {
@@ -149,6 +161,10 @@ func NewEngine(inputName, outputName string, onFrame func([]byte)) (*Engine, err
 			}
 
 			now := time.Now()
+			targetBytes := (engine.jitterBufferMS / 20) * streamFrameBytes
+			if targetBytes < streamFrameBytes {
+				targetBytes = streamFrameBytes
+			}
 
 			for id, stream := range engine.streams {
 				if len(stream.buffer) == 0 {
@@ -157,24 +173,24 @@ func NewEngine(inputName, outputName string, onFrame func([]byte)) (*Engine, err
 						delete(engine.streams, id)
 						continue
 					}
-					// Si sufrió underrun (se quedó sin audio en este ciclo)
-					if !stream.buffering {
+					// Silencio real prolongado (> 300 ms)
+					if now.Sub(stream.lastActive) > 300*time.Millisecond {
 						stream.buffering = true
-						if stream.lastSample != 0 {
-							decay := stream.lastSample
-							for i := 0; i < antiClickSamples && i < samples; i++ {
-								decay = int16(float64(decay) * 0.8)
-								engine.mixBuffer[i] += int32(decay)
-							}
-							stream.lastSample = 0
+					}
+					if stream.lastSample != 0 {
+						decay := stream.lastSample
+						for i := 0; i < antiClickSamples && i < samples; i++ {
+							decay = int16(float64(decay) * 0.8)
+							engine.mixBuffer[i] += int32(decay)
 						}
+						stream.lastSample = 0
 					}
 					continue
 				}
 
-				// Jitter buffer pre-cushion: esperar al menos 2 frames (~40ms) antes de iniciar playback de un burst
-				if stream.buffering {
-					if len(stream.buffer) < streamFrameBytes*2 {
+				// Pre-buffering al arrancar una frase
+				if stream.buffering && id != "__sfx__" && id != "__local__" {
+					if len(stream.buffer) < targetBytes {
 						continue
 					}
 					stream.buffering = false
@@ -195,19 +211,17 @@ func NewEngine(inputName, outputName string, onFrame func([]byte)) (*Engine, err
 					stream.lastSample = val
 				}
 
+				consumedBytes := samplesToRead * 2
+				stream.buffer = stream.buffer[consumedBytes:]
+
 				if samplesToRead < samples {
-					// Underrun al final de este bloque
+					// Micro-bache (paquete con retraso): suavizar hacia cero sin frenar el flujo futuro
 					decay := stream.lastSample
 					for i := samplesToRead; i < samplesToRead+antiClickSamples && i < samples; i++ {
 						decay = int16(float64(decay) * 0.8)
 						engine.mixBuffer[i] += int32(decay)
 					}
 					stream.lastSample = 0
-					stream.buffering = true
-					stream.buffer = stream.buffer[:0]
-				} else {
-					consumedBytes := samplesToRead * 2
-					stream.buffer = stream.buffer[consumedBytes:]
 				}
 			}
 
@@ -255,22 +269,36 @@ func (e *Engine) PlayStream(senderID string, data []byte) {
 		return
 	}
 
+	now := time.Now()
 	stream, exists := e.streams[senderID]
 	if !exists {
 		stream = &audioStream{
 			buffering:  true,
-			lastActive: time.Now(),
+			lastActive: now,
 		}
 		e.streams[senderID] = stream
+	} else if now.Sub(stream.lastActive) > 300*time.Millisecond {
+		// Silencio real: reiniciar cushion para el comienzo de la próxima frase
+		stream.buffering = true
+	}
+
+	// SFX y monitor local suenan al instante sin retardo
+	if senderID == "__sfx__" || senderID == "__local__" {
+		stream.buffering = false
 	}
 
 	stream.buffer = append(stream.buffer, data...)
-	stream.lastActive = time.Now()
+	stream.lastActive = now
 
-	const maxStreamBufferBytes = streamFrameBytes * 6 // ~120 ms
-	if len(stream.buffer) > maxStreamBufferBytes {
-		keepBytes := streamFrameBytes * 3
-		stream.buffer = stream.buffer[len(stream.buffer)-keepBytes:]
+	// Límite de retención para evitar acumulación excesiva de latencia (delay drift)
+	targetBytes := (e.jitterBufferMS / 20) * streamFrameBytes
+	if targetBytes < streamFrameBytes {
+		targetBytes = streamFrameBytes
+	}
+	maxBytes := targetBytes * 2
+	if len(stream.buffer) > maxBytes {
+		keep := targetBytes
+		stream.buffer = stream.buffer[len(stream.buffer)-keep:]
 	}
 }
 

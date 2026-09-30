@@ -62,6 +62,7 @@ type Config struct {
 	SoundboardVolume      float32           `json:"soundboard_volume"`
 	SoundBinds            map[string]string `json:"sound_binds,omitempty"`
 	StopSoundBind         string            `json:"stop_sound_bind,omitempty"`
+	JitterBufferMS        int               `json:"jitter_buffer_ms"`
 	EventSoundsEnabled    bool              `json:"event_sounds_enabled"`
 	AllowHostMigration    bool              `json:"allow_host_migration"`
 }
@@ -103,6 +104,7 @@ func Default() Config {
 		ShowStatusBar:         true,
 		SoundboardVolume:      1.0,
 		SoundBinds:            make(map[string]string),
+		JitterBufferMS:        120,
 		EventSoundsEnabled:    true,
 		AllowHostMigration:    true,
 	}
@@ -135,6 +137,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.SoundboardVolume <= 0 {
 		cfg.SoundboardVolume = 1.0
+	}
+	if cfg.JitterBufferMS < 40 || cfg.JitterBufferMS > 500 {
+		cfg.JitterBufferMS = 120
 	}
 	return cfg, nil
 }
