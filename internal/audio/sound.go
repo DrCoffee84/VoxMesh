@@ -29,9 +29,21 @@ func decodeMP3Sound(data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("mp3 inválido: %w", err)
 	}
-	pcm, err := io.ReadAll(decoder)
-	if err != nil {
-		return nil, fmt.Errorf("decodificar mp3: %w", err)
+	var pcm []byte
+	totalBytes := decoder.Length()
+	if totalBytes > 0 && totalBytes < 500*1024*1024 {
+		pcm = make([]byte, totalBytes)
+		n, readErr := io.ReadFull(decoder, pcm)
+		if readErr != nil && readErr != io.EOF && readErr != io.ErrUnexpectedEOF {
+			return nil, fmt.Errorf("decodificar mp3: %w", readErr)
+		}
+		pcm = pcm[:n]
+	} else {
+		var readErr error
+		pcm, readErr = io.ReadAll(decoder)
+		if readErr != nil {
+			return nil, fmt.Errorf("decodificar mp3: %w", readErr)
+		}
 	}
 	return resamplePCM(pcm, decoder.SampleRate(), 2)
 }
@@ -76,38 +88,41 @@ func decodeWAVSound(data []byte) ([]byte, error) {
 }
 
 // resamplePCM downmixes interleaved 16-bit PCM to mono and resamples it to
-// the engine's SampleRate using nearest-neighbor interpolation.
+// the engine's SampleRate in a single pass directly into the output slice.
 func resamplePCM(pcm []byte, sourceRate, channels int) ([]byte, error) {
 	if channels <= 0 {
 		return nil, fmt.Errorf("audio sin canales")
 	}
 	frameBytes := 2 * channels
-	frames := len(pcm) / frameBytes
-	mono := make([]int16, frames)
-	for frame := 0; frame < frames; frame++ {
-		var sum int32
-		for channel := 0; channel < channels; channel++ {
-			byteOffset := frame*frameBytes + channel*2
-			sum += int32(int16(binary.LittleEndian.Uint16(pcm[byteOffset : byteOffset+2])))
-		}
-		mono[frame] = int16(sum / int32(channels))
+	totalFrames := len(pcm) / frameBytes
+	if totalFrames == 0 {
+		return nil, fmt.Errorf("audio vacío")
 	}
-	if sourceRate == SampleRate || len(mono) == 0 {
-		out := make([]byte, len(mono)*2)
-		for index, sample := range mono {
-			binary.LittleEndian.PutUint16(out[index*2:], uint16(sample))
-		}
-		return out, nil
+
+	if sourceRate == SampleRate && channels == 1 {
+		return append([]byte(nil), pcm...), nil
 	}
+
 	ratio := float64(sourceRate) / float64(SampleRate)
-	outFrames := int(float64(len(mono)) / ratio)
+	outFrames := int(float64(totalFrames) / ratio)
+	if outFrames <= 0 {
+		return nil, fmt.Errorf("audio demasiado corto")
+	}
 	out := make([]byte, outFrames*2)
+
 	for index := 0; index < outFrames; index++ {
-		source := int(float64(index) * ratio)
-		if source >= len(mono) {
-			source = len(mono) - 1
+		sourceFrame := int(float64(index) * ratio)
+		if sourceFrame >= totalFrames {
+			sourceFrame = totalFrames - 1
 		}
-		binary.LittleEndian.PutUint16(out[index*2:], uint16(mono[source]))
+		var sum int32
+		offset := sourceFrame * frameBytes
+		for c := 0; c < channels; c++ {
+			sample := int16(binary.LittleEndian.Uint16(pcm[offset+c*2 : offset+c*2+2]))
+			sum += int32(sample)
+		}
+		monoSample := int16(sum / int32(channels))
+		binary.LittleEndian.PutUint16(out[index*2:index*2+2], uint16(monoSample))
 	}
 	return out, nil
 }

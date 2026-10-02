@@ -44,6 +44,7 @@ func NewPlayer(outputName string) (*Player, error) {
 			written := 0
 			for written < len(output) {
 				if len(player.data) == 0 {
+					player.data = nil
 					select {
 					case player.data = <-player.queue:
 					default:
@@ -56,6 +57,9 @@ func NewPlayer(outputName string) (*Player, error) {
 				copied := copy(output[written:], player.data)
 				written += copied
 				player.data = player.data[copied:]
+				if len(player.data) == 0 {
+					player.data = nil
+				}
 			}
 		},
 	})
@@ -76,7 +80,7 @@ func (p *Player) Play(data []byte) {
 		return
 	}
 	select {
-	case p.queue <- append([]byte(nil), data...):
+	case p.queue <- data:
 	default:
 	}
 }

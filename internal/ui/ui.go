@@ -4,6 +4,7 @@ package ui
 
 import (
 	"context"
+	_ "embed"
 	"encoding/binary"
 	"fmt"
 	"image"
@@ -14,6 +15,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -43,6 +46,9 @@ import (
 	"voxmesh/internal/updater"
 	"voxmesh/internal/version"
 )
+
+//go:embed icon.png
+var appIconBytes []byte
 
 type App struct {
 	window          fyne.Window
@@ -228,7 +234,15 @@ func (a *App) Run() {
 		logging.Close()
 	}()
 	application := app.NewWithID("com.voxmesh.desktop")
+	if len(appIconBytes) > 0 {
+		appIcon := fyne.NewStaticResource("icon.png", appIconBytes)
+		application.SetIcon(appIcon)
+	}
 	a.window = application.NewWindow("VoxMesh")
+	if len(appIconBytes) > 0 {
+		appIcon := fyne.NewStaticResource("icon.png", appIconBytes)
+		a.window.SetIcon(appIcon)
+	}
 	a.window.Resize(fyne.NewSize(900, 620))
 	a.window.SetCloseIntercept(func() {
 		if a.transport != nil {
@@ -254,6 +268,13 @@ func (a *App) Run() {
 	go func() {
 		time.Sleep(1 * time.Second)
 		a.checkForUpdates(false)
+	}()
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			debug.FreeOSMemory()
+		}
 	}()
 	a.window.ShowAndRun()
 }
@@ -2042,6 +2063,10 @@ func (a *App) removeSound(soundID string) {
 	}
 
 	a.setStatus("Sonido eliminado: " + deletedSound.Name)
+	go func() {
+		runtime.GC()
+		debug.FreeOSMemory()
+	}()
 }
 
 func (a *App) pickAndAddSound() {
@@ -2071,8 +2096,13 @@ func (a *App) pickAndAddSound() {
 		}
 		extension := strings.ToLower(filepath.Ext(path))
 		pcm, decodeErr := audio.DecodeSoundFile(extension, raw)
+		raw = nil // Liberar memoria del archivo original de inmediato
 		if decodeErr != nil {
 			a.setStatus("No se pudo procesar el sonido: " + decodeErr.Error())
+			go func() {
+				runtime.GC()
+				debug.FreeOSMemory()
+			}()
 			return
 		}
 		name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
@@ -2082,19 +2112,46 @@ func (a *App) pickAndAddSound() {
 	}()
 }
 
-func renderWaveform(pcm []byte, startFrac, endFrac float64, width, height int) *image.RGBA {
-	img := image.NewRGBA(image.Rect(0, 0, width, height))
-	bgColor := color.RGBA{R: 24, G: 28, B: 34, A: 255}
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
-			img.SetRGBA(x, y, bgColor)
+// computeWaveformPeaks calcula los picos de amplitud absoluta directamente de los bytes PCM S16LE
+// sin asignar arreglos gigantes intermedios ni decodificar todo a []int16.
+func computeWaveformPeaks(pcm []byte, width int) []int16 {
+	peaks := make([]int16, width)
+	totalSamples := len(pcm) / 2
+	if totalSamples == 0 || width <= 0 {
+		return peaks
+	}
+	for x := 0; x < width; x++ {
+		sStart := (x * totalSamples) / width
+		sEnd := ((x + 1) * totalSamples) / width
+		if sEnd > totalSamples {
+			sEnd = totalSamples
 		}
+		var maxVal int16
+		for i := sStart; i < sEnd; i++ {
+			byteIdx := i * 2
+			sample := int16(binary.LittleEndian.Uint16(pcm[byteIdx : byteIdx+2]))
+			if sample < 0 {
+				sample = -sample
+			}
+			if sample > maxVal {
+				maxVal = sample
+			}
+		}
+		peaks[x] = maxVal
 	}
-	samples, err := audio.DecodePCM(pcm)
-	if err != nil || len(samples) == 0 {
-		return img
-	}
+	return peaks
+}
+
+// drawWaveform dibuja la onda directamente sobre el buffer de imagen existente sin ninguna asignación de memoria.
+func drawWaveform(img *image.RGBA, peaks []int16, startFrac, endFrac float64) {
+	width := img.Bounds().Dx()
+	height := img.Bounds().Dy()
 	midY := height / 2
+
+	bgColor := color.RGBA{R: 24, G: 28, B: 34, A: 255}
+	selectedColor := color.RGBA{R: 46, G: 204, B: 113, A: 255}
+	unselectedColor := color.RGBA{R: 70, G: 80, B: 95, A: 255}
+
 	startX := int(startFrac * float64(width))
 	endX := int(endFrac * float64(width))
 	if startX < 0 {
@@ -2105,46 +2162,29 @@ func renderWaveform(pcm []byte, startFrac, endFrac float64, width, height int) *
 	}
 
 	for x := 0; x < width; x++ {
-		sStart := x * len(samples) / width
-		sEnd := (x + 1) * len(samples) / width
-		if sEnd > len(samples) {
-			sEnd = len(samples)
-		}
-		if sStart >= sEnd {
-			continue
-		}
-
 		maxVal := int16(0)
-		for _, s := range samples[sStart:sEnd] {
-			abs := s
-			if abs < 0 {
-				abs = -abs
-			}
-			if abs > maxVal {
-				maxVal = abs
-			}
+		if x < len(peaks) {
+			maxVal = peaks[x]
 		}
-
 		barHeight := int(float64(maxVal) / 32767.0 * float64(midY-2))
 		if barHeight < 1 {
 			barHeight = 1
 		}
 
 		isSelected := x >= startX && x <= endX
-		var barColor color.RGBA
+		colColor := unselectedColor
 		if isSelected {
-			barColor = color.RGBA{R: 46, G: 204, B: 113, A: 255}
-		} else {
-			barColor = color.RGBA{R: 70, G: 80, B: 95, A: 255}
+			colColor = selectedColor
 		}
 
-		for y := midY - barHeight; y <= midY+barHeight; y++ {
-			if y >= 0 && y < height {
-				img.SetRGBA(x, y, barColor)
+		for y := 0; y < height; y++ {
+			if y >= midY-barHeight && y <= midY+barHeight {
+				img.SetRGBA(x, y, colColor)
+			} else {
+				img.SetRGBA(x, y, bgColor)
 			}
 		}
 	}
-	return img
 }
 
 func (a *App) showSoundTrimDialog(defaultName string, pcm []byte) {
@@ -2154,15 +2194,28 @@ func (a *App) showSoundTrimDialog(defaultName string, pcm []byte) {
 		return
 	}
 
-	activePCM := pcm
+	const imgW, imgH = 420, 80
+	waveImg := image.NewRGBA(image.Rect(0, 0, imgW, imgH))
+
+	viewStartByte := 0
+	viewEndByte := len(pcm)
+
+	type zoomLevel struct {
+		startByte int
+		endByte   int
+	}
+	var zoomHistory []zoomLevel
+
+	activePeaks := computeWaveformPeaks(pcm[viewStartByte:viewEndByte], imgW)
+	drawWaveform(waveImg, activePeaks, 0, 1)
 
 	nameEntry := widget.NewEntry()
 	nameEntry.SetText(defaultName)
 
 	durationLabel := widget.NewLabel(fmt.Sprintf("Duración visible: %.2f s", totalSec))
 
-	waveformImg := canvas.NewImageFromImage(renderWaveform(activePCM, 0, 1, 420, 80))
-	waveformImg.SetMinSize(fyne.NewSize(420, 80))
+	waveformImg := canvas.NewImageFromImage(waveImg)
+	waveformImg.SetMinSize(fyne.NewSize(imgW, imgH))
 	waveformImg.FillMode = canvas.ImageFillStretch
 
 	startSlider := widget.NewSlider(0, totalSec)
@@ -2182,14 +2235,14 @@ func (a *App) showSoundTrimDialog(defaultName string, pcm []byte) {
 	var isUpdating bool
 
 	updateWaveform := func() {
-		curTotal := float64(len(activePCM)) / 96000.0
+		viewLenSec := float64(viewEndByte-viewStartByte) / 96000.0
 		sFrac := 0.0
 		eFrac := 1.0
-		if curTotal > 0 {
-			sFrac = startSlider.Value / curTotal
-			eFrac = endSlider.Value / curTotal
+		if viewLenSec > 0 {
+			sFrac = startSlider.Value / viewLenSec
+			eFrac = endSlider.Value / viewLenSec
 		}
-		waveformImg.Image = renderWaveform(activePCM, sFrac, eFrac, 420, 80)
+		drawWaveform(waveImg, activePeaks, sFrac, eFrac)
 		waveformImg.Refresh()
 	}
 
@@ -2198,7 +2251,7 @@ func (a *App) showSoundTrimDialog(defaultName string, pcm []byte) {
 			return
 		}
 		isUpdating = true
-		curTotal := float64(len(activePCM)) / 96000.0
+		curTotal := float64(viewEndByte-viewStartByte) / 96000.0
 		if v < 0 {
 			v = 0
 		}
@@ -2219,7 +2272,7 @@ func (a *App) showSoundTrimDialog(defaultName string, pcm []byte) {
 			return
 		}
 		isUpdating = true
-		curTotal := float64(len(activePCM)) / 96000.0
+		curTotal := float64(viewEndByte-viewStartByte) / 96000.0
 		if v > curTotal {
 			v = curTotal
 		}
@@ -2251,7 +2304,7 @@ func (a *App) showSoundTrimDialog(defaultName string, pcm []byte) {
 			return
 		}
 		isUpdating = true
-		curTotal := float64(len(activePCM)) / 96000.0
+		curTotal := float64(viewEndByte-viewStartByte) / 96000.0
 		if v <= startSlider.Value {
 			v = math.Min(curTotal, startSlider.Value+0.05)
 			endSlider.SetValue(v)
@@ -2289,7 +2342,7 @@ func (a *App) showSoundTrimDialog(defaultName string, pcm []byte) {
 		if isUpdating {
 			return
 		}
-		curTotal := float64(len(activePCM)) / 96000.0
+		curTotal := float64(viewEndByte-viewStartByte) / 96000.0
 		if val, err := strconv.ParseFloat(strings.TrimSpace(txt), 64); err == nil {
 			if val > startSlider.Value && val <= curTotal {
 				isUpdating = true
@@ -2301,32 +2354,52 @@ func (a *App) showSoundTrimDialog(defaultName string, pcm []byte) {
 	}
 
 	slicePCM := func() []byte {
+		curTotalBytes := viewEndByte - viewStartByte
 		s := int(startSlider.Value*96000) &^ 1
 		e := int(endSlider.Value*96000) &^ 1
 		if s < 0 {
 			s = 0
 		}
-		if e > len(activePCM) {
-			e = len(activePCM)
+		if e > curTotalBytes {
+			e = curTotalBytes
 		}
 		if e <= s {
-			e = len(activePCM)
+			e = curTotalBytes
 		}
-		return append([]byte(nil), activePCM[s:e]...)
+		absStart := viewStartByte + s
+		absEnd := viewStartByte + e
+		if absEnd > len(pcm) {
+			absEnd = len(pcm)
+		}
+		if absStart >= absEnd {
+			return nil
+		}
+		return append([]byte(nil), pcm[absStart:absEnd]...)
 	}
 
 	var zoomOutBtn *widget.Button
-	var historyPCMs [][]byte
 
 	zoomInBtn := widget.NewButtonWithIcon("Zoom a selección", theme.ZoomInIcon(), func() {
-		trimmed := slicePCM()
-		if len(trimmed) < 4800 { // at least 50 ms
+		s := int(startSlider.Value*96000) &^ 1
+		e := int(endSlider.Value*96000) &^ 1
+		curTotalBytes := viewEndByte - viewStartByte
+		if s < 0 {
+			s = 0
+		}
+		if e > curTotalBytes {
+			e = curTotalBytes
+		}
+		if e-s < 4800 { // al menos 50 ms
 			return
 		}
-		historyPCMs = append(historyPCMs, activePCM)
-		activePCM = trimmed
-		newTotal := float64(len(activePCM)) / 96000.0
+		zoomHistory = append(zoomHistory, zoomLevel{startByte: viewStartByte, endByte: viewEndByte})
+		viewStartByte += s
+		viewEndByte = viewStartByte + (e - s)
+		newTotal := float64(viewEndByte-viewStartByte) / 96000.0
 		durationLabel.SetText(fmt.Sprintf("Duración visible: %.2f s", newTotal))
+
+		activePeaks = computeWaveformPeaks(pcm[viewStartByte:viewEndByte], imgW)
+
 		isUpdating = true
 		startSlider.Max = newTotal
 		startSlider.SetValue(0)
@@ -2342,14 +2415,18 @@ func (a *App) showSoundTrimDialog(defaultName string, pcm []byte) {
 	})
 
 	zoomOutBtn = widget.NewButtonWithIcon("Alejar zoom", theme.ZoomOutIcon(), func() {
-		if len(historyPCMs) == 0 {
+		if len(zoomHistory) == 0 {
 			return
 		}
-		prevPCM := historyPCMs[len(historyPCMs)-1]
-		historyPCMs = historyPCMs[:len(historyPCMs)-1]
-		activePCM = prevPCM
-		prevTotal := float64(len(activePCM)) / 96000.0
+		prev := zoomHistory[len(zoomHistory)-1]
+		zoomHistory = zoomHistory[:len(zoomHistory)-1]
+		viewStartByte = prev.startByte
+		viewEndByte = prev.endByte
+		prevTotal := float64(viewEndByte-viewStartByte) / 96000.0
 		durationLabel.SetText(fmt.Sprintf("Duración visible: %.2f s", prevTotal))
+
+		activePeaks = computeWaveformPeaks(pcm[viewStartByte:viewEndByte], imgW)
+
 		isUpdating = true
 		startSlider.Max = prevTotal
 		startSlider.SetValue(0)
@@ -2358,7 +2435,7 @@ func (a *App) showSoundTrimDialog(defaultName string, pcm []byte) {
 		startEntry.SetText("0.00")
 		endEntry.SetText(fmt.Sprintf("%.2f", prevTotal))
 		isUpdating = false
-		if len(historyPCMs) == 0 {
+		if len(zoomHistory) == 0 {
 			zoomOutBtn.Disable()
 		}
 		updateWaveform()
@@ -2395,15 +2472,25 @@ func (a *App) showSoundTrimDialog(defaultName string, pcm []byte) {
 
 	d := dialog.NewCustomConfirm("Recortar sonido", "Guardar sonido", "Cancelar", controls, func(confirmed bool) {
 		a.stopSoundboard()
-		if !confirmed {
-			return
+		if confirmed {
+			soundName := strings.TrimSpace(nameEntry.Text)
+			if soundName == "" {
+				soundName = defaultName
+			}
+			trimmed := slicePCM()
+			if len(trimmed) > 0 {
+				a.saveAndBroadcastSound(soundName, trimmed)
+			}
 		}
-		soundName := strings.TrimSpace(nameEntry.Text)
-		if soundName == "" {
-			soundName = defaultName
-		}
-		trimmed := slicePCM()
-		a.saveAndBroadcastSound(soundName, trimmed)
+		// Limpieza explícita de referencias grandes y liberación forzada de RAM al SO
+		pcm = nil
+		activePeaks = nil
+		waveImg = nil
+		zoomHistory = nil
+		go func() {
+			runtime.GC()
+			debug.FreeOSMemory()
+		}()
 	}, a.window)
 	d.Resize(fyne.NewSize(520, 480))
 	d.Show()
@@ -2427,6 +2514,10 @@ func (a *App) saveAndBroadcastSound(name string, pcm []byte) {
 		}
 		a.sendAsset(assets.KindSound, sound.ID, sound.Ext, pcm)
 		a.setStatus("Sonido agregado: " + name)
+		go func() {
+			runtime.GC()
+			debug.FreeOSMemory()
+		}()
 	}()
 }
 
@@ -2492,9 +2583,11 @@ func applyVolume(pcm []byte, volume float32) []byte {
 		return pcm
 	}
 	if volume <= 0.01 {
-		return make([]byte, len(pcm))
+		for i := range pcm {
+			pcm[i] = 0
+		}
+		return pcm
 	}
-	out := make([]byte, len(pcm))
 	for i := 0; i+1 < len(pcm); i += 2 {
 		sample := int16(binary.LittleEndian.Uint16(pcm[i : i+2]))
 		scaled := int32(float32(sample) * volume)
@@ -2503,9 +2596,9 @@ func applyVolume(pcm []byte, volume float32) []byte {
 		} else if scaled < -32768 {
 			scaled = -32768
 		}
-		binary.LittleEndian.PutUint16(out[i:i+2], uint16(int16(scaled)))
+		binary.LittleEndian.PutUint16(pcm[i:i+2], uint16(int16(scaled)))
 	}
-	return out
+	return pcm
 }
 
 func (a *App) playSoundPCM(data []byte) {
@@ -2538,6 +2631,10 @@ func (a *App) stopSoundboard() {
 	if player != nil {
 		player.Clear()
 	}
+	go func() {
+		runtime.GC()
+		debug.FreeOSMemory()
+	}()
 }
 
 func (a *App) viewRoom(roomName string) {

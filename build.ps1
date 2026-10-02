@@ -10,6 +10,17 @@ if (Test-Path "C:\msys64\ucrt64\bin\gcc.exe") {
 
 $env:CGO_ENABLED = "1"
 
+if (Test-Path "icon.png") {
+    Copy-Item "icon.png" "internal\ui\icon.png" -Force
+}
+
+if (Test-Path "icon.ico") {
+    @"
+100 ICON "icon.ico"
+"@ | Set-Content -Path cmd\voxmesh\voxmesh.rc -Encoding ASCII
+    & windres -i cmd\voxmesh\voxmesh.rc -O coff -F pe-x86-64 -o cmd\voxmesh\voxmesh_windows_amd64.syso
+}
+
 if (-not (Test-Path "dist")) {
     New-Item -ItemType Directory -Path "dist" | Out-Null
 }

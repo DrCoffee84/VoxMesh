@@ -24,13 +24,13 @@ type audioStream struct {
 }
 
 type Engine struct {
-	context        *malgo.AllocatedContext
-	capture        *malgo.Device
-	playback       *malgo.Device
-	captureFrames  chan []byte
-	captureBuffer  []byte
-	captureMu      sync.Mutex
-	stopOnce       sync.Once
+	context       *malgo.AllocatedContext
+	capture       *malgo.Device
+	playback      *malgo.Device
+	captureFrames chan []byte
+	captureBuffer []byte
+	captureMu     sync.Mutex
+	stopOnce      sync.Once
 
 	streams        map[string]*audioStream
 	mixBuffer      []int32
