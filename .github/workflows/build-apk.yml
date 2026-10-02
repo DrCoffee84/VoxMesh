@@ -2,15 +2,17 @@ name: Build Android APK
 
 on:
   push:
-    branches: [ main, master ]
     tags:
-      - 'v*'
-  pull_request:
-    branches: [ main, master ]
+      - 'v*-apk'
+      - '*-apk'
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
+    name: Build Android Mic APK
     runs-on: ubuntu-latest
 
     steps:
@@ -32,9 +34,22 @@ jobs:
         run: |
           cd apk
           gradle assembleDebug --stacktrace
+          cp app/build/outputs/apk/debug/app-debug.apk ../voxmesh-mic.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: VoxMesh-Mic-Debug-APK
-          path: apk/app/build/outputs/apk/debug/app-debug.apk
+          path: voxmesh-mic.apk
+
+      - name: Publish or Attach APK to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: voxmesh-mic.apk
+          name: "VoxMesh Mic (${{ github.ref_name }})"
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

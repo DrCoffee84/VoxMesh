@@ -15,9 +15,6 @@ if (Test-Path "icon.png") {
 }
 
 if (Test-Path "icon.ico") {
-    @"
-100 ICON "icon.ico"
-"@ | Set-Content -Path cmd\voxmesh\voxmesh.rc -Encoding ASCII
     & windres -i cmd\voxmesh\voxmesh.rc -O coff -F pe-x86-64 -o cmd\voxmesh\voxmesh_windows_amd64.syso
 }
 
