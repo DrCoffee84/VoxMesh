@@ -4,9 +4,9 @@ on:
   push:
     tags:
       - 'v*'
-    tags-ignore:
-      - '*-apk'
-      - '*apk*'
+      - '!*-apk'
+      - '!*apk*'
+  workflow_dispatch:
 
 permissions:
   contents: write
