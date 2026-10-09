@@ -81,8 +81,14 @@ func PrepareOutgoingPCM(data []byte, denoiser *RNNoise, gate NoiseGate, filterEn
 
 func PrepareOutgoingPCMWithFilters(data []byte, denoiser *RNNoise, gate NoiseGate, filterEnabled bool, vadThreshold float32, settings FilterSettings, effects *Effects) ([]byte, bool, error) {
 	if !filterEnabled {
-		return append([]byte(nil), data...), true, nil
+		samples, err := DecodePCM(data)
+		if err != nil {
+			return nil, false, err
+		}
+		ApplyPeakCeiling(samples, 27000)
+		return EncodePCM(samples), true, nil
 	}
+
 	if effects != nil {
 		var err error
 		data, err = effects.Apply(data, settings)
@@ -90,28 +96,48 @@ func PrepareOutgoingPCMWithFilters(data []byte, denoiser *RNNoise, gate NoiseGat
 			return nil, false, err
 		}
 	}
+
 	if vadThreshold <= 0 {
 		vadThreshold = 0.5
 	}
-	if !settings.RNNoiseEnabled {
-		samples, err := DecodePCM(data)
-		if err != nil {
-			return nil, false, err
+
+	// Detectar grito fuerte para no pasar por RNNoise (evita el "cirkci")
+	peakSamples, err := DecodePCM(data)
+	if err != nil {
+		return nil, false, err
+	}
+	peak := int16(0)
+	for _, s := range peakSamples {
+		a := s
+		if a < 0 {
+			a = -a
 		}
+		if a > peak {
+			peak = a
+		}
+	}
+	isLoudShout := peak > 22000
+
+	// Grito fuerte o RNNoise desactivado → camino sin RNNoise
+	if !settings.RNNoiseEnabled || isLoudShout || denoiser == nil {
+		if isLoudShout {
+			ApplyPeakCeiling(peakSamples, 24000)
+		}
+		samples := peakSamples
 		gateOpen := !settings.NoiseGateEnabled || gate.Open(samples)
 		keepOpen := !settings.NoiseGateEnabled || gateOpen
 		if effects != nil {
 			keepOpen = effects.KeepVoiceOpen(true, gateOpen, settings)
-		}
-		if effects != nil {
 			effects.SmoothTransition(samples, keepOpen)
-			ApplyPeakCeiling(samples, 27000)
 		}
+		ApplyPeakCeiling(samples, 27000)
 		if !keepOpen {
 			return nil, false, nil
 		}
 		return EncodePCM(samples), true, nil
 	}
+
+	// Voz normal → RNNoise ON
 	filtered, hasSpeech, _, err := denoiser.ProcessPCMWithOptions(data, gate, vadThreshold, settings.VADEnabled, false)
 	if err != nil {
 		return nil, false, err
@@ -120,15 +146,17 @@ func PrepareOutgoingPCMWithFilters(data []byte, denoiser *RNNoise, gate NoiseGat
 	if err != nil {
 		return nil, false, err
 	}
+
 	gateOpen := !settings.NoiseGateEnabled || gate.Open(samples)
-	keepOpen := (!hasSpeech || !gateOpen)
+	keepOpen := false
 	if effects != nil {
 		keepOpen = effects.KeepVoiceOpen(hasSpeech, gateOpen, settings)
 		effects.SmoothTransition(samples, keepOpen)
-		ApplyPeakCeiling(samples, 27000)
 	} else {
 		keepOpen = hasSpeech && gateOpen
 	}
+
+	ApplyPeakCeiling(samples, 27000)
 	if !keepOpen {
 		return nil, false, nil
 	}

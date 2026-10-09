@@ -2945,25 +2945,27 @@ func (a *App) stopConnection() {
 	a.peerNames = nil
 	a.peerMu.Unlock()
 	a.refreshPeerAvatars()
-	if a.createButton != nil {
-		a.createButton.Enable()
-	}
-	if a.stopButton != nil {
-		a.stopButton.Disable()
-	}
-	if a.topHangupBtn != nil {
-		a.topHangupBtn.Disable()
-	}
-	if a.connectButton != nil {
-		a.connectButton.Enable()
-	}
-	if a.leaveButton != nil {
-		a.leaveButton.Disable()
-	}
-	a.showConnectionPanels()
-	if a.endpointEntry != nil && a.cfg.LastPeer != "" {
-		a.endpointEntry.SetText(a.cfg.LastPeer)
-	}
+	fyne.Do(func() {
+		if a.createButton != nil {
+			a.createButton.Enable()
+		}
+		if a.stopButton != nil {
+			a.stopButton.Disable()
+		}
+		if a.topHangupBtn != nil {
+			a.topHangupBtn.Disable()
+		}
+		if a.connectButton != nil {
+			a.connectButton.Enable()
+		}
+		if a.leaveButton != nil {
+			a.leaveButton.Disable()
+		}
+		a.showConnectionPanels()
+		if a.endpointEntry != nil && a.cfg.LastPeer != "" {
+			a.endpointEntry.SetText(a.cfg.LastPeer)
+		}
+	})
 	a.setStatus("Sala detenida.")
 
 	go func() {
@@ -3078,72 +3080,95 @@ func (a *App) createHost() {
 	d.Resize(fyne.NewSize(440, 220))
 	d.Show()
 }
-
 func (a *App) openHost(roomName, username string) {
 	if a.transport != nil {
 		a.setStatus("La sala ya está activa en " + a.endpoint)
 		return
 	}
-	listenAddr := a.cfg.ListenAddress
-	if listenAddr == "" {
-		listenAddr = ":47830"
-	}
-	var udp *transport.UDP
-	var err error
-	for attempt := 0; attempt < 3; attempt++ {
-		udp, err = transport.Listen(listenAddr)
-		if err == nil {
-			break
+
+	a.setStatus("Iniciando sala, por favor espera...")
+
+	// Lanzamos todo a una goroutine para NO bloquear el hilo de la UI
+	go func() {
+		listenAddr := a.cfg.ListenAddress
+		if listenAddr == "" {
+			listenAddr = ":47830"
 		}
-		time.Sleep(200 * time.Millisecond)
-	}
-	if err != nil {
-		a.setStatus(fmt.Sprintf("No se pudo abrir el puerto %s: %s (comprueba que no haya otra copia de VoxMesh abierta)", listenAddr, err.Error()))
-		return
-	}
-	a.transport = udp
-	a.hostMode.Store(true)
-	a.cfg.RoomName = roomName
-	a.cfg.Username = username
-	if a.selfNameLabel != nil {
-		a.selfNameLabel.SetText(username)
-	}
-	a.participantID = room.ParticipantID(username, udp.Address().String())
-	state := room.New(roomName, username, udp.Address())
-	if len(state.Participants) > 0 {
-		state.Participants[0].CanBeHost = a.cfg.AllowHostMigration
-	}
-	a.roomState = state
-	a.roomStore = room.NewStore(state)
-	a.initHistory(roomName)
-	a.refreshPeersFromRoom()
-	a.pingStop = make(chan struct{})
-	a.createButton.Disable()
-	a.stopButton.Enable()
-	if a.topHangupBtn != nil {
-		a.topHangupBtn.Enable()
-	}
-	a.hideConnectionPanels()
-	port := udp.Address().Port
-	localIP, err := netinfo.LocalIPv4()
-	if err == nil && localIP != nil {
-		a.endpoint = net.JoinHostPort(localIP.String(), strconv.Itoa(port))
-	} else {
-		a.endpoint = net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
-	}
-	for i := range a.roomState.Participants {
-		if a.roomState.Participants[i].ID == a.participantID {
-			a.roomState.Participants[i].Address = a.endpoint
-			break
+		var udp *transport.UDP
+		var err error
+		for attempt := 0; attempt < 3; attempt++ {
+			udp, err = transport.Listen(listenAddr)
+			if err == nil {
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
 		}
-	}
-	a.setStatus("Sala abierta en UDP " + strconv.Itoa(port) + "; buscando IP pública...")
-	go a.receiveLoop(udp)
-	go a.pingPeers(udp, a.pingStop)
-	go a.sweepAssetLoop(udp, a.pingStop)
-	a.startAudio(udp, nil, true)
-	go a.configureHostNetwork(port)
-	a.playEventSound(audio.SFXConnect)
+		if err != nil {
+			a.setStatus(fmt.Sprintf("No se pudo abrir el puerto %s: %s (comprueba que no haya otra copia abierta)", listenAddr, err.Error()))
+			return
+		}
+
+		a.transport = udp
+		a.hostMode.Store(true)
+		a.cfg.RoomName = roomName
+		a.cfg.Username = username
+
+		a.participantID = room.ParticipantID(username, udp.Address().String())
+		state := room.New(roomName, username, udp.Address())
+		if len(state.Participants) > 0 {
+			state.Participants[0].CanBeHost = a.cfg.AllowHostMigration
+		}
+		a.roomState = state
+		a.roomStore = room.NewStore(state)
+
+		// Operaciones de disco
+		a.initHistory(roomName)
+		a.refreshPeersFromRoom()
+
+		a.pingStop = make(chan struct{})
+
+		port := udp.Address().Port
+		localIP, err := netinfo.LocalIPv4()
+		if err == nil && localIP != nil {
+			a.endpoint = net.JoinHostPort(localIP.String(), strconv.Itoa(port))
+		} else {
+			a.endpoint = net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+		}
+		for i := range a.roomState.Participants {
+			if a.roomState.Participants[i].ID == a.participantID {
+				a.roomState.Participants[i].Address = a.endpoint
+				break
+			}
+		}
+
+		a.setStatus("Sala abierta en UDP " + strconv.Itoa(port) + "; buscando IP pública...")
+
+		go a.receiveLoop(udp)
+		go a.pingPeers(udp, a.pingStop)
+		go a.sweepAssetLoop(udp, a.pingStop)
+
+		// Inicialización del hardware de audio (Suele ser lo que más traba)
+		a.startAudio(udp, nil, true)
+		go a.configureHostNetwork(port)
+		a.playEventSound(audio.SFXConnect)
+
+		// Cualquier actualización visual tiene que ir obligatoriamente en fyne.Do
+		fyne.Do(func() {
+			if a.selfNameLabel != nil {
+				a.selfNameLabel.SetText(username)
+			}
+			if a.createButton != nil {
+				a.createButton.Disable()
+			}
+			if a.stopButton != nil {
+				a.stopButton.Enable()
+			}
+			if a.topHangupBtn != nil {
+				a.topHangupBtn.Enable()
+			}
+			a.hideConnectionPanels()
+		})
+	}()
 }
 
 func (a *App) configureHostNetwork(port int) {
@@ -3199,73 +3224,121 @@ func (a *App) connectClient(raw string) {
 	if !strings.Contains(raw, ":") {
 		raw = net.JoinHostPort(raw, "47830")
 	}
-	addr, err := net.ResolveUDPAddr("udp", raw)
-	if err != nil {
-		a.setStatus("Dirección inválida: " + err.Error())
-		return
+
+	a.setStatus("Conectando con " + raw + "...")
+
+	// Deshabilitar botones YA en el hilo de UI para feedback inmediato
+	if a.connectButton != nil {
+		a.connectButton.Disable()
 	}
-	listenAddr := a.cfg.ListenAddress
-	if listenAddr == "" {
-		listenAddr = ":47830"
+	if a.leaveButton != nil {
+		a.leaveButton.Enable()
 	}
-	udp, err := transport.Listen(listenAddr)
-	if err != nil {
-		if listenAddr != ":0" {
-			udp, err = transport.Listen(":0")
-		}
-		if err != nil {
-			a.setStatus("No se pudo abrir UDP: " + err.Error())
-			return
-		}
-	}
-	a.transport = udp
-	a.hostMode.Store(false)
-	a.connectButton.Disable()
-	a.leaveButton.Enable()
 	if a.topHangupBtn != nil {
 		a.topHangupBtn.Enable()
 	}
-	a.cfg.RoomName = strings.TrimSpace(a.cfg.RoomName)
-	if a.selfNameLabel != nil {
-		a.selfNameLabel.SetText(a.cfg.Username)
-	}
-	a.participantID = room.ParticipantID(a.cfg.Username, udp.Address().String())
-	a.roomState = room.State{Name: a.cfg.RoomName, Participants: []room.Participant{{
-		ID:          a.participantID,
-		Username:    a.cfg.Username,
-		Address:     udp.Address().String(),
-		Order:       0,
-		Connected:   true,
-		CanBeHost:   a.cfg.AllowHostMigration,
-		LastSeenUTC: time.Now().UTC(),
-	}}}
-	a.initHistory(a.cfg.RoomName)
-	a.refreshPeersFromRoom()
-	a.cfg.LastPeer = raw
-	_ = config.Save(a.cfgPath, a.cfg)
-	if a.endpointEntry != nil {
-		a.endpointEntry.SetText(raw)
-	}
-	a.endpoint = addr.String()
-	participant := room.Participant{
-		ID:          a.participantID,
-		Username:    a.cfg.Username,
-		Address:     udp.Address().String(),
-		Connected:   true,
-		CanBeHost:   a.cfg.AllowHostMigration,
-		LastSeenUTC: time.Now().UTC(),
-	}
-	payload, _ := room.Encode(room.Envelope{Kind: room.HelloMessage, Room: &a.roomState, Participant: &participant})
-	_ = udp.Send(addr, transport.Packet{Kind: transport.PacketRoomHello, Sequence: a.sequence.Add(1), Payload: payload})
-	a.setStatus("Conectando con " + raw)
-	a.startAudio(udp, addr, false)
-	a.lastHostSeen.Store(time.Now().UnixNano())
-	go a.receiveLoop(udp)
-	a.monitorStop = make(chan struct{})
-	go a.monitorHost(udp, a.monitorStop)
-	go a.sweepAssetLoop(udp, a.monitorStop)
-	a.hideConnectionPanels()
-	a.playEventSound(audio.SFXConnect)
+
+	go func() {
+		addr, err := net.ResolveUDPAddr("udp", raw)
+		if err != nil {
+			a.setStatus("Dirección inválida: " + err.Error())
+			fyne.Do(func() {
+				if a.connectButton != nil {
+					a.connectButton.Enable()
+				}
+				if a.leaveButton != nil {
+					a.leaveButton.Disable()
+				}
+				if a.topHangupBtn != nil {
+					a.topHangupBtn.Disable()
+				}
+			})
+			return
+		}
+
+		listenAddr := a.cfg.ListenAddress
+		if listenAddr == "" {
+			listenAddr = ":47830"
+		}
+		udp, err := transport.Listen(listenAddr)
+		if err != nil {
+			if listenAddr != ":0" {
+				udp, err = transport.Listen(":0")
+			}
+			if err != nil {
+				a.setStatus("No se pudo abrir UDP: " + err.Error())
+				fyne.Do(func() {
+					if a.connectButton != nil {
+						a.connectButton.Enable()
+					}
+					if a.leaveButton != nil {
+						a.leaveButton.Disable()
+					}
+					if a.topHangupBtn != nil {
+						a.topHangupBtn.Disable()
+					}
+				})
+				return
+			}
+		}
+
+		a.transport = udp
+		a.hostMode.Store(false)
+		a.cfg.RoomName = strings.TrimSpace(a.cfg.RoomName)
+		a.participantID = room.ParticipantID(a.cfg.Username, udp.Address().String())
+		a.roomState = room.State{Name: a.cfg.RoomName, Participants: []room.Participant{{
+			ID:          a.participantID,
+			Username:    a.cfg.Username,
+			Address:     udp.Address().String(),
+			Order:       0,
+			Connected:   true,
+			CanBeHost:   a.cfg.AllowHostMigration,
+			LastSeenUTC: time.Now().UTC(),
+		}}}
+
+		// Disco + peers (puede tardar)
+		a.initHistory(a.cfg.RoomName)
+		a.refreshPeersFromRoom()
+
+		a.cfg.LastPeer = raw
+		_ = config.Save(a.cfgPath, a.cfg)
+
+		a.endpoint = addr.String()
+		participant := room.Participant{
+			ID:          a.participantID,
+			Username:    a.cfg.Username,
+			Address:     udp.Address().String(),
+			Connected:   true,
+			CanBeHost:   a.cfg.AllowHostMigration,
+			LastSeenUTC: time.Now().UTC(),
+		}
+		payload, _ := room.Encode(room.Envelope{Kind: room.HelloMessage, Room: &a.roomState, Participant: &participant})
+		_ = udp.Send(addr, transport.Packet{Kind: transport.PacketRoomHello, Sequence: a.sequence.Add(1), Payload: payload})
+
+		a.setStatus("Conectando con " + raw)
+
+		// Audio (lo más pesado)
+		a.startAudio(udp, addr, false)
+		a.lastHostSeen.Store(time.Now().UnixNano())
+
+		go a.receiveLoop(udp)
+		a.monitorStop = make(chan struct{})
+		go a.monitorHost(udp, a.monitorStop)
+		go a.sweepAssetLoop(udp, a.monitorStop)
+
+		a.playEventSound(audio.SFXConnect)
+
+		// Todo lo visual en fyne.Do
+		fyne.Do(func() {
+			if a.selfNameLabel != nil {
+				a.selfNameLabel.SetText(a.cfg.Username)
+			}
+			if a.endpointEntry != nil {
+				a.endpointEntry.SetText(raw)
+			}
+			a.hideConnectionPanels()
+		})
+	}()
 }
 
 func (a *App) startAudio(udp *transport.UDP, peer *net.UDPAddr, host bool) {
@@ -3863,18 +3936,29 @@ func (a *App) refreshPeerAvatars() {
 	if a.peerHBox == nil {
 		return
 	}
+
+	// 1. Clonar los datos rápidamente bajo lock y liberarlo INMEDIATAMENTE
+	// Esto evita que el loop de red colisione con el hilo gráfico (Fyne).
+	a.peerMu.RLock()
+	peers := make([]peerView, len(a.peerNames))
+	copy(peers, a.peerNames)
+	a.peerMu.RUnlock()
+
+	// 2. Ejecutar la actualización visual asincrónica en Fyne
 	fyne.Do(func() {
-		a.peerMu.RLock()
-		defer a.peerMu.RUnlock()
-		if len(a.peerNames) == 0 {
+		if a.peerHBox == nil {
+			return
+		}
+		if len(peers) == 0 {
 			a.peerHBox.Objects = []fyne.CanvasObject{widget.NewLabel("Sin usuarios")}
 			a.peerHBox.Refresh()
 			return
 		}
+
 		now := time.Now()
-		if len(a.peerHBox.Objects) == len(a.peerNames) {
+		if len(a.peerHBox.Objects) == len(peers) {
 			canUpdateInPlace := true
-			for i, peer := range a.peerNames {
+			for i, peer := range peers {
 				chip, ok := a.peerHBox.Objects[i].(*fyne.Container)
 				if !ok || len(chip.Objects) < 2 {
 					canUpdateInPlace = false
@@ -3956,8 +4040,8 @@ func (a *App) refreshPeerAvatars() {
 			}
 		}
 
-		objects := make([]fyne.CanvasObject, 0, len(a.peerNames))
-		for _, peer := range a.peerNames {
+		objects := make([]fyne.CanvasObject, 0, len(peers))
+		for _, peer := range peers {
 			p := peer
 			initial := "U"
 			trimmed := strings.TrimSpace(p.name)
@@ -4146,4 +4230,3 @@ func (a *App) executeAutoUpdate(info *updater.ReleaseInfo) {
 		}
 	}()
 }
-

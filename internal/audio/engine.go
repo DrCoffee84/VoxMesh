@@ -51,24 +51,37 @@ func applyFadeIn(pcm []byte, ramp int) {
 	}
 }
 
-func softClip(sample int32) int16 {
-	if sample > 30000 {
-		excess := float64(sample - 30000)
-		compressed := 30000.0 + 2700.0*(excess/(excess+3000.0))
-		if compressed > 32767 {
-			return 32767
-		}
-		return int16(compressed)
+// limitFrame ajusta el volumen de un frame de audio si su pico supera un umbral dado.
+func limitFrame(pcm []byte, threshold int16) {
+	if len(pcm) < 2 {
+		return
 	}
-	if sample < -30000 {
-		excess := float64(-sample - 30000)
-		compressed := -(30000.0 + 2700.0*(excess/(excess+3000.0)))
-		if compressed < -32768 {
-			return -32768
+
+	// 1. Encontrar el pico absoluto del frame
+	var peak int16
+	for i := 0; i+1 < len(pcm); i += 2 {
+		sample := int16(binary.LittleEndian.Uint16(pcm[i : i+2]))
+		if sample < 0 {
+			sample = -sample
 		}
-		return int16(compressed)
+		if sample > peak {
+			peak = sample
+		}
 	}
-	return int16(sample)
+
+	if peak <= threshold {
+		return // no hace falta tocar nada
+	}
+
+	// 2. Calcular cuánto hay que bajar el volumen
+	scale := float64(threshold) / float64(peak)
+
+	// 3. Aplicar la atenuación a todo el frame
+	for i := 0; i+1 < len(pcm); i += 2 {
+		sample := int16(binary.LittleEndian.Uint16(pcm[i : i+2]))
+		scaled := int16(float64(sample) * scale)
+		binary.LittleEndian.PutUint16(pcm[i:i+2], uint16(scaled))
+	}
 }
 
 func (e *Engine) SetJitterBufferMS(ms int) {
@@ -92,6 +105,7 @@ func NewEngine(inputName, outputName string, onFrame func([]byte)) (*Engine, err
 		captureFrames:  make(chan []byte, 8),
 		streams:        make(map[string]*audioStream),
 		jitterBufferMS: 120,
+		mixBuffer:      make([]int32, 4096), // pre-allocado
 	}
 	inputID, err := findDeviceID(context, malgo.Capture, inputName)
 	if err != nil {
@@ -144,14 +158,13 @@ func NewEngine(inputName, outputName string, onFrame func([]byte)) (*Engine, err
 	}
 	playback, err := malgo.InitDevice(context.Context, playbackConfig, malgo.DeviceCallbacks{
 		Data: func(output, _ []byte, _ uint32) {
-			engine.playbackMu.Lock()
-			defer engine.playbackMu.Unlock()
-
 			samples := len(output) / 2
 			if samples == 0 {
 				return
 			}
 
+			// --- Lock corto: solo copiamos referencias ---
+			engine.playbackMu.Lock()
 			if len(engine.mixBuffer) < samples {
 				engine.mixBuffer = make([]int32, samples)
 			} else {
@@ -166,14 +179,32 @@ func NewEngine(inputName, outputName string, onFrame func([]byte)) (*Engine, err
 				targetBytes = streamFrameBytes
 			}
 
+			// Trabajamos sobre una lista temporal de streams activos
+			type activeStream struct {
+				id     string
+				stream *audioStream
+			}
+			actives := make([]activeStream, 0, len(engine.streams))
 			for id, stream := range engine.streams {
+				actives = append(actives, activeStream{id: id, stream: stream})
+			}
+			engine.playbackMu.Unlock()
+			// --- Fin del lock corto ---
+
+			// Mezclado fuera del lock
+			for _, as := range actives {
+				stream := as.stream
+				id := as.id
+
 				if len(stream.buffer) == 0 {
-					// Purgar streams inactivos tras 2 segundos sin paquetes de audio
+					// Purgar streams inactivos
 					if now.Sub(stream.lastActive) > 2*time.Second {
+						engine.playbackMu.Lock()
 						delete(engine.streams, id)
+						engine.playbackMu.Unlock()
 						continue
 					}
-					// Silencio real prolongado (> 300 ms)
+					// Silencio real prolongado
 					if now.Sub(stream.lastActive) > 300*time.Millisecond {
 						stream.buffering = true
 					}
@@ -188,7 +219,7 @@ func NewEngine(inputName, outputName string, onFrame func([]byte)) (*Engine, err
 					continue
 				}
 
-				// Pre-buffering al arrancar una frase
+				// Pre-buffering
 				if stream.buffering && id != "__sfx__" && id != "__local__" {
 					if len(stream.buffer) < targetBytes {
 						continue
@@ -212,10 +243,14 @@ func NewEngine(inputName, outputName string, onFrame func([]byte)) (*Engine, err
 				}
 
 				consumedBytes := samplesToRead * 2
-				stream.buffer = stream.buffer[consumedBytes:]
+				// Movemos el buffer sin realloc innecesario
+				if consumedBytes > 0 {
+					copy(stream.buffer, stream.buffer[consumedBytes:])
+					stream.buffer = stream.buffer[:len(stream.buffer)-consumedBytes]
+				}
 
 				if samplesToRead < samples {
-					// Micro-bache (paquete con retraso): suavizar hacia cero sin frenar el flujo futuro
+					// Micro-bache
 					decay := stream.lastSample
 					for i := samplesToRead; i < samplesToRead+antiClickSamples && i < samples; i++ {
 						decay = int16(float64(decay) * 0.8)
@@ -225,12 +260,19 @@ func NewEngine(inputName, outputName string, onFrame func([]byte)) (*Engine, err
 				}
 			}
 
-			// Renderizar a output con limitador soft-knee anti-clipping
 			for i := 0; i < samples; i++ {
+				// Soft safety (por si acaso)
 				sum := engine.mixBuffer[i]
-				clipped := softClip(sum)
-				binary.LittleEndian.PutUint16(output[i*2:i*2+2], uint16(clipped))
+				if sum > 32767 {
+					sum = 32767
+				} else if sum < -32768 {
+					sum = -32768
+				}
+				binary.LittleEndian.PutUint16(output[i*2:i*2+2], uint16(int16(sum)))
 			}
+
+			// Baja el volumen del frame completo si está muy fuerte (suena limpio)
+			limitFrame(output, 30000) // 30000 ≈ -0.7 dBFS
 		},
 	})
 	if err != nil {
@@ -238,6 +280,7 @@ func NewEngine(inputName, outputName string, onFrame func([]byte)) (*Engine, err
 		return nil, fmt.Errorf("abrir salida: %w", err)
 	}
 	engine.playback = playback
+
 	if err := engine.capture.Start(); err != nil {
 		engine.Stop()
 		return nil, fmt.Errorf("iniciar micrófono: %w", err)
@@ -246,6 +289,7 @@ func NewEngine(inputName, outputName string, onFrame func([]byte)) (*Engine, err
 		engine.Stop()
 		return nil, fmt.Errorf("iniciar salida: %w", err)
 	}
+
 	go func() {
 		for frame := range engine.captureFrames {
 			onFrame(frame)
@@ -272,33 +316,38 @@ func (e *Engine) PlayStream(senderID string, data []byte) {
 	now := time.Now()
 	stream, exists := e.streams[senderID]
 	if !exists {
+		// Pre-allocamos capacidad razonable para evitar reallocs frecuentes
 		stream = &audioStream{
+			buffer:     make([]byte, 0, streamFrameBytes*16),
 			buffering:  true,
 			lastActive: now,
 		}
 		e.streams[senderID] = stream
 	} else if now.Sub(stream.lastActive) > 300*time.Millisecond {
-		// Silencio real: reiniciar cushion para el comienzo de la próxima frase
 		stream.buffering = true
 	}
 
-	// SFX y monitor local suenan al instante sin retardo
+	// SFX y monitor local sin buffer
 	if senderID == "__sfx__" || senderID == "__local__" {
 		stream.buffering = false
 	}
 
+	// Append eficiente
 	stream.buffer = append(stream.buffer, data...)
 	stream.lastActive = now
 
-	// Límite de retención para evitar acumulación excesiva de latencia (delay drift)
+	// Control de latencia (delay drift)
 	targetBytes := (e.jitterBufferMS / 20) * streamFrameBytes
 	if targetBytes < streamFrameBytes {
 		targetBytes = streamFrameBytes
 	}
 	maxBytes := targetBytes * 2
+
 	if len(stream.buffer) > maxBytes {
+		// Descartamos lo más viejo de forma eficiente
 		keep := targetBytes
-		stream.buffer = stream.buffer[len(stream.buffer)-keep:]
+		copy(stream.buffer, stream.buffer[len(stream.buffer)-keep:])
+		stream.buffer = stream.buffer[:keep]
 	}
 }
 
