@@ -5,16 +5,51 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
+
+const (
+	LevelError   = 0 // 0 = Solo Errores (Default)
+	LevelControl = 1 // 1 = Debug Normal (Control)
+	LevelTrace   = 2 // 2 = Debug Avanzado (Trace)
+)
+
+var currentLevel atomic.Int32
 
 var state struct {
 	sync.Mutex
 	logger *log.Logger
 	file   *os.File
+}
+
+// SetLevel establece el nivel global de logging (0: Error, 1: Control, 2: Trace).
+func SetLevel(level int) {
+	if level < LevelError {
+		level = LevelError
+	} else if level > LevelTrace {
+		level = LevelTrace
+	}
+	currentLevel.Store(int32(level))
+}
+
+// GetLevel retorna el nivel actual de logging.
+func GetLevel() int {
+	return int(currentLevel.Load())
+}
+
+// IsControl indica si los logs de nivel Control (Nivel 1 o superior) están activos.
+func IsControl() bool {
+	return currentLevel.Load() >= LevelControl
+}
+
+// IsTrace indica si los logs de nivel Trace (Nivel 2) están activos.
+func IsTrace() bool {
+	return currentLevel.Load() >= LevelTrace
 }
 
 func Start() error {
@@ -49,6 +84,7 @@ func Directory() (string, error) {
 	return filepath.Join(root, "VoxMesh"), nil
 }
 
+// Errorf registra errores (siempre activo, Nivel 0+).
 func Errorf(format string, args ...any) {
 	state.Lock()
 	defer state.Unlock()
@@ -57,7 +93,11 @@ func Errorf(format string, args ...any) {
 	}
 }
 
+// Infof registra mensajes de control o informativos (activo en Nivel 1 y Nivel 2).
 func Infof(format string, args ...any) {
+	if currentLevel.Load() < LevelControl {
+		return
+	}
 	state.Lock()
 	defer state.Unlock()
 	if state.logger != nil {
@@ -65,8 +105,37 @@ func Infof(format string, args ...any) {
 	}
 }
 
+// Controlf es un alias semántico de Infof para eventos del plano de control (Nivel 1+).
+func Controlf(format string, args ...any) {
+	Infof(format, args...)
+}
+
+// Tracef registra eventos de alta frecuencia, paquetes y bloqueos (activo solo en Nivel 2).
+func Tracef(format string, args ...any) {
+	if currentLevel.Load() < LevelTrace {
+		return
+	}
+	state.Lock()
+	defer state.Unlock()
+	if state.logger != nil {
+		state.logger.Printf("TRACE "+format, args...)
+	}
+}
+
+// Panic registra un pánico con su traza de pila completa (Nivel 0+).
 func Panic(value any) {
 	Errorf("panic: %v\n%s", value, debug.Stack())
+}
+
+// Recover captura un recover() y registra el pánico y stack trace si ocurrió.
+func Recover(ctx string) {
+	if value := recover(); value != nil {
+		if ctx != "" {
+			Errorf("panic [%s]: %v\n%s", ctx, value, debug.Stack())
+		} else {
+			Panic(value)
+		}
+	}
 }
 
 func Close() {
@@ -100,4 +169,109 @@ func FormatError(err error) string {
 		return ""
 	}
 	return fmt.Sprintf("%T: %v", err, err)
+}
+
+// TracedRWMutex envuelve sync.RWMutex y provee trazabilidad detallada
+// en Nivel 2 (Trace) para detectar bloqueos y deadlocks sin penalizar
+// el rendimiento en Nivel 0 o Nivel 1.
+type TracedRWMutex struct {
+	mu   sync.RWMutex
+	name string
+}
+
+func NewTracedRWMutex(name string) TracedRWMutex {
+	return TracedRWMutex{name: name}
+}
+
+func (m *TracedRWMutex) SetName(name string) {
+	m.name = name
+}
+
+func (m *TracedRWMutex) Name() string {
+	if m.name != "" {
+		return m.name
+	}
+	return "RWMutex"
+}
+
+func callerFileAndLine() string {
+	_, file, line, ok := runtime.Caller(2)
+	if !ok {
+		return "desconocido"
+	}
+	return fmt.Sprintf("%s:%d", filepath.Base(file), line)
+}
+
+func (m *TracedRWMutex) Lock() {
+	if !IsTrace() {
+		m.mu.Lock()
+		return
+	}
+	name := m.Name()
+	caller := callerFileAndLine()
+	Tracef("[%s] esperando Lock() en %s...", name, caller)
+	start := time.Now()
+	m.mu.Lock()
+	Tracef("[%s] adquirido Lock() en %s tras %v", name, caller, time.Since(start))
+}
+
+func (m *TracedRWMutex) Unlock() {
+	if !IsTrace() {
+		m.mu.Unlock()
+		return
+	}
+	name := m.Name()
+	caller := callerFileAndLine()
+	m.mu.Unlock()
+	Tracef("[%s] liberado Lock() en %s", name, caller)
+}
+
+func (m *TracedRWMutex) RLock() {
+	if !IsTrace() {
+		m.mu.RLock()
+		return
+	}
+	name := m.Name()
+	caller := callerFileAndLine()
+	Tracef("[%s] esperando RLock() en %s...", name, caller)
+	start := time.Now()
+	m.mu.RLock()
+	Tracef("[%s] adquirido RLock() en %s tras %v", name, caller, time.Since(start))
+}
+
+func (m *TracedRWMutex) RUnlock() {
+	if !IsTrace() {
+		m.mu.RUnlock()
+		return
+	}
+	name := m.Name()
+	caller := callerFileAndLine()
+	m.mu.RUnlock()
+	Tracef("[%s] liberado RUnlock() en %s", name, caller)
+}
+
+func (m *TracedRWMutex) TryLock() bool {
+	if !IsTrace() {
+		return m.mu.TryLock()
+	}
+	name := m.Name()
+	caller := callerFileAndLine()
+	ok := m.mu.TryLock()
+	Tracef("[%s] TryLock() en %s = %v", name, caller, ok)
+	return ok
+}
+
+func (m *TracedRWMutex) TryRLock() bool {
+	if !IsTrace() {
+		return m.mu.TryRLock()
+	}
+	name := m.Name()
+	caller := callerFileAndLine()
+	ok := m.mu.TryRLock()
+	Tracef("[%s] TryRLock() en %s = %v", name, caller, ok)
+	return ok
+}
+
+func (m *TracedRWMutex) RLocker() sync.Locker {
+	return m.mu.RLocker()
 }

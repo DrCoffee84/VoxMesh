@@ -24,6 +24,8 @@ import (
 
 	"github.com/skip2/go-qrcode"
 	"nhooyr.io/websocket"
+
+	"voxmesh/internal/logging"
 )
 
 const (
@@ -37,7 +39,7 @@ const (
 )
 
 type Server struct {
-	mu              sync.RWMutex
+	mu              logging.TracedRWMutex
 	listener        net.Listener
 	http            *http.Server
 	url             string
@@ -83,7 +85,18 @@ func Start(token string, port int, bufferEnabled bool, bufferMS int, username st
 	}
 	bufferMS = normalizeBufferMS(bufferMS)
 	prebufferFrames := (bufferMS + int(frameDuration/time.Millisecond) - 1) / int(frameDuration/time.Millisecond)
-	server := &Server{listener: listener, token: token, username: username, onPCM: onPCM, onStatus: onStatus, frames: make(chan []byte, prebufferFrames+12), bufferEnabled: bufferEnabled, prebufferFrames: prebufferFrames, done: make(chan struct{})}
+	server := &Server{
+		mu:              logging.NewTracedRWMutex("phonemic.ServerMu"),
+		listener:        listener,
+		token:           token,
+		username:        username,
+		onPCM:           onPCM,
+		onStatus:        onStatus,
+		frames:          make(chan []byte, prebufferFrames+12),
+		bufferEnabled:   bufferEnabled,
+		prebufferFrames: prebufferFrames,
+		done:            make(chan struct{}),
+	}
 	actualPort := listener.Addr().(*net.TCPAddr).Port
 	server.url = fmt.Sprintf("https://%s/?token=%s", net.JoinHostPort(localIP.String(), fmt.Sprintf("%d", actualPort)), token)
 	if udpAddr, err := net.ResolveUDPAddr("udp4", net.JoinHostPort("", strconv.Itoa(actualPort))); err == nil {

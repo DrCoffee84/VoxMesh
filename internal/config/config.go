@@ -65,6 +65,7 @@ type Config struct {
 	JitterBufferMS        int               `json:"jitter_buffer_ms"`
 	EventSoundsEnabled    bool              `json:"event_sounds_enabled"`
 	AllowHostMigration    bool              `json:"allow_host_migration"`
+	LogLevel              int               `json:"log_level"`
 }
 
 func Default() Config {
@@ -107,6 +108,7 @@ func Default() Config {
 		JitterBufferMS:        120,
 		EventSoundsEnabled:    true,
 		AllowHostMigration:    true,
+		LogLevel:              0,
 	}
 }
 
@@ -140,6 +142,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.JitterBufferMS < 40 || cfg.JitterBufferMS > 500 {
 		cfg.JitterBufferMS = 120
+	}
+	if cfg.LogLevel < 0 || cfg.LogLevel > 2 {
+		cfg.LogLevel = 0
 	}
 	return cfg, nil
 }

@@ -9,11 +9,7 @@ Actúa como un Senior Go Software Engineer especializado en concurrencia, desarr
 Realiza estrictamente lo siguiente:
 
 ### 1. REVISIÓN Y OPTIMIZACIÓN DEL MOTOR DE AUDIO (Hot Path)
-Reordena y unifica los cambios dispersos que hice en `PrepareOutgoingPCMWithFilters`, `ApplyPeakCeiling`, `engine.go` (playback / `PlayStream`) y helpers de limitación:
-- **Cero Allocs:** Evita decodificar PCM dos veces si se puede reutilizar. Elimina allocs innecesarios en el *hot path* de audio.
-- **Locks:** Usa locks más cortos en el callback de playback. Realiza la mezcla algebraica fuera del lock cuando sea posible.
-- **Race conditions:** Revisa y arregla posibles *races* en los mapas de streams (`streams map[string]*audioStream`).
-- **Consistencia:** Asegura que los paths con/sin filtros y con/sin RNNoise sean consistentes. Verifica que el techo de picos funcione solo como *safety anti-clip* (~27000) y que el control fino de los gritos siga respetando mi implementación del limitador con `tanh`.
+hecho
 
 ### 2. SISTEMA DE LOGGING ESTRUCTURADO (TIERS) EN UI
 Reemplaza cualquier booleano de logs en la configuración por un entero `LogLevel` (0 = Solo Errores, 1 = Debug Normal, 2 = Debug Avanzado). En Fyne (tarjeta "Interfaz y Sistema"), agrega un control visual para elegir esto.

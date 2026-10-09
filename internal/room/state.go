@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"net"
 	"sort"
-	"sync"
 	"time"
+
+	"voxmesh/internal/logging"
 )
 
 type Participant struct {
@@ -129,11 +130,16 @@ func (s State) Validate() error {
 }
 
 type Store struct {
-	mu    sync.RWMutex
+	mu    logging.TracedRWMutex
 	state State
 }
 
-func NewStore(state State) *Store { return &Store{state: state} }
+func NewStore(state State) *Store {
+	return &Store{
+		mu:    logging.NewTracedRWMutex("room.StoreMu"),
+		state: state,
+	}
+}
 
 func (s *Store) Snapshot() State {
 	s.mu.RLock()

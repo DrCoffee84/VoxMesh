@@ -23,6 +23,14 @@ type audioStream struct {
 	lastActive time.Time
 }
 
+type streamWorkItem struct {
+	chunk       []byte
+	samples     int
+	lastSample  int16
+	applyFadeIn bool
+	hasGap      bool
+}
+
 type Engine struct {
 	context       *malgo.AllocatedContext
 	capture       *malgo.Device
@@ -36,6 +44,29 @@ type Engine struct {
 	mixBuffer      []int32
 	playbackMu     sync.Mutex
 	jitterBufferMS int
+
+	workItems     []streamWorkItem
+	scratchBuffer []byte
+}
+
+func softClip(sample int32) int16 {
+	if sample > 30000 {
+		excess := float64(sample - 30000)
+		compressed := 30000.0 + 2700.0*(excess/(excess+3000.0))
+		if compressed > 32767 {
+			return 32767
+		}
+		return int16(compressed)
+	}
+	if sample < -30000 {
+		excess := float64(-sample - 30000)
+		compressed := -(30000.0 + 2700.0*(excess/(excess+3000.0)))
+		if compressed < -32768 {
+			return -32768
+		}
+		return int16(compressed)
+	}
+	return int16(sample)
 }
 
 func applyFadeIn(pcm []byte, ramp int) {
@@ -105,7 +136,9 @@ func NewEngine(inputName, outputName string, onFrame func([]byte)) (*Engine, err
 		captureFrames:  make(chan []byte, 8),
 		streams:        make(map[string]*audioStream),
 		jitterBufferMS: 120,
-		mixBuffer:      make([]int32, 4096), // pre-allocado
+		mixBuffer:      make([]int32, 4096),
+		workItems:      make([]streamWorkItem, 0, 16),
+		scratchBuffer:  make([]byte, 4096*2),
 	}
 	inputID, err := findDeviceID(context, malgo.Capture, inputName)
 	if err != nil {
@@ -133,7 +166,8 @@ func NewEngine(inputName, outputName string, onFrame func([]byte)) (*Engine, err
 			for len(engine.captureBuffer) >= streamFrameBytes {
 				frame := make([]byte, streamFrameBytes)
 				copy(frame, engine.captureBuffer[:streamFrameBytes])
-				engine.captureBuffer = engine.captureBuffer[streamFrameBytes:]
+				copy(engine.captureBuffer, engine.captureBuffer[streamFrameBytes:])
+				engine.captureBuffer = engine.captureBuffer[:len(engine.captureBuffer)-streamFrameBytes]
 				select {
 				case engine.captureFrames <- frame:
 				default:
@@ -163,14 +197,11 @@ func NewEngine(inputName, outputName string, onFrame func([]byte)) (*Engine, err
 				return
 			}
 
-			// --- Lock corto: solo copiamos referencias ---
+			// --- Lock corto: inspección de streams y extracción de chunks ---
 			engine.playbackMu.Lock()
-			if len(engine.mixBuffer) < samples {
-				engine.mixBuffer = make([]int32, samples)
-			} else {
-				for i := 0; i < samples; i++ {
-					engine.mixBuffer[i] = 0
-				}
+			if engine.streams == nil {
+				engine.playbackMu.Unlock()
+				return
 			}
 
 			now := time.Now()
@@ -179,54 +210,46 @@ func NewEngine(inputName, outputName string, onFrame func([]byte)) (*Engine, err
 				targetBytes = streamFrameBytes
 			}
 
-			// Trabajamos sobre una lista temporal de streams activos
-			type activeStream struct {
-				id     string
-				stream *audioStream
+			numStreams := len(engine.streams)
+			neededScratch := numStreams * samples * 2
+			if len(engine.scratchBuffer) < neededScratch {
+				engine.scratchBuffer = make([]byte, neededScratch)
 			}
-			actives := make([]activeStream, 0, len(engine.streams))
+			scratchOffset := 0
+
+			engine.workItems = engine.workItems[:0]
+
 			for id, stream := range engine.streams {
-				actives = append(actives, activeStream{id: id, stream: stream})
-			}
-			engine.playbackMu.Unlock()
-			// --- Fin del lock corto ---
-
-			// Mezclado fuera del lock
-			for _, as := range actives {
-				stream := as.stream
-				id := as.id
-
 				if len(stream.buffer) == 0 {
-					// Purgar streams inactivos
+					// Purgar streams inactivos tras 2 segundos sin paquetes de audio
 					if now.Sub(stream.lastActive) > 2*time.Second {
-						engine.playbackMu.Lock()
 						delete(engine.streams, id)
-						engine.playbackMu.Unlock()
 						continue
 					}
-					// Silencio real prolongado
+					// Silencio real prolongado (> 300 ms)
 					if now.Sub(stream.lastActive) > 300*time.Millisecond {
 						stream.buffering = true
 					}
 					if stream.lastSample != 0 {
-						decay := stream.lastSample
-						for i := 0; i < antiClickSamples && i < samples; i++ {
-							decay = int16(float64(decay) * 0.8)
-							engine.mixBuffer[i] += int32(decay)
-						}
+						engine.workItems = append(engine.workItems, streamWorkItem{
+							samples:    0,
+							lastSample: stream.lastSample,
+							hasGap:     true,
+						})
 						stream.lastSample = 0
 					}
 					continue
 				}
 
-				// Pre-buffering
+				// Pre-buffering al arrancar una frase
+				applyFade := false
 				if stream.buffering && id != "__sfx__" && id != "__local__" {
 					if len(stream.buffer) < targetBytes {
 						continue
 					}
 					stream.buffering = false
 					if stream.lastSample == 0 {
-						applyFadeIn(stream.buffer, antiClickSamples)
+						applyFade = true
 					}
 				}
 
@@ -236,39 +259,75 @@ func NewEngine(inputName, outputName string, onFrame func([]byte)) (*Engine, err
 					samplesToRead = streamSamples
 				}
 
-				for i := 0; i < samplesToRead; i++ {
-					val := int16(binary.LittleEndian.Uint16(stream.buffer[i*2 : i*2+2]))
-					engine.mixBuffer[i] += int32(val)
-					stream.lastSample = val
-				}
-
 				consumedBytes := samplesToRead * 2
-				// Movemos el buffer sin realloc innecesario
+				var chunk []byte
 				if consumedBytes > 0 {
+					chunk = engine.scratchBuffer[scratchOffset : scratchOffset+consumedBytes]
+					copy(chunk, stream.buffer[:consumedBytes])
+					scratchOffset += consumedBytes
+
+					// Movemos el buffer sin realloc innecesario
 					copy(stream.buffer, stream.buffer[consumedBytes:])
 					stream.buffer = stream.buffer[:len(stream.buffer)-consumedBytes]
 				}
 
-				if samplesToRead < samples {
-					// Micro-bache
-					decay := stream.lastSample
-					for i := samplesToRead; i < samplesToRead+antiClickSamples && i < samples; i++ {
+				hadGap := samplesToRead < samples
+				lastSampleForDecay := int16(0)
+				if samplesToRead > 0 {
+					lastVal := int16(binary.LittleEndian.Uint16(chunk[consumedBytes-2 : consumedBytes]))
+					if hadGap {
+						lastSampleForDecay = lastVal
+						stream.lastSample = 0
+					} else {
+						stream.lastSample = lastVal
+					}
+				} else if stream.lastSample != 0 {
+					lastSampleForDecay = stream.lastSample
+					stream.lastSample = 0
+				}
+
+				engine.workItems = append(engine.workItems, streamWorkItem{
+					chunk:       chunk,
+					samples:     samplesToRead,
+					lastSample:  lastSampleForDecay,
+					applyFadeIn: applyFade,
+					hasGap:      hadGap,
+				})
+			}
+			engine.playbackMu.Unlock()
+			// --- Fin del lock corto ---
+
+			// Mezclado fuera del lock (DSP / suma algebraica)
+			if len(engine.mixBuffer) < samples {
+				engine.mixBuffer = make([]int32, samples)
+			} else {
+				clear(engine.mixBuffer[:samples])
+			}
+
+			for _, item := range engine.workItems {
+				if item.applyFadeIn && len(item.chunk) > 0 {
+					applyFadeIn(item.chunk, antiClickSamples)
+				}
+
+				for i := 0; i < item.samples; i++ {
+					val := int16(binary.LittleEndian.Uint16(item.chunk[i*2 : i*2+2]))
+					engine.mixBuffer[i] += int32(val)
+				}
+
+				if item.hasGap && item.lastSample != 0 {
+					// Micro-bache (paquete con retraso): suavizar hacia cero sin frenar el flujo futuro
+					decay := item.lastSample
+					for i := item.samples; i < item.samples+antiClickSamples && i < samples; i++ {
 						decay = int16(float64(decay) * 0.8)
 						engine.mixBuffer[i] += int32(decay)
 					}
-					stream.lastSample = 0
 				}
 			}
 
+			// Renderizar a output con limitador soft-knee anti-clipping
 			for i := 0; i < samples; i++ {
-				// Soft safety (por si acaso)
-				sum := engine.mixBuffer[i]
-				if sum > 32767 {
-					sum = 32767
-				} else if sum < -32768 {
-					sum = -32768
-				}
-				binary.LittleEndian.PutUint16(output[i*2:i*2+2], uint16(int16(sum)))
+				clipped := softClip(engine.mixBuffer[i])
+				binary.LittleEndian.PutUint16(output[i*2:i*2+2], uint16(clipped))
 			}
 
 			// Baja el volumen del frame completo si está muy fuerte (suena limpio)
@@ -375,6 +434,8 @@ func (e *Engine) Stop() {
 		close(e.captureFrames)
 		e.playbackMu.Lock()
 		e.streams = nil
+		e.workItems = nil
+		e.scratchBuffer = nil
 		e.playbackMu.Unlock()
 	})
 }

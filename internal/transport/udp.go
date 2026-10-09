@@ -5,8 +5,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
-	"sync"
 	"syscall"
+
+	"voxmesh/internal/logging"
 )
 
 const (
@@ -24,6 +25,35 @@ const (
 	PacketAssetMissing = 10
 	PacketRoomLeave    = 11
 )
+
+func PacketKindName(kind byte) string {
+	switch kind {
+	case PacketAudio:
+		return "Audio"
+	case PacketHello:
+		return "Hello"
+	case PacketPing:
+		return "Ping"
+	case PacketPong:
+		return "Pong"
+	case PacketRoomHello:
+		return "RoomHello"
+	case PacketRoomState:
+		return "RoomState"
+	case PacketChat:
+		return "Chat"
+	case PacketChatSync:
+		return "ChatSync"
+	case PacketAssetChunk:
+		return "AssetChunk"
+	case PacketAssetMissing:
+		return "AssetMissing"
+	case PacketRoomLeave:
+		return "RoomLeave"
+	default:
+		return fmt.Sprintf("Unknown(%d)", kind)
+	}
+}
 
 type Packet struct {
 	Kind     byte
@@ -56,7 +86,7 @@ func decode(data []byte) (Packet, error) {
 
 type UDP struct {
 	conn  *net.UDPConn
-	mu    sync.RWMutex
+	mu    logging.TracedRWMutex
 	peers map[string]*net.UDPAddr
 }
 
@@ -82,7 +112,11 @@ func Listen(address string) (*UDP, error) {
 		_ = packetConn.Close()
 		return nil, fmt.Errorf("no es una conexión UDP válida")
 	}
-	return &UDP{conn: conn, peers: make(map[string]*net.UDPAddr)}, nil
+	return &UDP{
+		conn:  conn,
+		peers: make(map[string]*net.UDPAddr),
+		mu:    logging.NewTracedRWMutex("udp.peersMu"),
+	}, nil
 }
 
 func (u *UDP) Address() *net.UDPAddr { return u.conn.LocalAddr().(*net.UDPAddr) }

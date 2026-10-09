@@ -67,8 +67,8 @@ type App struct {
 	topHangupBtn    *widget.Button
 	endpointEntry   *widget.Entry
 	peerNames       []peerView
-	peerMu          sync.RWMutex
-	recordingMu     sync.RWMutex
+	peerMu          logging.TracedRWMutex
+	recordingMu     logging.TracedRWMutex
 	recordedInput   []byte
 	pingStop        chan struct{}
 	voiceProcessor  *audio.RNNoise
@@ -88,7 +88,7 @@ type App struct {
 	chatSearch      *widget.Entry
 	chatSearchCount *widget.Label
 	chatMessages    []history.Message
-	chatMu          sync.RWMutex
+	chatMu          logging.TracedRWMutex
 	selfNameLabel   *widget.Label
 	voiceIndicator  *canvas.Circle
 	voiceTimerMu    sync.Mutex
@@ -97,9 +97,9 @@ type App struct {
 	audioSeqMu      sync.Mutex
 	peerAudioSeq    map[string]uint32
 	peerAudioTime   map[string]time.Time
-	phoneMicMu      sync.RWMutex
+	phoneMicMu      logging.TracedRWMutex
 	phoneMic        *phonemic.Server
-	previewMu       sync.RWMutex
+	previewMu       logging.TracedRWMutex
 	previewPlayer   *audio.Player
 	previewEngine   *audio.Engine
 	mainView        fyne.CanvasObject
@@ -122,7 +122,7 @@ type App struct {
 	soundGrid       *fyne.Container
 	soundPlayer     *audio.Player
 	stopBindBtn     *widget.Button
-	soundMu         sync.RWMutex
+	soundMu         logging.TracedRWMutex
 	sounds          []room.Sound
 	pendingPlays    map[string]struct{}
 }
@@ -142,6 +142,7 @@ const phoneMicInput = "Micrófono del celular"
 func New(executable string) *App {
 	cfgPath := config.Path(executable)
 	cfg, _ := config.Load(cfgPath)
+	logging.SetLevel(cfg.LogLevel)
 	voiceProcessor, _ := audio.NewRNNoise()
 	return &App{
 		cfg:            cfg,
@@ -152,6 +153,12 @@ func New(executable string) *App {
 		assetAssembler: assets.NewAssembler(),
 		peerAudioSeq:   make(map[string]uint32),
 		peerAudioTime:  make(map[string]time.Time),
+		peerMu:         logging.NewTracedRWMutex("peerMu"),
+		recordingMu:    logging.NewTracedRWMutex("recordingMu"),
+		chatMu:         logging.NewTracedRWMutex("chatMu"),
+		phoneMicMu:     logging.NewTracedRWMutex("phoneMicMu"),
+		previewMu:      logging.NewTracedRWMutex("previewMu"),
+		soundMu:        logging.NewTracedRWMutex("soundMu"),
 	}
 }
 
@@ -1223,10 +1230,37 @@ func (a *App) renderSettingsView(devices audio.DeviceLists) {
 	checkUpdatesButton := widget.NewButtonWithIcon("Buscar actualizaciones", theme.ViewRefreshIcon(), func() {
 		go a.checkForUpdates(true)
 	})
+	logLevelLabel := widget.NewLabel("Nivel de registros (logs):")
+	logLevelOptions := []string{
+		"0 - Solo Errores",
+		"1 - Debug Normal",
+		"2 - Debug Avanzado",
+	}
+	logLevelSelect := widget.NewSelect(logLevelOptions, func(selected string) {
+		switch selected {
+		case "1 - Debug Normal":
+			a.cfg.LogLevel = logging.LevelControl
+		case "2 - Debug Avanzado":
+			a.cfg.LogLevel = logging.LevelTrace
+		default:
+			a.cfg.LogLevel = logging.LevelError
+		}
+		logging.SetLevel(a.cfg.LogLevel)
+	})
+	switch a.cfg.LogLevel {
+	case logging.LevelControl:
+		logLevelSelect.SetSelected("1 - Debug Normal")
+	case logging.LevelTrace:
+		logLevelSelect.SetSelected("2 - Debug Avanzado")
+	default:
+		logLevelSelect.SetSelected("0 - Solo Errores")
+	}
 	interfaceCard := uiCard(container.NewVBox(
 		widget.NewLabelWithStyle("⚙️ Interfaz y Sistema", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		showStatusBarCheck,
 		eventSoundsCheck,
+		logLevelLabel,
+		logLevelSelect,
 		container.NewGridWithColumns(3, openDataDirButton, openLogsDirButton, checkUpdatesButton),
 	))
 	settingsBody := container.NewVScroll(container.NewVBox(
@@ -2936,8 +2970,10 @@ func (a *App) stopConnection() {
 		a.setStatus("No hay una sala o conexión activa.")
 		return
 	}
+	start := time.Now()
 	udp := a.transport
 	oldEndpoint := a.endpoint
+	logging.Infof("stopConnection: cerrando sala/conexión en %s", oldEndpoint)
 	a.transport = nil
 	a.endpoint = ""
 	a.activeRoomName = ""
@@ -3004,6 +3040,7 @@ func (a *App) stopConnection() {
 		if err := udp.Close(); err != nil {
 			logging.Errorf("cerrar UDP: %s", logging.FormatError(err))
 		}
+		logging.Infof("stopConnection: recursos liberados para %s (tiempo de ejecución: %v)", oldEndpoint, time.Since(start))
 	}()
 }
 
@@ -3090,6 +3127,7 @@ func (a *App) openHost(roomName, username string) {
 
 	// Lanzamos todo a una goroutine para NO bloquear el hilo de la UI
 	go func() {
+		start := time.Now()
 		listenAddr := a.cfg.ListenAddress
 		if listenAddr == "" {
 			listenAddr = ":47830"
@@ -3151,6 +3189,7 @@ func (a *App) openHost(roomName, username string) {
 		a.startAudio(udp, nil, true)
 		go a.configureHostNetwork(port)
 		a.playEventSound(audio.SFXConnect)
+		logging.Infof("openHost: sala %q iniciada en %s (tiempo de ejecución: %v)", roomName, a.endpoint, time.Since(start))
 
 		// Cualquier actualización visual tiene que ir obligatoriamente en fyne.Do
 		fyne.Do(func() {
@@ -3172,16 +3211,18 @@ func (a *App) openHost(roomName, username string) {
 }
 
 func (a *App) configureHostNetwork(port int) {
+	start := time.Now()
 	mapContext, cancelMap := context.WithTimeout(context.Background(), 8*time.Second)
 	mapErr := netinfo.TryMapUDP(mapContext, uint16(port), 3600)
 	cancelMap()
 	if mapErr != nil {
 		logging.Errorf("UPnP UDP puerto %d: %s", port, logging.FormatError(mapErr))
 	} else {
-		logging.Infof("UPnP UDP activo en el puerto %d", port)
+		logging.Infof("UPnP UDP activo en el puerto %d (tiempo de ejecución: %v)", port, time.Since(start))
 	}
 
 	ipContext, cancelIP := context.WithTimeout(context.Background(), 4*time.Second)
+	ipStart := time.Now()
 	ip, ipErr := netinfo.PublicIP(ipContext)
 	cancelIP()
 	if ipErr != nil {
@@ -3204,6 +3245,7 @@ func (a *App) configureHostNetwork(port int) {
 	if a.roomStore != nil {
 		a.roomStore.Replace(a.roomState)
 	}
+	logging.Infof("IP pública obtenida: %s en %s (tiempo de resolución: %v, total red: %v)", ip.String(), a.endpoint, time.Since(ipStart), time.Since(start))
 	if mapErr == nil {
 		a.setStatus("Sala lista (UPnP): " + a.endpoint)
 		return
@@ -3239,6 +3281,7 @@ func (a *App) connectClient(raw string) {
 	}
 
 	go func() {
+		start := time.Now()
 		addr, err := net.ResolveUDPAddr("udp", raw)
 		if err != nil {
 			a.setStatus("Dirección inválida: " + err.Error())
@@ -3313,6 +3356,7 @@ func (a *App) connectClient(raw string) {
 			LastSeenUTC: time.Now().UTC(),
 		}
 		payload, _ := room.Encode(room.Envelope{Kind: room.HelloMessage, Room: &a.roomState, Participant: &participant})
+		logging.Infof("Enviando PacketRoomHello a %s: usuario=%q, id=%s", addr.String(), participant.Username, participant.ID)
 		_ = udp.Send(addr, transport.Packet{Kind: transport.PacketRoomHello, Sequence: a.sequence.Add(1), Payload: payload})
 
 		a.setStatus("Conectando con " + raw)
@@ -3327,6 +3371,7 @@ func (a *App) connectClient(raw string) {
 		go a.sweepAssetLoop(udp, a.monitorStop)
 
 		a.playEventSound(audio.SFXConnect)
+		logging.Infof("connectClient: conexión iniciada hacia %s (tiempo de ejecución: %v)", raw, time.Since(start))
 
 		// Todo lo visual en fyne.Do
 		fyne.Do(func() {
@@ -3474,6 +3519,7 @@ func (a *App) receiveLoop(udp *transport.UDP) {
 			logging.Infof("bucle UDP detenido: %s", logging.FormatError(err))
 			return
 		}
+		logging.Tracef("Tráfico UDP recibido: tipo=%d, origen=%s, tamaño=%d bytes", packet.Kind, addr.String(), len(packet.Payload))
 		if a.hostMode.Load() {
 			udp.AddPeer(addr)
 			for index := range a.roomState.Participants {
@@ -3483,6 +3529,7 @@ func (a *App) receiveLoop(udp *transport.UDP) {
 				}
 			}
 			if packet.Kind == transport.PacketRoomHello {
+				logging.Infof("Procesando PacketRoomHello de %s", addr.String())
 				envelope, err := room.Decode(packet.Payload)
 				if err != nil || envelope.Participant == nil {
 					continue
@@ -3631,6 +3678,7 @@ func (a *App) receiveLoop(udp *transport.UDP) {
 			timestamp := int64(binary.BigEndian.Uint64(packet.Payload))
 			a.updatePeerLag(addr.String(), time.Since(time.Unix(0, timestamp)))
 		} else if packet.Kind == transport.PacketRoomState {
+			logging.Infof("Procesando PacketRoomState de %s", addr.String())
 			envelope, err := room.Decode(packet.Payload)
 			if err == nil && envelope.Room != nil {
 				a.handleRoomState(*envelope.Room, udp)
@@ -3849,6 +3897,7 @@ func (a *App) monitorHost(udp *transport.UDP, stop <-chan struct{}) {
 }
 
 func (a *App) becomeHost(udp *transport.UDP) {
+	logging.Infof("Migración iniciada: asumiendo el rol de host")
 	a.hostMode.Store(true)
 	a.roomState.HostID = a.participantID
 	a.roomState.Epoch++

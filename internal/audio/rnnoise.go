@@ -41,10 +41,29 @@ func (r *RNNoise) ProcessPCMWithOptions(data []byte, gate NoiseGate, vadThreshol
 	if len(samples) == 0 {
 		return nil, false, 0, nil
 	}
+	outSamples, hasSpeech, maxVAD, err := r.ProcessSamplesWithOptions(samples, gate, vadThreshold, vadEnabled, gateEnabled)
+	if err != nil {
+		return nil, false, 0, err
+	}
+	return EncodePCM(outSamples), hasSpeech, maxVAD, nil
+}
+
+// ProcessSamplesWithOptions procesa directamente muestras int16 sin allocations redundantes de codificación/decodificación.
+func (r *RNNoise) ProcessSamplesWithOptions(samples []int16, gate NoiseGate, vadThreshold float32, vadEnabled, gateEnabled bool) ([]int16, bool, float32, error) {
+	if r == nil || r.denoiser == nil {
+		return nil, false, 0, fmt.Errorf("RNNoise no está inicializado")
+	}
+	if len(samples) == 0 {
+		return nil, false, 0, nil
+	}
 
 	output := make([]int16, len(samples))
 	maxVAD := float32(0)
 	hasSpeech := !vadEnabled
+
+	var inputFrame [RNNoiseFrameSamples]int16
+	var outputFrame [RNNoiseFrameSamples]int16
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for start := 0; start < len(samples); start += RNNoiseFrameSamples {
@@ -52,10 +71,9 @@ func (r *RNNoise) ProcessPCMWithOptions(data []byte, gate NoiseGate, vadThreshol
 		if end > len(samples) {
 			end = len(samples)
 		}
-		inputFrame := make([]int16, RNNoiseFrameSamples)
-		outputFrame := make([]int16, RNNoiseFrameSamples)
-		copy(inputFrame, samples[start:end])
-		vad, err := r.denoiser.ProcessInt16(outputFrame, inputFrame)
+		clear(inputFrame[:])
+		copy(inputFrame[:], samples[start:end])
+		vad, err := r.denoiser.ProcessInt16(outputFrame[:], inputFrame[:])
 		if err != nil {
 			return nil, false, 0, fmt.Errorf("procesar frame RNNoise: %w", err)
 		}
@@ -64,14 +82,14 @@ func (r *RNNoise) ProcessPCMWithOptions(data []byte, gate NoiseGate, vadThreshol
 		}
 		gateOpen := true
 		if gateEnabled {
-			gateOpen = gate.Apply(outputFrame)
+			gateOpen = gate.Apply(outputFrame[:])
 		}
 		if (!vadEnabled || vad >= vadThreshold) && gateOpen {
 			hasSpeech = true
 		}
 		copy(output[start:end], outputFrame[:end-start])
 	}
-	return EncodePCM(output), hasSpeech, maxVAD, nil
+	return output, hasSpeech, maxVAD, nil
 }
 
 func PrepareOutgoingPCM(data []byte, denoiser *RNNoise, gate NoiseGate, filterEnabled bool, vadThreshold float32) ([]byte, bool, error) {
@@ -80,21 +98,21 @@ func PrepareOutgoingPCM(data []byte, denoiser *RNNoise, gate NoiseGate, filterEn
 }
 
 func PrepareOutgoingPCMWithFilters(data []byte, denoiser *RNNoise, gate NoiseGate, filterEnabled bool, vadThreshold float32, settings FilterSettings, effects *Effects) ([]byte, bool, error) {
+	if len(data) == 0 {
+		return nil, false, nil
+	}
+	samples, err := DecodePCM(data)
+	if err != nil {
+		return nil, false, err
+	}
+
 	if !filterEnabled {
-		samples, err := DecodePCM(data)
-		if err != nil {
-			return nil, false, err
-		}
 		ApplyPeakCeiling(samples, 27000)
 		return EncodePCM(samples), true, nil
 	}
 
 	if effects != nil {
-		var err error
-		data, err = effects.Apply(data, settings)
-		if err != nil {
-			return nil, false, err
-		}
+		effects.ApplySamples(samples, settings)
 	}
 
 	if vadThreshold <= 0 {
@@ -102,12 +120,8 @@ func PrepareOutgoingPCMWithFilters(data []byte, denoiser *RNNoise, gate NoiseGat
 	}
 
 	// Detectar grito fuerte para no pasar por RNNoise (evita el "cirkci")
-	peakSamples, err := DecodePCM(data)
-	if err != nil {
-		return nil, false, err
-	}
 	peak := int16(0)
-	for _, s := range peakSamples {
+	for _, s := range samples {
 		a := s
 		if a < 0 {
 			a = -a
@@ -121,9 +135,8 @@ func PrepareOutgoingPCMWithFilters(data []byte, denoiser *RNNoise, gate NoiseGat
 	// Grito fuerte o RNNoise desactivado → camino sin RNNoise
 	if !settings.RNNoiseEnabled || isLoudShout || denoiser == nil {
 		if isLoudShout {
-			ApplyPeakCeiling(peakSamples, 24000)
+			ApplyPeakCeiling(samples, 24000)
 		}
-		samples := peakSamples
 		gateOpen := !settings.NoiseGateEnabled || gate.Open(samples)
 		keepOpen := !settings.NoiseGateEnabled || gateOpen
 		if effects != nil {
@@ -138,14 +151,11 @@ func PrepareOutgoingPCMWithFilters(data []byte, denoiser *RNNoise, gate NoiseGat
 	}
 
 	// Voz normal → RNNoise ON
-	filtered, hasSpeech, _, err := denoiser.ProcessPCMWithOptions(data, gate, vadThreshold, settings.VADEnabled, false)
+	filteredSamples, hasSpeech, _, err := denoiser.ProcessSamplesWithOptions(samples, gate, vadThreshold, settings.VADEnabled, false)
 	if err != nil {
 		return nil, false, err
 	}
-	samples, err := DecodePCM(filtered)
-	if err != nil {
-		return nil, false, err
-	}
+	samples = filteredSamples
 
 	gateOpen := !settings.NoiseGateEnabled || gate.Open(samples)
 	keepOpen := false

@@ -130,38 +130,65 @@ func (e *Effects) Apply(data []byte, settings FilterSettings) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	e.ApplySamples(samples, settings)
+	return EncodePCM(samples), nil
+}
+
+// ApplySamples aplica la cadena de efectos directamente sobre un slice de muestras int16 sin allocations intermedias.
+func (e *Effects) ApplySamples(samples []int16, settings FilterSettings) {
+	if len(samples) == 0 {
+		return
+	}
+	gainFactor := math.Pow(10, float64(settings.GainDB)/20)
+	var hpAlpha float64
+	if settings.HighPassEnabled {
+		frequency := clampFrequency(settings.HighPassHz)
+		rc := 1 / (2 * math.Pi * frequency)
+		hpAlpha = rc / (rc + 1/SampleRate)
+	}
+	var lpAlpha float64
+	if settings.LowPassEnabled {
+		frequency := clampFrequency(settings.LowPassHz)
+		lpAlpha = (1 / SampleRate) / ((1 / (2 * math.Pi * frequency)) + (1 / SampleRate))
+	}
+	var nB0A0, nB1A0, nB2A0, nA1A0, nA2A0 float64
+	if settings.NotchEnabled {
+		frequency := clampFrequency(settings.NotchHz)
+		omega := 2 * math.Pi * frequency / SampleRate
+		alpha := math.Sin(omega) / (2 * 10)
+		b0, b1, b2 := 1.0, -2*math.Cos(omega), 1.0
+		a0, a1, a2 := 1+alpha, -2*math.Cos(omega), 1-alpha
+		nB0A0 = b0 / a0
+		nB1A0 = b1 / a0
+		nB2A0 = b2 / a0
+		nA1A0 = a1 / a0
+		nA2A0 = a2 / a0
+	}
+	limiterLimit := 0.0
+	if settings.LimiterEnabled {
+		limiterLimit = math.Pow(10, float64(settings.LimiterThreshold)/20)
+	}
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for index, sample := range samples {
-		value := float64(sample) / math.MaxInt16
-		value *= math.Pow(10, float64(settings.GainDB)/20)
+		value := (float64(sample) / math.MaxInt16) * gainFactor
 		if settings.HighPassEnabled {
-			frequency := clampFrequency(settings.HighPassHz)
-			rc := 1 / (2 * math.Pi * frequency)
-			alpha := rc / (rc + 1/SampleRate)
-			value = alpha * (e.highOutput + value - e.highInput)
+			value = hpAlpha * (e.highOutput + value - e.highInput)
 			e.highInput, e.highOutput = float64(sample)/math.MaxInt16, value
 		}
 		if settings.LowPassEnabled {
-			frequency := clampFrequency(settings.LowPassHz)
-			alpha := (1 / SampleRate) / ((1 / (2 * math.Pi * frequency)) + (1 / SampleRate))
-			e.lowOutput += alpha * (value - e.lowOutput)
+			e.lowOutput += lpAlpha * (value - e.lowOutput)
 			value = e.lowOutput
 		}
 		if settings.NotchEnabled {
-			frequency := clampFrequency(settings.NotchHz)
-			omega := 2 * math.Pi * frequency / SampleRate
-			alpha := math.Sin(omega) / (2 * 10)
-			b0, b1, b2 := 1.0, -2*math.Cos(omega), 1.0
-			a0, a1, a2 := 1+alpha, -2*math.Cos(omega), 1-alpha
-			value = (b0/a0)*value + (b1/a0)*e.notchX1 + (b2/a0)*e.notchX2 - (a1/a0)*e.notchY1 - (a2/a0)*e.notchY2
+			value = nB0A0*value + nB1A0*e.notchX1 + nB2A0*e.notchX2 - nA1A0*e.notchY1 - nA2A0*e.notchY2
 			e.notchX2, e.notchX1 = e.notchX1, float64(sample)/math.MaxInt16
 			e.notchY2, e.notchY1 = e.notchY1, value
 		}
-		value = applyDynamics(value, settings)
+		value = applyDynamicsFast(value, settings, limiterLimit)
 		samples[index] = clampSample(value)
 	}
-	return EncodePCM(samples), nil
 }
 
 func clampFrequency(frequency float32) float64 {
@@ -175,6 +202,14 @@ func clampFrequency(frequency float32) float64 {
 }
 
 func applyDynamics(value float64, settings FilterSettings) float64 {
+	limit := 0.0
+	if settings.LimiterEnabled {
+		limit = math.Pow(10, float64(settings.LimiterThreshold)/20)
+	}
+	return applyDynamicsFast(value, settings, limit)
+}
+
+func applyDynamicsFast(value float64, settings FilterSettings, limit float64) float64 {
 	level := math.Abs(value)
 	if level == 0 {
 		return 0
@@ -188,8 +223,7 @@ func applyDynamics(value float64, settings FilterSettings) float64 {
 		ratio := math.Max(float64(settings.ExpanderRatio), 1)
 		value *= math.Pow(10, (float64(settings.ExpanderThreshold)+(db-float64(settings.ExpanderThreshold))*ratio-db)/20)
 	}
-	if settings.LimiterEnabled {
-		limit := math.Pow(10, float64(settings.LimiterThreshold)/20)
+	if settings.LimiterEnabled && limit > 0 {
 		absVal := math.Abs(value)
 		if absVal > limit {
 			sign := 1.0
