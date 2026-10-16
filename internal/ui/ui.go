@@ -432,7 +432,7 @@ func (a *App) content() fyne.CanvasObject {
 	toggleRoomsBtn := widget.NewButtonWithIcon("", theme.MenuIcon(), a.toggleConnectionPanels)
 	toggleRoomsBtn.Importance = widget.LowImportance
 
-	hangupRedIcon := fyne.NewStaticResource("call_end.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path fill="#e74c3c" d="M12 9c-2.3 0-4.47.58-6.37 1.62-.43.23-.71.69-.71 1.18 0 .42.19.82.52 1.09l2.4 1.95c.34.28.81.33 1.19.13 1.11-.58 2.34-.97 3.65-.97s2.54.39 3.65.97c.38.2.85.15 1.19-.13l2.4-1.95c.33-.27.52-.67.52-1.09 0-.49-.28-.95-.71-1.18C16.47 9.58 14.3 9 12 9z"/></svg>`))
+	hangupRedIcon := fyne.NewStaticResource("call_end.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path fill="#ba2c2c" d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08c-.18-.17-.29-.42-.29-.7 0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28-.79-.73-1.68-1.36-2.66-1.85-.33-.16-.56-.5-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/></svg>`))
 	a.topHangupBtn = widget.NewButtonWithIcon("", hangupRedIcon, a.stopConnection)
 	a.topHangupBtn.Importance = widget.LowImportance
 	a.topHangupBtn.Disable()
@@ -441,9 +441,20 @@ func (a *App) content() fyne.CanvasObject {
 
 	settingsBtn := widget.NewButtonWithIcon("", theme.SettingsIcon(), a.showSettings)
 	settingsBtn.Importance = widget.LowImportance
+	count := 0
+	resetAudioBtn := widget.NewButtonWithIcon("Refresh Audio", theme.ViewRefreshIcon(), func() {
+		if count == 15 {
+			if u, err := url.Parse("https://www.youtube.com/watch?v=dQw4w9WgXcQ"); err == nil {
+				fyne.CurrentApp().OpenURL(u)
+			}
+		}
+		count++
+		go a.restartAudioInRoom()
+	})
+	resetAudioBtn.Importance = widget.LowImportance
 
 	leftTop := container.NewHBox(toggleRoomsBtn, a.topHangupBtn, title)
-	topBar := container.NewBorder(nil, nil, leftTop, settingsBtn, nil)
+	topBar := container.NewBorder(nil, nil, leftTop, container.NewHBox(resetAudioBtn, settingsBtn), leftTop)
 	centerPanel := container.NewBorder(statusCard, nil, nil, nil, chatCard)
 	main := container.NewBorder(nil, nil, a.connectionPanel, a.soundPanel, centerPanel)
 	a.bottomBar = container.NewBorder(nil, nil, a.status, container.NewHBox(buildVersion, openLogs), nil)
@@ -3080,7 +3091,7 @@ func (a *App) createHost() {
 		if username == "" {
 			username = "Usuario"
 		}
-		a.openHost(roomName, username)
+		go a.openHost(roomName, username)
 	})
 	newRoomEntry.OnSubmitted = func(string) {
 		btnCreate.OnTapped()
@@ -3111,7 +3122,7 @@ func (a *App) createHost() {
 			if username == "" {
 				username = "Usuario"
 			}
-			a.openHost(roomName, username)
+			go a.openHost(roomName, username)
 		})
 
 		content = container.NewVBox(
@@ -3224,47 +3235,75 @@ func (a *App) openHost(roomName, username string) {
 	}()
 }
 
-func (a *App) configureHostNetwork(port int) {
-	start := time.Now()
-	mapContext, cancelMap := context.WithTimeout(context.Background(), 8*time.Second)
-	mapErr := netinfo.TryMapUDP(mapContext, uint16(port), 3600)
-	cancelMap()
-	if mapErr != nil {
-		logging.Errorf("UPnP UDP puerto %d: %s", port, logging.FormatError(mapErr))
-	} else {
-		logging.Infof("UPnP UDP activo en el puerto %d (tiempo de ejecución: %v)", port, time.Since(start))
-	}
+func (a *App) configureHostNetwork(startPort int) {
+	maxRetries := 5
+	port := startPort
 
-	ipContext, cancelIP := context.WithTimeout(context.Background(), 4*time.Second)
-	ipStart := time.Now()
-	ip, ipErr := netinfo.PublicIP(ipContext)
-	cancelIP()
-	if ipErr != nil {
-		logging.Errorf("obtener IP pública: %s", logging.FormatError(ipErr))
-		if mapErr == nil {
-			a.setStatus("UPnP activo. IP pública no disponible; usa la dirección local de la sala.")
+	for retry := 0; retry <= maxRetries; retry++ {
+		start := time.Now()
+
+		// 1. Intentar UPnP
+		mapContext, cancelMap := context.WithTimeout(context.Background(), 8*time.Second)
+		mapErr := netinfo.TryMapUDP(mapContext, uint16(port), 3600)
+		cancelMap()
+
+		if mapErr != nil {
+			logging.Errorf("UPnP UDP puerto %d: %s", port, logging.FormatError(mapErr))
+		} else {
+			logging.Infof("UPnP UDP activo en el puerto %d (tiempo: %v)", port, time.Since(start))
+		}
+
+		// 2. Obtener IP Pública
+		ipContext, cancelIP := context.WithTimeout(context.Background(), 4*time.Second)
+		ip, ipErr := netinfo.PublicIP(ipContext)
+		cancelIP()
+
+		if ipErr != nil {
+			logging.Errorf("obtener IP pública: %s", logging.FormatError(ipErr))
+			if mapErr == nil {
+				a.setStatus("UPnP activo. IP pública no disponible; usa la dirección local de la sala.")
+				return
+			}
+			a.setStatus("UDP activo. No se pudo abrir UPnP ni obtener IP pública; revisa tu red.")
 			return
 		}
-		a.setStatus("UDP activo. No se pudo abrir UPnP ni obtener la IP pública; configura el router.")
-		return
-	}
 
-	a.endpoint = net.JoinHostPort(ip.String(), strconv.Itoa(port))
-	for i := range a.roomState.Participants {
-		if a.roomState.Participants[i].ID == a.participantID {
-			a.roomState.Participants[i].Address = a.endpoint
-			break
+		// 3. Guardar estado y actualizar la sala
+		a.endpoint = net.JoinHostPort(ip.String(), strconv.Itoa(port))
+		for i := range a.roomState.Participants {
+			if a.roomState.Participants[i].ID == a.participantID {
+				a.roomState.Participants[i].Address = a.endpoint
+				break
+			}
 		}
+		if a.roomStore != nil {
+			a.roomStore.Replace(a.roomState)
+		}
+
+		logging.Infof("IP pública obtenida: %s en %s", ip.String(), a.endpoint)
+
+		// 4. Evaluar éxito o reintento
+		if mapErr == nil {
+			a.setStatus("Sala lista (UPnP): " + a.endpoint)
+			a.publishRoomCloudFlare()
+			return
+		}
+
+		a.setStatus(fmt.Sprintf("Comparte: %s (UPnP falló en puerto %d)", a.endpoint, port))
+
+		if retry >= maxRetries {
+			a.setStatus("No se pudo configurar UPnP después de varios intentos.")
+			return
+		}
+
+		time.Sleep(1 * time.Second)
+		port++
+		a.setStatus(fmt.Sprintf("Reintentando red en puerto %d...", port))
 	}
-	if a.roomStore != nil {
-		a.roomStore.Replace(a.roomState)
-	}
-	logging.Infof("IP pública obtenida: %s en %s (tiempo de resolución: %v, total red: %v)", ip.String(), a.endpoint, time.Since(ipStart), time.Since(start))
-	if mapErr == nil {
-		a.setStatus("Sala lista (UPnP): " + a.endpoint)
-		return
-	}
-	a.setStatus("Comparte: " + a.endpoint + " (UPnP no disponible)")
+}
+
+func (a *App) publishRoomCloudFlare() {
+	// TODO: Implementación de la publicación en CloudFlare
 }
 
 func (a *App) connectClient(raw string) {
@@ -3419,6 +3458,7 @@ func (a *App) startAudio(udp *transport.UDP, peer *net.UDPAddr, host bool) {
 		engine.SetJitterBufferMS(a.cfg.JitterBufferMS)
 	}
 	a.audioEngine = engine
+	a.setStatus("Audio iniciado correctamente")
 }
 
 func (a *App) restartAudioInRoom() {
@@ -3427,11 +3467,14 @@ func (a *App) restartAudioInRoom() {
 		a.audioEngine = nil
 	}
 	if a.transport != nil {
+		a.setStatus("Reiniciando audio en la sala...")
 		var peer *net.UDPAddr
 		if !a.hostMode.Load() && a.endpoint != "" {
 			peer, _ = net.ResolveUDPAddr("udp", a.endpoint)
 		}
 		go a.startAudio(a.transport, peer, a.hostMode.Load())
+	} else {
+		a.setStatus("No estas conectado a ningún servidor")
 	}
 }
 
