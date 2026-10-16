@@ -68,3 +68,11 @@ $RECYCLE.BIN/
 .DS_Store
 .AppleDouble
 .LSOverride
+
+# IA
+*.cache
+*.llm
+*.model
+*.weights
+/workspace/
+orquestador.py
