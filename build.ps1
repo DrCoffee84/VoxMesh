@@ -27,7 +27,7 @@ Remove-Item .\dist\voxmesh.exe -ErrorAction SilentlyContinue
 $build = (Get-Date -Format "yyyyMMdd-HHmm")
 Write-Host "Compilando VoxMesh con CGO y Fyne UI..." -ForegroundColor Cyan
 
-go build -trimpath -ldflags "-s -w -H windowsgui -linkmode external -extldflags -static -X voxmesh/internal/version.Value=0.9.100-local_$build" -o dist/voxmesh.exe ./cmd/voxmesh
+go build -trimpath -ldflags "-s -w -H windowsgui -linkmode external -extldflags -static -X voxmesh/internal/version.Value=0.9.5_$build" -o dist/voxmesh.exe ./cmd/voxmesh
 
 if ($LASTEXITCODE -eq 0) {
     $size = (Get-Item .\dist\voxmesh.exe).Length / 1MB

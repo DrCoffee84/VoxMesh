@@ -417,7 +417,7 @@ func (a *App) content() fyne.CanvasObject {
 
 	a.chatSearch = newScrollableEntry()
 	a.chatSearch.SetPlaceHolder("🔍 Buscar en el chat...")
-	a.chatSearch.OnChanged = func(string) { a.refreshChat() }
+	go func() { a.chatSearch.OnChanged = func(string) { a.refreshChat() } }()
 	a.chatSearchCount = widget.NewLabel("")
 	clearSearch := widget.NewButtonWithIcon("", theme.CancelIcon(), func() {
 		a.chatSearch.SetText("")
@@ -610,8 +610,18 @@ func (a *App) sendChatImageBytes(ext string, data []byte, caption string) {
 	a.sendAsset(assets.KindImage, imageID, ext, data)
 }
 
-func (a *App) addActivity(text string) {
-	stamp := time.Now().Format("15:04")
+func (a *App) addActivityAt(text string, t time.Time) {
+	var stamp string
+	now := time.Now()
+	localT := t.Local()
+
+	// Si es de hoy, muestra solo la hora. Si es historial viejo, muestra fecha y hora.
+	if localT.Year() == now.Year() && localT.YearDay() == now.YearDay() {
+		stamp = localT.Format("15:04")
+	} else {
+		stamp = localT.Format("02/01 15:04")
+	}
+
 	fyne.Do(func() {
 		if a.activityBox == nil {
 			return
@@ -623,6 +633,11 @@ func (a *App) addActivity(text string) {
 			a.activityScroll.ScrollToBottom()
 		}
 	})
+}
+
+// Wrapper para mantener compatibilidad con todos los logs en tiempo real
+func (a *App) addActivity(text string) {
+	a.addActivityAt(text, time.Now())
 }
 
 func (a *App) showSettings() {
@@ -1752,7 +1767,7 @@ func (a *App) initHistory(roomName string) {
 	chatOnly := make([]history.Message, 0, len(messages))
 	for _, m := range messages {
 		if m.System || m.Kind == "system" || strings.EqualFold(m.Username, "SISTEMA") {
-			a.addActivity(m.Text)
+			a.addActivityAt(m.Text, m.Timestamp)
 			continue
 		}
 		chatOnly = append(chatOnly, m)
@@ -1774,7 +1789,7 @@ func (a *App) initHistory(roomName string) {
 
 func (a *App) addChatMessage(message history.Message) {
 	if message.System || message.Kind == "system" || strings.EqualFold(message.Username, "SISTEMA") {
-		a.addActivity(message.Text)
+		a.addActivityAt(message.Text, message.Timestamp)
 		return
 	}
 	if a.historyStore != nil {
@@ -1840,7 +1855,7 @@ func (a *App) handleChatPacket(payload []byte) {
 	case room.ChatMessage:
 		if envelope.Message != nil {
 			if envelope.Message.System || envelope.Message.Kind == "system" || strings.EqualFold(envelope.Message.Username, "SISTEMA") {
-				a.addActivity(envelope.Message.Text)
+				a.addActivityAt(envelope.Message.Text, envelope.Message.Timestamp)
 			} else {
 				a.addChatMessage(*envelope.Message)
 				if envelope.Message.SenderID != a.participantID {
@@ -3125,7 +3140,6 @@ func (a *App) openHost(roomName, username string) {
 
 	a.setStatus("Iniciando sala, por favor espera...")
 
-	// Lanzamos todo a una goroutine para NO bloquear el hilo de la UI
 	go func() {
 		start := time.Now()
 		listenAddr := a.cfg.ListenAddress
@@ -3186,7 +3200,7 @@ func (a *App) openHost(roomName, username string) {
 		go a.sweepAssetLoop(udp, a.pingStop)
 
 		// Inicialización del hardware de audio (Suele ser lo que más traba)
-		a.startAudio(udp, nil, true)
+		go a.startAudio(udp, nil, true)
 		go a.configureHostNetwork(port)
 		a.playEventSound(audio.SFXConnect)
 		logging.Infof("openHost: sala %q iniciada en %s (tiempo de ejecución: %v)", roomName, a.endpoint, time.Since(start))
@@ -3362,7 +3376,7 @@ func (a *App) connectClient(raw string) {
 		a.setStatus("Conectando con " + raw)
 
 		// Audio (lo más pesado)
-		a.startAudio(udp, addr, false)
+		go a.startAudio(udp, addr, false)
 		a.lastHostSeen.Store(time.Now().UnixNano())
 
 		go a.receiveLoop(udp)
@@ -3417,7 +3431,7 @@ func (a *App) restartAudioInRoom() {
 		if !a.hostMode.Load() && a.endpoint != "" {
 			peer, _ = net.ResolveUDPAddr("udp", a.endpoint)
 		}
-		a.startAudio(a.transport, peer, a.hostMode.Load())
+		go a.startAudio(a.transport, peer, a.hostMode.Load())
 	}
 }
 
