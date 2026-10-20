@@ -55,8 +55,14 @@ func PacketKindName(kind byte) string {
 	}
 }
 
+// FlagAudioSequence indica que Sequence es la secuencia de audio propia del emisor:
+// contigua, solo avanza con paquetes de audio. Viaja en el byte 5 del header, que las
+// versiones anteriores ignoran; sin el flag, Sequence es el contador global.
+const FlagAudioSequence byte = 1 << 0
+
 type Packet struct {
 	Kind     byte
+	Flags    byte
 	Sequence uint32
 	Payload  []byte
 }
@@ -65,6 +71,7 @@ func encode(packet Packet) []byte {
 	data := make([]byte, HeaderSize+len(packet.Payload))
 	copy(data[:4], magic)
 	data[4] = packet.Kind
+	data[5] = packet.Flags
 	binary.BigEndian.PutUint32(data[8:12], packet.Sequence)
 	binary.BigEndian.PutUint32(data[12:16], uint32(len(packet.Payload)))
 	copy(data[HeaderSize:], packet.Payload)
@@ -81,7 +88,7 @@ func decode(data []byte) (Packet, error) {
 	if payloadLength < 0 || payloadLength > MaxPayloadSize || payloadLength != len(data)-HeaderSize {
 		return Packet{}, fmt.Errorf("invalid payload length")
 	}
-	return Packet{Kind: data[4], Sequence: binary.BigEndian.Uint32(data[8:12]), Payload: data[HeaderSize:]}, nil
+	return Packet{Kind: data[4], Flags: data[5], Sequence: binary.BigEndian.Uint32(data[8:12]), Payload: data[HeaderSize:]}, nil
 }
 
 type UDP struct {

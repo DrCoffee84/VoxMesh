@@ -2,10 +2,13 @@ package audio
 
 import (
 	"fmt"
+	"math"
 	"sync"
 
 	rnnoise "github.com/VoiceBlender/rnnoise-go"
 	rnmodel "github.com/VoiceBlender/rnnoise-go/model"
+
+	"voxmesh/internal/config"
 )
 
 const RNNoiseFrameSamples = 480
@@ -61,8 +64,11 @@ func (r *RNNoise) ProcessSamplesWithOptions(samples []int16, gate NoiseGate, vad
 	maxVAD := float32(0)
 	hasSpeech := !vadEnabled
 
-	var inputFrame [RNNoiseFrameSamples]int16
-	var outputFrame [RNNoiseFrameSamples]int16
+	// Usamos la API float32 para controlar nosotros la vuelta a int16:
+	// ProcessInt16 hace int16(v) sin clamp y un pico > 32767 da la vuelta (wrap-around).
+	var inputFrame [RNNoiseFrameSamples]float32
+	var outputFrame [RNNoiseFrameSamples]float32
+	var resultFrame [RNNoiseFrameSamples]int16
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -72,24 +78,43 @@ func (r *RNNoise) ProcessSamplesWithOptions(samples []int16, gate NoiseGate, vad
 			end = len(samples)
 		}
 		clear(inputFrame[:])
-		copy(inputFrame[:], samples[start:end])
-		vad, err := r.denoiser.ProcessInt16(outputFrame[:], inputFrame[:])
+		for i, sample := range samples[start:end] {
+			inputFrame[i] = float32(sample)
+		}
+		vad, err := r.denoiser.Process(outputFrame[:], inputFrame[:])
 		if err != nil {
 			return nil, false, 0, fmt.Errorf("procesar frame RNNoise: %w", err)
+		}
+		for i, value := range outputFrame {
+			resultFrame[i] = floatToInt16(value)
 		}
 		if vad > maxVAD {
 			maxVAD = vad
 		}
 		gateOpen := true
 		if gateEnabled {
-			gateOpen = gate.Apply(outputFrame[:])
+			gateOpen = gate.Apply(resultFrame[:])
 		}
 		if (!vadEnabled || vad >= vadThreshold) && gateOpen {
 			hasSpeech = true
 		}
-		copy(output[start:end], outputFrame[:end-start])
+		copy(output[start:end], resultFrame[:end-start])
 	}
 	return output, hasSpeech, maxVAD, nil
+}
+
+// floatToInt16 redondea una muestra float en escala S16 y la satura al rango int16.
+func floatToInt16(value float32) int16 {
+	if value != value { // NaN
+		return 0
+	}
+	if value >= math.MaxInt16 {
+		return math.MaxInt16
+	}
+	if value <= math.MinInt16 {
+		return math.MinInt16
+	}
+	return int16(math.Round(float64(value)))
 }
 
 func PrepareOutgoingPCM(data []byte, denoiser *RNNoise, gate NoiseGate, filterEnabled bool, vadThreshold float32) ([]byte, bool, error) {
@@ -107,7 +132,7 @@ func PrepareOutgoingPCMWithFilters(data []byte, denoiser *RNNoise, gate NoiseGat
 	}
 
 	if !filterEnabled {
-		ApplyPeakCeiling(samples, 27000)
+		ApplyPeakCeiling(samples, config.AudioSendPeakCeiling)
 		return EncodePCM(samples), true, nil
 	}
 
@@ -119,38 +144,26 @@ func PrepareOutgoingPCMWithFilters(data []byte, denoiser *RNNoise, gate NoiseGat
 		vadThreshold = 0.5
 	}
 
-	// Detectar grito fuerte para no pasar por RNNoise (evita el "cirkci")
-	peak := int16(0)
-	for _, s := range samples {
-		a := s
-		if a < 0 {
-			a = -a
-		}
-		if a > peak {
-			peak = a
-		}
-	}
-	isLoudShout := peak > 22000
+	// Ya no hay bypass por grito: RNNoise tiene 20 ms de retardo interno (Delay() = 2*480)
+	// y saltearlo frame a frame desordenaba y duplicaba audio. El "cirkci" original venía
+	// del wrap-around de int16 en ProcessInt16, que ahora evita el clamp de floatToInt16.
 
-	// Grito fuerte o RNNoise desactivado → camino sin RNNoise
-	if !settings.RNNoiseEnabled || isLoudShout || denoiser == nil {
-		if isLoudShout {
-			ApplyPeakCeiling(samples, 24000)
-		}
+	// RNNoise desactivado → camino sin RNNoise
+	if !settings.RNNoiseEnabled || denoiser == nil {
 		gateOpen := !settings.NoiseGateEnabled || gate.Open(samples)
 		keepOpen := !settings.NoiseGateEnabled || gateOpen
 		if effects != nil {
 			keepOpen = effects.KeepVoiceOpen(true, gateOpen, settings)
 			effects.SmoothTransition(samples, keepOpen)
 		}
-		ApplyPeakCeiling(samples, 27000)
+		ApplyPeakCeiling(samples, config.AudioSendPeakCeiling)
 		if !keepOpen {
 			return nil, false, nil
 		}
 		return EncodePCM(samples), true, nil
 	}
 
-	// Voz normal → RNNoise ON
+	// Voz (incluidos gritos) → RNNoise ON, siempre, para mantener su estado continuo
 	filteredSamples, hasSpeech, _, err := denoiser.ProcessSamplesWithOptions(samples, gate, vadThreshold, settings.VADEnabled, false)
 	if err != nil {
 		return nil, false, err
@@ -166,7 +179,7 @@ func PrepareOutgoingPCMWithFilters(data []byte, denoiser *RNNoise, gate NoiseGat
 		keepOpen = hasSpeech && gateOpen
 	}
 
-	ApplyPeakCeiling(samples, 27000)
+	ApplyPeakCeiling(samples, config.AudioSendPeakCeiling)
 	if !keepOpen {
 		return nil, false, nil
 	}

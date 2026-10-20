@@ -1,6 +1,11 @@
 package audio
 
-import "testing"
+import (
+	"math"
+	"testing"
+
+	"voxmesh/internal/config"
+)
 
 func TestPrepareOutgoingPCMDropsSilentFrameWithRNNoise(t *testing.T) {
 	denoiser, err := NewRNNoise()
@@ -35,39 +40,64 @@ func TestPrepareOutgoingPCMKeepsRawWhenFilterDisabled(t *testing.T) {
 	}
 }
 
-func TestPrepareOutgoingPCMWithFilters_ShoutBypass(t *testing.T) {
+func TestPrepareOutgoingPCMWithFilters_ShoutGoesThroughRNNoise(t *testing.T) {
 	denoiser, err := NewRNNoise()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Frame with peak > 22000 (loud shout)
-	shoutSamples := make([]int16, FrameSamples)
-	for i := range shoutSamples {
-		shoutSamples[i] = 28000
-	}
-	raw := EncodePCM(shoutSamples)
-
 	settings := DefaultFilterSettings()
 	settings.RNNoiseEnabled = true
+	settings.VADEnabled = false
 	settings.NoiseGateEnabled = false
 
-	output, shouldSend, err := PrepareOutgoingPCMWithFilters(raw, denoiser, NoiseGate{}, true, 0.5, settings, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !shouldSend {
-		t.Fatal("loud shout must be sent")
-	}
-
-	outSamples, err := DecodePCM(output)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, s := range outSamples {
-		if s > 24000 || s < -24000 {
-			t.Fatalf("expected shout peak clamped to 24000, got %d", s)
+	// Varios frames seguidos de grito a full scale: ya no hay bypass, todo pasa por
+	// RNNoise y la salida nunca debe dar la vuelta (wrap-around) ni pasar el techo.
+	for frame := 0; frame < 10; frame++ {
+		shoutSamples := make([]int16, FrameSamples)
+		for i := range shoutSamples {
+			n := frame*FrameSamples + i
+			shoutSamples[i] = int16(32767 * math.Sin(2*math.Pi*300*float64(n)/SampleRate))
 		}
+		raw := EncodePCM(shoutSamples)
+
+		output, shouldSend, err := PrepareOutgoingPCMWithFilters(raw, denoiser, NoiseGate{}, true, 0.5, settings, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !shouldSend {
+			t.Fatal("loud shout must be sent")
+		}
+
+		outSamples, err := DecodePCM(output)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, s := range outSamples {
+			if s > config.AudioSendPeakCeiling || s < -config.AudioSendPeakCeiling {
+				t.Fatalf("expected shout peak under %d, got %d", config.AudioSendPeakCeiling, s)
+			}
+		}
+	}
+}
+
+func TestFloatToInt16Saturates(t *testing.T) {
+	cases := map[float32]int16{
+		0:        0,
+		1234.4:   1234,
+		-1234.6:  -1235,
+		40000:    32767,
+		-40000:   -32768,
+		32767.9:  32767,
+		-32768.9: -32768,
+	}
+	for in, want := range cases {
+		if got := floatToInt16(in); got != want {
+			t.Fatalf("floatToInt16(%v) = %d, want %d", in, got, want)
+		}
+	}
+	if got := floatToInt16(float32(math.NaN())); got != 0 {
+		t.Fatalf("floatToInt16(NaN) = %d, want 0", got)
 	}
 }
 

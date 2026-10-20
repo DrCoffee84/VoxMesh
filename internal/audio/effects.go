@@ -3,6 +3,8 @@ package audio
 import (
 	"math"
 	"sync"
+
+	"voxmesh/internal/config"
 )
 
 type FilterSettings struct {
@@ -105,7 +107,7 @@ func (e *Effects) SmoothTransition(samples []int16, open bool) {
 
 func ApplyPeakCeiling(samples []int16, ceiling int16) {
 	if ceiling <= 0 {
-		ceiling = 27000 // ~ -1.7 dBFS ceiling
+		ceiling = config.AudioSendPeakCeiling // ~ -1.7 dBFS ceiling
 	}
 	maxVal := int16(0)
 	for _, s := range samples {
