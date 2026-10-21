@@ -27,6 +27,7 @@ jobs:
           cache: true
 
       - name: Setup MSYS2 UCRT64 toolchain
+        id: msys2
         uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
@@ -39,10 +40,10 @@ jobs:
       - name: Compile voxmesh.exe with CGO
         shell: powershell
         run: |
-          if (Test-Path "C:\msys64\ucrt64\bin\gcc.exe") {
-              $env:CC = "C:\msys64\ucrt64\bin\gcc.exe"
-              $env:Path = "C:\msys64\ucrt64\bin;$env:Path"
-          }
+          $ucrt = "${{ steps.msys2.outputs.msys2-location }}\ucrt64\bin"
+          $env:CC = "$ucrt\gcc.exe"
+          $env:PKG_CONFIG = "$ucrt\pkg-config.exe"
+          $env:Path = "$ucrt;$env:Path"
           $env:CGO_ENABLED = "1"
           if (Test-Path "icon.png") {
               Copy-Item "icon.png" "internal\ui\icon.png" -Force
@@ -53,6 +54,7 @@ jobs:
           New-Item -ItemType Directory -Path "dist" -Force | Out-Null
           $tag = "${{ github.ref_name }}"
           go build -trimpath -tags nolibopusfile -ldflags "-s -w -H windowsgui -linkmode external -extldflags -static -X voxmesh/internal/version.Value=$tag" -o dist/voxmesh.exe ./cmd/voxmesh
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Compress-Archive -Path dist/voxmesh.exe -DestinationPath dist/voxmesh-windows-x64.zip -Force
 
       - name: Upload Windows Artifact
