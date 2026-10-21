@@ -25,7 +25,8 @@ func (a *App) ensurePhoneMicServer() (*phonemic.Server, error) {
 	if server != nil {
 		return server, nil
 	}
-	server, err := phonemic.Start(a.cfg.PhoneMicToken, a.cfg.PhoneMicPort, a.cfg.PhoneMicBufferEnabled, a.cfg.PhoneMicBufferMS, a.cfg.Username, a.receivePhonePCM, a.setStatus)
+	cfg := a.conf()
+	server, err := phonemic.Start(cfg.PhoneMicToken, cfg.PhoneMicPort, cfg.PhoneMicBufferEnabled, cfg.PhoneMicBufferMS, cfg.Username, a.receivePhonePCM, a.setStatus)
 	if err != nil {
 		return nil, err
 	}
@@ -37,13 +38,14 @@ func (a *App) ensurePhoneMicServer() (*phonemic.Server, error) {
 		server = a.phoneMic
 	}
 	a.phoneMicMu.Unlock()
-	a.cfg.PhoneMicToken = server.Token()
-	a.cfg.PhoneMicPort = server.Port()
-	if err := config.Save(a.cfgPath, a.cfg); err != nil {
-		logging.Errorf("guardar enlace de micrófono de celular: %s", logging.FormatError(err))
-	}
-	if a.cfg.PhoneMicBufferEnabled {
-		a.setStatus("Micrófono de celular listo con " + strconv.Itoa(a.cfg.PhoneMicBufferMS) + " ms de buffer. Escaneá el QR desde la misma Wi-Fi.")
+	token, port := server.Token(), server.Port()
+	cfg = a.updateConfig(func(c *config.Config) {
+		c.PhoneMicToken = token
+		c.PhoneMicPort = port
+	})
+	a.saveConfig()
+	if cfg.PhoneMicBufferEnabled {
+		a.setStatus("Micrófono de celular listo con " + strconv.Itoa(cfg.PhoneMicBufferMS) + " ms de buffer. Escaneá el QR desde la misma Wi-Fi.")
 	} else {
 		a.setStatus("Micrófono de celular listo sin buffer. Escaneá el QR desde la misma Wi-Fi.")
 	}
@@ -58,26 +60,16 @@ func (a *App) stopPhoneMic() {
 	if server != nil {
 		server.Stop()
 	}
-	if a.cfg.InputDevice == phoneMicInput {
-		a.cfg.InputDevice = "Sistema predeterminado"
-	}
 }
 
 func (a *App) receivePhonePCM(frame []byte) {
 	a.playPhonePreview(frame)
-	if !a.phoneMicEnabled() || a.transport == nil {
+	udp := a.transport.Load()
+	if udp == nil || !a.phoneMicEnabled() {
 		return
 	}
-	var peer *net.UDPAddr
-	if !a.hostMode.Load() {
-		var err error
-		peer, err = net.ResolveUDPAddr("udp", a.endpoint)
-		if err != nil {
-			logging.Errorf("resolver host para micrófono de celular: %s", logging.FormatError(err))
-			return
-		}
-	}
-	a.sendOutgoingPCM(frame, a.transport, peer, a.hostMode.Load())
+	// peer nil: sendOutgoingPCM usa la dirección del host ya resuelta (endpointAddr).
+	a.sendOutgoingPCM(frame, udp, nil, a.hostMode.Load())
 }
 
 func (a *App) phoneMicEnabled() bool {
@@ -97,18 +89,55 @@ func (a *App) setPreviewPlayer(player *audio.Player) {
 }
 
 func (a *App) stopPreviewAudio() {
+	a.detachPreviewAudio()()
+}
+
+// detachPreviewAudio saca el engine/player de la escucha de prueba bajo lock (rápido) y devuelve
+// la función que los detiene (lenta: libera dispositivos malgo), para correrla fuera del hilo de UI
+// sin que un stop tardío alcance a un preview nuevo.
+func (a *App) detachPreviewAudio() func() {
 	a.previewMu.Lock()
 	player := a.previewPlayer
 	engine := a.previewEngine
 	a.previewPlayer = nil
 	a.previewEngine = nil
 	a.previewMu.Unlock()
-	if engine != nil {
-		engine.Stop()
+	return func() {
+		if engine != nil {
+			engine.Stop()
+		}
+		if player != nil {
+			player.Stop()
+		}
 	}
-	if player != nil {
-		player.Stop()
+}
+
+// startMicPreview abre la escucha de prueba del micrófono (pantalla de ajustes). Abre
+// dispositivos malgo, así que se llama fuera del hilo de UI.
+func (a *App) startMicPreview(input, output string) error {
+	if input == phoneMicInput {
+		player, err := audio.NewPlayer(output)
+		if err != nil {
+			return err
+		}
+		a.setPreviewPlayer(player)
+		return nil
 	}
+	var engine *audio.Engine
+	var err error
+	engine, err = audio.NewEngine(input, output, func(frame []byte) {
+		payload, shouldPlay := a.prepareOutgoingPCM(frame)
+		if shouldPlay && engine != nil {
+			engine.Play(payload)
+		}
+	})
+	if err != nil {
+		return err
+	}
+	a.previewMu.Lock()
+	a.previewEngine = engine
+	a.previewMu.Unlock()
+	return nil
 }
 
 func (a *App) playPhonePreview(frame []byte) {
@@ -125,7 +154,7 @@ func (a *App) playPhonePreview(frame []byte) {
 }
 
 func (a *App) playIncomingSound(sound room.Sound) {
-	if a.cfg.SoundboardMuted || a.historyStore == nil {
+	if a.conf().SoundboardMuted || a.historyStore == nil {
 		return
 	}
 	go func() {
@@ -140,15 +169,16 @@ func (a *App) playIncomingSound(sound room.Sound) {
 		}
 		a.pendingPlays[sound.ID] = struct{}{}
 		a.soundMu.Unlock()
-		if a.transport == nil || a.roomState.HostID == a.participantID {
+		udp := a.transport.Load()
+		if udp == nil || a.roomState.HostID == a.participantID {
 			return
 		}
-		peer, resolveErr := net.ResolveUDPAddr("udp", a.endpoint)
-		if resolveErr != nil {
+		peer := a.endpointAddr()
+		if peer == nil {
 			return
 		}
 		request := assets.MissingRequest{Kind: assets.KindSound, ID: sound.ID, Ext: sound.Ext}
-		_ = a.transport.Send(peer, transport.Packet{Kind: transport.PacketAssetMissing, Sequence: a.sequence.Add(1), Payload: assets.EncodeMissing(request)})
+		_ = udp.Send(peer, transport.Packet{Kind: transport.PacketAssetMissing, Sequence: a.sequence.Add(1), Payload: assets.EncodeMissing(request)})
 	}()
 }
 
@@ -158,7 +188,7 @@ func (a *App) ensureSoundPlayer() *audio.Player {
 	if a.soundPlayer != nil {
 		return a.soundPlayer
 	}
-	player, err := audio.NewPlayer(a.cfg.OutputDevice)
+	player, err := audio.NewPlayer(a.conf().OutputDevice)
 	if err != nil {
 		logging.Errorf("iniciar salida de sonidos: %s", logging.FormatError(err))
 		return nil
@@ -191,7 +221,7 @@ func applyVolume(pcm []byte, volume float32) []byte {
 }
 
 func (a *App) playSoundPCM(data []byte) {
-	vol := a.cfg.SoundboardVolume
+	vol := a.conf().SoundboardVolume
 	if vol <= 0.01 {
 		vol = 1.0
 	}
@@ -203,11 +233,11 @@ func (a *App) playSoundPCM(data []byte) {
 }
 
 func (a *App) playEventSound(sfx []byte) {
-	if !a.cfg.EventSoundsEnabled || len(sfx) == 0 {
+	if len(sfx) == 0 || !a.conf().EventSoundsEnabled {
 		return
 	}
-	if a.audioEngine != nil {
-		a.audioEngine.Play(sfx)
+	if engine := a.engine(); engine != nil {
+		engine.Play(sfx)
 	} else if player := a.ensureSoundPlayer(); player != nil {
 		player.Play(sfx)
 	}
@@ -226,12 +256,16 @@ func (a *App) stopSoundboard() {
 	}()
 }
 
+// startAudio abre los dispositivos de la sala (lento: correr fuera del hilo de UI y de
+// receiveLoop) y publica el Engine para la conexión udp.
 func (a *App) startAudio(udp *transport.UDP, peer *net.UDPAddr, host bool) {
-	inputDevice := a.cfg.InputDevice
+	cfg := a.conf()
+	inputDevice := cfg.InputDevice
 	if inputDevice == phoneMicInput {
 		inputDevice = "Sistema predeterminado"
 	}
-	engine, err := audio.NewEngine(inputDevice, a.cfg.OutputDevice, func(frame []byte) {
+	a.resetEncoder()
+	engine, err := audio.NewEngine(inputDevice, cfg.OutputDevice, func(frame []byte) {
 		if a.phoneMicEnabled() {
 			return
 		}
@@ -241,25 +275,26 @@ func (a *App) startAudio(udp *transport.UDP, peer *net.UDPAddr, host bool) {
 		a.setStatus("Audio no disponible: " + err.Error())
 		return
 	}
-	if a.cfg.JitterBufferMS >= 40 {
-		engine.SetJitterBufferMS(a.cfg.JitterBufferMS)
+	if jitterMS := a.conf().JitterBufferMS; jitterMS >= 40 {
+		engine.SetJitterBufferMS(jitterMS)
 	}
-	a.audioEngine = engine
+	engine.SetOutputFilter(a.outputFilter)
+	a.applyPeerVolumes(engine)
+	if !a.publishEngine(engine, udp) {
+		return
+	}
 	a.setStatus("Audio iniciado correctamente")
 }
 
 func (a *App) restartAudioInRoom() {
-	if a.audioEngine != nil {
-		a.audioEngine.Stop()
-		a.audioEngine = nil
-	}
-	if a.transport != nil {
+	a.stopEngine()
+	if udp := a.transport.Load(); udp != nil {
 		a.setStatus("Reiniciando audio en la sala...")
 		var peer *net.UDPAddr
-		if !a.hostMode.Load() && a.endpoint != "" {
-			peer, _ = net.ResolveUDPAddr("udp", a.endpoint)
+		if !a.hostMode.Load() {
+			peer = a.endpointAddr()
 		}
-		go a.startAudio(a.transport, peer, a.hostMode.Load())
+		go a.startAudio(udp, peer, a.hostMode.Load())
 	} else {
 		a.setStatus("No estas conectado a ningún servidor")
 	}

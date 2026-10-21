@@ -58,6 +58,13 @@ type Effects struct {
 	vadHoldFrames         int
 	gateHoldFrames        int
 	wasOpen               bool
+
+	// Estado del envío (solo lo usa la cadena saliente, ver PrepareOutgoingFrames).
+	sendLimiter      peakLimiter
+	sendLimiterReady bool
+	preRoll          [config.AudioPreRollFrames][]int16 // frames procesados que no salieron (compuerta cerrada)
+	preRollCount     int
+	out              [][]int16
 }
 
 func (e *Effects) KeepVoiceOpen(vadOpen, gateOpen bool, settings FilterSettings) bool {
@@ -83,57 +90,94 @@ func holdFrames(milliseconds int) int {
 	return milliseconds / 20
 }
 
-func (e *Effects) SmoothTransition(samples []int16, open bool) {
+// limitSend pasa el frame por el limitador con envolvente del final de la cadena de envío.
+// Corre sobre TODOS los frames, también los que no salen, para que la envolvente siga el
+// tiempo real y el pre-roll ya salga limitado.
+func (e *Effects) limitSend(samples []int16, ceiling int16) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	rampLen := 144 // ~3 ms at 48 kHz
+	if !e.sendLimiterReady {
+		e.sendLimiter = newPeakLimiter(float64(ceiling), config.AudioSendLimiterAttackMS, config.AudioSendLimiterReleaseMS)
+		e.sendLimiterReady = true
+	}
+	e.sendLimiter.threshold = float64(ceiling)
+	e.sendLimiter.ProcessInt16(samples)
+}
+
+// gateFrames decide qué sale con la compuerta en este frame. Cerrada: nada, y el frame se
+// guarda como pre-roll. Al abrirse: primero el pre-roll (los últimos frames que no salieron,
+// en orden) y después el actual, con fade-in en el primero de todos. Los slices devueltos son
+// del Effects y valen hasta la próxima llamada. started indica que arrancó una frase nueva.
+func (e *Effects) gateFrames(samples []int16, open bool) (frames [][]int16, started bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !open {
+		// El frame que cierra no sale (como antes); el receptor hace su propio fade a silencio.
+		if e.preRollCount == len(e.preRoll) {
+			oldest := e.preRoll[0]
+			copy(e.preRoll[:], e.preRoll[1:])
+			e.preRoll[len(e.preRoll)-1] = oldest
+			e.preRollCount--
+		}
+		slot := &e.preRoll[e.preRollCount]
+		*slot = append((*slot)[:0], samples...)
+		e.preRollCount++
+		e.wasOpen = false
+		return nil, false
+	}
+	e.out = e.out[:0]
+	if !e.wasOpen {
+		e.out = append(e.out, e.preRoll[:e.preRollCount]...)
+		e.preRollCount = 0
+		started = true
+	}
+	e.out = append(e.out, samples)
+	if started {
+		applyFadeInInt16(e.out[0], config.AudioFadeInSamples)
+	}
+	e.wasOpen = true
+	return e.out, started
+}
+
+func applyFadeInInt16(samples []int16, rampLen int) {
 	if len(samples) < rampLen {
 		rampLen = len(samples)
 	}
-	if !e.wasOpen && open {
-		for i := 0; i < rampLen; i++ {
-			factor := float64(i) / float64(rampLen)
-			samples[i] = int16(float64(samples[i]) * factor)
-		}
-	} else if e.wasOpen && !open {
-		start := len(samples) - rampLen
-		for i := 0; i < rampLen; i++ {
-			factor := 1.0 - (float64(i) / float64(rampLen))
-			samples[start+i] = int16(float64(samples[start+i]) * factor)
-		}
-	}
-	e.wasOpen = open
-}
-
-func ApplyPeakCeiling(samples []int16, ceiling int16) {
-	if ceiling <= 0 {
-		ceiling = config.AudioSendPeakCeiling // ~ -1.7 dBFS ceiling
-	}
-	maxVal := int16(0)
-	for _, s := range samples {
-		abs := s
-		if abs < 0 {
-			abs = -abs
-		}
-		if abs > maxVal {
-			maxVal = abs
-		}
-	}
-	if maxVal > ceiling {
-		scale := float64(ceiling) / float64(maxVal)
-		for i := range samples {
-			samples[i] = int16(float64(samples[i]) * scale)
-		}
+	for i := 0; i < rampLen; i++ {
+		samples[i] = int16(float64(samples[i]) * float64(i) / float64(rampLen))
 	}
 }
 
-func (e *Effects) Apply(data []byte, settings FilterSettings) ([]byte, error) {
-	samples, err := DecodePCM(data)
-	if err != nil {
-		return nil, err
+// ApplyOutput aplica la cadena de salida (por emisor, en el Engine) salteándola cuando no
+// cambiaría nada: sin ganancia ni filtros y con el pico del bloque bajo el umbral del limiter.
+// En ese caso el audio sale bit a bit igual (pasarlo por la cadena podía mover 1 LSB por el
+// redondeo a float).
+func (e *Effects) ApplyOutput(samples []int16, settings FilterSettings) {
+	if settings.GainDB == 0 && !settings.HighPassEnabled && !settings.LowPassEnabled && !settings.NotchEnabled &&
+		!settings.CompressorEnabled && !settings.ExpanderEnabled {
+		if !settings.LimiterEnabled {
+			return
+		}
+		limit := math.Pow(10, float64(settings.LimiterThreshold)/20) * math.MaxInt16
+		if float64(peakAbs(samples)) <= limit {
+			return
+		}
 	}
 	e.ApplySamples(samples, settings)
-	return EncodePCM(samples), nil
+}
+
+func peakAbs(samples []int16) int {
+	peak := 0
+	for _, s := range samples {
+		v := int(s)
+		if v < 0 {
+			v = -v
+		}
+		if v > peak {
+			peak = v
+		}
+	}
+	return peak
 }
 
 // ApplySamples aplica la cadena de efectos directamente sobre un slice de muestras int16 sin allocations intermedias.
@@ -203,27 +247,22 @@ func clampFrequency(frequency float32) float64 {
 	return float64(frequency)
 }
 
-func applyDynamics(value float64, settings FilterSettings) float64 {
-	limit := 0.0
-	if settings.LimiterEnabled {
-		limit = math.Pow(10, float64(settings.LimiterThreshold)/20)
-	}
-	return applyDynamicsFast(value, settings, limit)
-}
-
 func applyDynamicsFast(value float64, settings FilterSettings, limit float64) float64 {
-	level := math.Abs(value)
-	if level == 0 {
+	if value == 0 {
 		return 0
 	}
-	db := 20 * math.Log10(level)
-	if settings.CompressorEnabled && db > float64(settings.CompressorThreshold) {
-		ratio := math.Max(float64(settings.CompressorRatio), 1)
-		value *= math.Pow(10, (float64(settings.CompressorThreshold)+(db-float64(settings.CompressorThreshold))/ratio-db)/20)
-	}
-	if settings.ExpanderEnabled && db < float64(settings.ExpanderThreshold) {
-		ratio := math.Max(float64(settings.ExpanderRatio), 1)
-		value *= math.Pow(10, (float64(settings.ExpanderThreshold)+(db-float64(settings.ExpanderThreshold))*ratio-db)/20)
+	// Log10 por muestra solo si algo lo usa: con compresor y expansor apagados (default) el
+	// limiter no necesita el nivel en dB.
+	if settings.CompressorEnabled || settings.ExpanderEnabled {
+		db := 20 * math.Log10(math.Abs(value))
+		if settings.CompressorEnabled && db > float64(settings.CompressorThreshold) {
+			ratio := math.Max(float64(settings.CompressorRatio), 1)
+			value *= math.Pow(10, (float64(settings.CompressorThreshold)+(db-float64(settings.CompressorThreshold))/ratio-db)/20)
+		}
+		if settings.ExpanderEnabled && db < float64(settings.ExpanderThreshold) {
+			ratio := math.Max(float64(settings.ExpanderRatio), 1)
+			value *= math.Pow(10, (float64(settings.ExpanderThreshold)+(db-float64(settings.ExpanderThreshold))*ratio-db)/20)
+		}
 	}
 	if settings.LimiterEnabled && limit > 0 {
 		absVal := math.Abs(value)

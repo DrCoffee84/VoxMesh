@@ -1,7 +1,7 @@
 package audio
 
 import (
-	"encoding/binary"
+	"math"
 	"time"
 
 	"voxmesh/internal/config"
@@ -10,73 +10,107 @@ import (
 // jitterRingFrames es la capacidad del ring de frames (1.28 s a 20 ms por frame).
 const jitterRingFrames = 64
 
+// jitterHistogramBuckets cubre hasta 640 ms de variación de retardo (buckets de 5 ms).
+const jitterHistogramBuckets = 128
+
+const jitterFrameDuration = 20 * time.Millisecond
+
+// frameDecoder decodifica los paquetes de un emisor: Opus en producción (codec.go), un fake en
+// los tests (así jitter_test corre sin CGO). Las tres usan cap(pcm) como duración a generar, así
+// que siempre se les pasa exactamente un frame.
+type frameDecoder interface {
+	Decode(packet []byte, pcm []int16) (int, error)
+	DecodeFEC(packet []byte, pcm []int16) error
+	DecodePLC(pcm []int16) error
+}
+
 type jitterFrameKind int
 
 const (
 	jitterFrameSilence jitterFrameKind = iota
-	jitterFrameReal
-	jitterFramePLC
+	jitterFrameDecoded                 // salida del decoder (real, FEC o PLC): continua con la anterior
+	jitterFrameFade                    // PLC con fade a silencio porque el buffer se vació
 )
 
 type jitterSlot struct {
 	seq     uint32
 	present bool
-	pcm     []int16
+	data    []byte // paquete codificado tal como llegó
 }
 
-// JitterStats cuenta lo que hizo el jitter buffer de un emisor.
+// JitterStats cuenta lo que hizo el jitter buffer de un emisor y lo que mide de la red.
 type JitterStats struct {
-	Played    uint64 // frames reales reproducidos
-	Concealed uint64 // frames perdidos ocultados con PLC o silencio
+	Played    uint64 // frames decodificados de su propio paquete
+	Recovered uint64 // frames perdidos rearmados con el FEC del paquete siguiente (o su PLC si no traía)
+	Concealed uint64 // frames perdidos ocultados con PLC o silencio (sin paquete siguiente)
 	Late      uint64 // paquetes que llegaron después de su turno y se descartaron
 	Dropped   uint64 // frames descartados para corregir deriva (buffer demasiado lleno)
 	Resets    uint64 // saltos de secuencia enormes (emisor reiniciado)
+
+	BufferedFrames int     // frames esperando en el buffer
+	TargetMS       int     // colchón objetivo vigente (adaptativo, tope JitterBufferMS)
+	JitterMS       float64 // jitter de llegada RFC 3550: J += (|D| - J) / 16
+	DelayP95MS     int     // percentil de variación de retardo que cubre el colchón; -1 sin datos
 }
 
-// jitterBuffer reordena los frames de un emisor por su secuencia de audio y los
-// entrega a ritmo constante. Si falta un frame:
-//   - con frames posteriores ya recibidos es una pérdida: se oculta repitiendo el
-//     último frame real con atenuación progresiva (PLC) y se avanza la secuencia;
-//   - con el buffer vacío es un pico de lag o el fin de una frase: se hace un fade a
-//     silencio y NO se avanza la secuencia, así el frame demorado se reproduce cuando llegue.
+// Lost es la cantidad de frames que no llegaron a tiempo (recuperados u ocultados).
+func (s JitterStats) Lost() uint64 { return s.Recovered + s.Concealed }
+
+// Total es la cantidad de frames que tocaba reproducir.
+func (s JitterStats) Total() uint64 { return s.Played + s.Lost() }
+
+// jitterBuffer reordena los paquetes de un emisor por su secuencia de audio, los decodifica al
+// momento de reproducirlos y los entrega a ritmo constante. Si falta un frame:
+//   - con frames posteriores ya recibidos es una pérdida: se recupera con el FEC del paquete
+//     siguiente, o con el PLC del decoder, y se avanza la secuencia;
+//   - con el buffer vacío es un pico de lag o el fin de una frase: PLC con fade a silencio y NO
+//     se avanza la secuencia, así el frame demorado se reproduce cuando llegue.
 //
-// Todo empalme entre frames no contiguos se suaviza con un crossfade corto: para eso
-// la salida retiene las últimas JitterSpliceSamples muestras de cada frame.
-// No es seguro para uso concurrente: el Engine lo protege con playbackMu.
+// Todo empalme no contiguo (arranque, descarte por deriva) se suaviza con un crossfade corto:
+// para eso la salida retiene las últimas JitterSpliceSamples muestras de cada frame.
+// No es seguro para uso concurrente: el Engine lo protege con playbackMu. Corre dentro del
+// callback de malgo, así que no asigna memoria en Read (buffers preasignados).
 type jitterBuffer struct {
 	slots        [jitterRingFrames]jitterSlot
+	dec          frameDecoder
 	started      bool
 	playing      bool   // false = esperando colchón (arranque de frase o underrun)
 	playSeq      uint32 // próximo seq a reproducir
 	highestSeq   uint32 // seq más alto recibido
-	targetFrames int
+	maxFrames    int    // tope del colchón (JitterBufferMS)
+	targetFrames int    // colchón vigente: solo cambia con !playing para que no haya saltos
 
 	firstArrival time.Time // llegada del primer frame mientras se espera colchón
 	lastRealAt   time.Time // cuándo arrancó el último frame real reproducido
 
-	last         []int16 // último frame real, base del PLC
-	plcGain      float64 // ganancia con la que terminó el último frame emitido
-	lossRun      int
-	fadedOut     bool
-	dropCooldown int
+	lossRun       int
+	dropCooldown  int
+	discontinuity bool // hubo descarte o reset: el próximo frame no empalma con el anterior
+	prevKind      jitterFrameKind
 
-	prevKind jitterFrameKind
-	prevSeq  uint32
-
+	decodeBuf  [FrameSamples]int16
+	silence    [FrameSamples]int16
 	frame      []int16 // frame de trabajo armado por nextFrame
 	tail       []int16 // cola retenida del frame anterior para el crossfade
 	pending    []int16 // muestras listas para salir
 	pendingPos int
 
-	stats JitterStats
+	arrival arrivalStats
+	stats   JitterStats
 }
 
-func newJitterBuffer(targetMS int) *jitterBuffer {
-	j := &jitterBuffer{plcGain: 1}
+func newJitterBuffer(targetMS int, dec frameDecoder) *jitterBuffer {
+	j := &jitterBuffer{
+		dec:     dec,
+		tail:    make([]int16, 0, config.JitterSpliceSamples),
+		pending: make([]int16, 0, FrameSamples+config.JitterSpliceSamples),
+	}
 	j.setTargetMS(targetMS)
 	return j
 }
 
+// setTargetMS fija el tope del colchón. El objetivo real lo elige adaptiveTarget al arrancar
+// cada frase según el jitter medido.
 func (j *jitterBuffer) setTargetMS(ms int) {
 	frames := ms / 20
 	if frames < 2 {
@@ -85,11 +119,14 @@ func (j *jitterBuffer) setTargetMS(ms int) {
 	if frames > jitterRingFrames/2 {
 		frames = jitterRingFrames / 2
 	}
-	j.targetFrames = frames
+	j.maxFrames = frames
+	if j.targetFrames == 0 || j.targetFrames > frames {
+		j.targetFrames = frames
+	}
 }
 
-// reset vacía el ring y vuelve a esperar colchón desde seq. No toca la cola ni el
-// último frame, así la salida se empalma sin clic.
+// reset vacía el ring y vuelve a esperar colchón desde seq. No toca la cola retenida, así la
+// salida se empalma sin clic.
 func (j *jitterBuffer) reset(seq uint32) {
 	for i := range j.slots {
 		j.slots[i].present = false
@@ -101,13 +138,15 @@ func (j *jitterBuffer) reset(seq uint32) {
 	j.firstArrival = time.Time{}
 	j.lossRun = 0
 	j.dropCooldown = 0
+	j.discontinuity = true
 }
 
-// Push guarda un frame S16LE recibido con su secuencia de audio.
-func (j *jitterBuffer) Push(seq uint32, pcm []byte, now time.Time) {
-	if len(pcm) < 2 {
+// Push guarda un paquete recibido con su secuencia de audio y su número de frase (talkspurt).
+func (j *jitterBuffer) Push(seq uint32, talkspurt uint8, packet []byte, now time.Time) {
+	if len(packet) == 0 {
 		return
 	}
+	j.arrival.observe(seq, talkspurt, now)
 	if !j.started {
 		j.reset(seq)
 	}
@@ -128,10 +167,7 @@ func (j *jitterBuffer) Push(seq uint32, pcm []byte, now time.Time) {
 	}
 	slot.seq = seq
 	slot.present = true
-	slot.pcm = slot.pcm[:0]
-	for i := 0; i+1 < len(pcm); i += 2 {
-		slot.pcm = append(slot.pcm, int16(binary.LittleEndian.Uint16(pcm[i:])))
-	}
+	slot.data = append(slot.data[:0], packet...)
 	if int32(seq-j.highestSeq) > 0 {
 		j.highestSeq = seq
 	}
@@ -140,11 +176,10 @@ func (j *jitterBuffer) Push(seq uint32, pcm []byte, now time.Time) {
 	}
 }
 
-// Read llena dst (S16LE) con el audio del emisor y devuelve si hubo alguna muestra
-// distinta de cero.
-func (j *jitterBuffer) Read(dst []byte, now time.Time) bool {
+// Read llena dst con el audio del emisor y devuelve si hubo alguna muestra distinta de cero.
+func (j *jitterBuffer) Read(dst []int16, now time.Time) bool {
 	active := false
-	for i := 0; i+1 < len(dst); i += 2 {
+	for i := range dst {
 		if j.pendingPos >= len(j.pending) {
 			j.advance(now)
 		}
@@ -153,25 +188,58 @@ func (j *jitterBuffer) Read(dst []byte, now time.Time) bool {
 		if sample != 0 {
 			active = true
 		}
-		binary.LittleEndian.PutUint16(dst[i:], uint16(sample))
+		dst[i] = sample
 	}
 	return active
 }
 
-// Stats devuelve los contadores acumulados.
+// Stats devuelve los contadores acumulados y el estado de la medición de red.
 func (j *jitterBuffer) Stats() JitterStats {
-	return j.stats
+	stats := j.stats
+	if j.started {
+		for seq := j.playSeq; int32(j.highestSeq-seq) >= 0; seq++ {
+			if slot := &j.slots[seq%jitterRingFrames]; slot.present && slot.seq == seq {
+				stats.BufferedFrames++
+			}
+		}
+	}
+	stats.TargetMS = j.targetFrames * 20
+	stats.JitterMS = j.arrival.jitter / float64(time.Millisecond)
+	stats.DelayP95MS = j.arrival.percentileMS(config.JitterAdaptivePercentile)
+	return stats
 }
 
-// advance arma el próximo frame y lo pasa a pending, empalmándolo con la cola del
-// anterior. Un frame contiguo sale intacto; uno no contiguo arranca con un crossfade
-// desde la cola retenida (y por eso sale JitterSpliceSamples más corto).
+// adaptiveTarget elige el colchón para la próxima frase: lo justo para cubrir el percentil de
+// variación de retardo medido, más un margen, entre 2 frames y el tope. Sin datos suficientes,
+// el tope (conservador).
+func (j *jitterBuffer) adaptiveTarget() int {
+	if j.arrival.windowCount < config.JitterAdaptiveMinSamples {
+		return j.maxFrames
+	}
+	p := j.arrival.percentileMS(config.JitterAdaptivePercentile)
+	frames := (p+19)/20 + config.JitterAdaptiveMarginFrames
+	if frames < 2 {
+		frames = 2
+	}
+	if frames > j.maxFrames {
+		frames = j.maxFrames
+	}
+	return frames
+}
+
+// advance arma el próximo frame y lo pasa a pending, empalmándolo con la cola del anterior.
+// Un frame contiguo sale intacto; uno no contiguo arranca con un crossfade desde la cola
+// retenida (y por eso sale JitterSpliceSamples más corto).
 func (j *jitterBuffer) advance(now time.Time) {
-	kind, seq := j.nextFrame(now)
+	kind := j.nextFrame(now)
 	frame := j.frame
 	splice := config.JitterSpliceSamples
-	contiguous := (kind == jitterFrameReal && j.prevKind == jitterFrameReal && seq == j.prevSeq+1) ||
-		(kind == jitterFrameSilence && j.prevKind == jitterFrameSilence)
+	// Lo que sale del decoder (real, FEC, PLC y el PLC del fade) es continuo con lo anterior del
+	// decoder; el silencio es continuo con el fade (que termina en cero) y con otro silencio.
+	contiguous := !j.discontinuity &&
+		((kind != jitterFrameSilence && j.prevKind == jitterFrameDecoded) ||
+			(kind == jitterFrameSilence && j.prevKind != jitterFrameDecoded))
+	j.discontinuity = false
 
 	j.pending = j.pending[:0]
 	j.pendingPos = 0
@@ -194,15 +262,17 @@ func (j *jitterBuffer) advance(now time.Time) {
 		}
 		j.tail = append(j.tail[:0], frame[len(frame)-splice:]...)
 	}
-	j.prevKind, j.prevSeq = kind, seq
+	j.prevKind = kind
 }
 
 // nextFrame decide qué suena en los próximos 20 ms y lo deja en j.frame.
-func (j *jitterBuffer) nextFrame(now time.Time) (jitterFrameKind, uint32) {
+func (j *jitterBuffer) nextFrame(now time.Time) jitterFrameKind {
 	if !j.started {
 		return j.silenceOrFade()
 	}
 	if !j.playing {
+		// El colchón cambia solo acá (arranque de frase o underrun): sin saltos audibles.
+		j.targetFrames = j.adaptiveTarget()
 		first, ok := j.firstPresent()
 		if !ok || !j.readyToPlay(first, now) {
 			return j.silenceOrFade()
@@ -211,56 +281,92 @@ func (j *jitterBuffer) nextFrame(now time.Time) (jitterFrameKind, uint32) {
 		j.playing = true
 		j.firstArrival = time.Time{}
 	}
+	return j.playFrame(now, true)
+}
 
-	// Deriva: si el buffer quedó muy por encima del objetivo (por ejemplo tras una
-	// ráfaga), descartamos un frame cada tanto en lugar de cortar de golpe.
-	if j.dropCooldown > 0 {
+// playFrame reproduce playSeq. allowDrop es false en la segunda pasada después de un descarte,
+// así hay como mucho un descarte por frame.
+func (j *jitterBuffer) playFrame(now time.Time, allowDrop bool) jitterFrameKind {
+	if allowDrop && j.dropCooldown > 0 {
 		j.dropCooldown--
 	}
-	if span := int(int32(j.highestSeq-j.playSeq)) + 1; span > j.targetFrames+config.JitterDriftSlackFrames && j.dropCooldown == 0 {
-		if slot := &j.slots[j.playSeq%jitterRingFrames]; slot.present && slot.seq == j.playSeq {
-			slot.present = false
-			j.stats.Dropped++
-		}
-		j.playSeq++
-		j.dropCooldown = config.JitterDriftCooldownFrames
-	}
+	// Deriva: si el buffer quedó por encima del objetivo (ráfaga, o el objetivo bajó), hay que
+	// descartar un frame. Se posterga hasta uno de baja energía, salvo que el exceso sea grande.
+	span := int(int32(j.highestSeq-j.playSeq)) + 1
+	over := allowDrop && j.dropCooldown == 0 && span > j.targetFrames+config.JitterDriftSlackFrames
+	force := span > j.targetFrames+config.JitterDriftSlackFrames+config.JitterDriftForceFrames
 
 	slot := &j.slots[j.playSeq%jitterRingFrames]
 	if slot.present && slot.seq == j.playSeq {
 		slot.present = false
-		j.frame = append(j.frame[:0], slot.pcm...)
-		j.last = append(j.last[:0], slot.pcm...)
-		seq := j.playSeq
-		j.playSeq++
-		j.lossRun = 0
-		j.fadedOut = false
-		j.plcGain = 1
-		j.lastRealAt = now
-		j.stats.Played++
-		return jitterFrameReal, seq
+		if j.decode(slot.data) {
+			if over && (force || frameRMS(j.frame) < config.JitterDriftQuietRMS) {
+				// Se decodificó igual (el decoder no pierde continuidad) y se tira en un momento
+				// de baja energía, donde el salto no se nota.
+				j.playSeq++
+				j.stats.Dropped++
+				j.dropCooldown = config.JitterDriftCooldownFrames
+				j.discontinuity = true
+				return j.playFrame(now, false)
+			}
+			j.playSeq++
+			j.lossRun = 0
+			j.lastRealAt = now
+			j.stats.Played++
+			return jitterFrameDecoded
+		}
+		// Paquete corrupto: se trata como perdido.
 	}
 
 	if int32(j.highestSeq-j.playSeq) > 0 {
-		// Hay frames posteriores: este se perdió (o llegará tarde). Lo ocultamos y seguimos.
+		// Hay frames posteriores: este se perdió (o llegará tarde).
+		if over {
+			// Con el buffer pasado del objetivo, el hueco no se oculta: se saltea y la latencia
+			// baja sin cortar nada que se haya recibido.
+			j.playSeq++
+			j.stats.Concealed++
+			j.stats.Dropped++
+			j.dropCooldown = config.JitterDriftCooldownFrames
+			j.discontinuity = true
+			return j.playFrame(now, false)
+		}
 		j.playSeq++
 		j.lossRun++
-		j.stats.Concealed++
-		if j.lossRun <= config.JitterPLCMaxFrames && len(j.last) > 0 {
-			from := j.plcGain
-			j.plcGain *= config.JitterPLCAttenuation
-			j.fillFromLast(from, j.plcGain, len(j.last))
-			return jitterFramePLC, 0
+		if j.lossRun <= config.JitterPLCMaxFrames {
+			pcm := j.decodeBuf[:]
+			if next := &j.slots[j.playSeq%jitterRingFrames]; next.present && next.seq == j.playSeq {
+				if j.dec.DecodeFEC(next.data, pcm) == nil {
+					j.frame = pcm
+					j.stats.Recovered++
+					return jitterFrameDecoded
+				}
+			}
+			if j.dec.DecodePLC(pcm) == nil {
+				j.frame = pcm
+				j.stats.Concealed++
+				return jitterFrameDecoded
+			}
 		}
-		j.plcGain = 0
-		j.fillSilence()
-		return jitterFrameSilence, 0
+		j.stats.Concealed++
+		j.frame = j.silence[:]
+		return jitterFrameSilence
 	}
 
 	// Buffer vacío: pico de lag o fin de frase. Esperamos sin avanzar playSeq.
 	j.playing = false
 	j.firstArrival = time.Time{}
 	return j.silenceOrFade()
+}
+
+// decode decodifica un paquete en decodeBuf y lo deja en j.frame.
+func (j *jitterBuffer) decode(packet []byte) bool {
+	pcm := j.decodeBuf[:]
+	n, err := j.dec.Decode(packet, pcm)
+	if err != nil || n <= 0 {
+		return false
+	}
+	j.frame = pcm[:n]
+	return true
 }
 
 // readyToPlay decide si ya hay colchón suficiente para (re)arrancar.
@@ -272,7 +378,7 @@ func (j *jitterBuffer) readyToPlay(first uint32, now time.Time) bool {
 	}
 	// Frase nueva: esperamos el colchón completo, o su duración si la frase es más corta.
 	span := int(int32(j.highestSeq-first)) + 1
-	return span >= j.targetFrames || now.Sub(j.firstArrival) >= time.Duration(j.targetFrames)*20*time.Millisecond
+	return span >= j.targetFrames || now.Sub(j.firstArrival) >= time.Duration(j.targetFrames)*jitterFrameDuration
 }
 
 // firstPresent busca el primer frame recibido a partir de playSeq.
@@ -286,38 +392,120 @@ func (j *jitterBuffer) firstPresent() (uint32, bool) {
 	return 0, false
 }
 
-// silenceOrFade hace un único fade a silencio desde el último frame y después silencio.
-func (j *jitterBuffer) silenceOrFade() (jitterFrameKind, uint32) {
-	if !j.fadedOut && len(j.last) > 0 && j.prevKind != jitterFrameSilence && j.plcGain > 0 {
-		j.fadedOut = true
-		j.fillFromLast(j.plcGain, 0, config.JitterFadeOutSamples)
-		j.plcGain = 0
-		return jitterFramePLC, 0
-	}
-	j.fillSilence()
-	return jitterFrameSilence, 0
-}
-
-// fillFromLast copia el último frame real con una rampa de ganancia de from a to
-// en las primeras rampLen muestras (el resto queda en to).
-func (j *jitterBuffer) fillFromLast(from, to float64, rampLen int) {
-	j.frame = j.frame[:0]
-	for i, sample := range j.last {
-		gain := to
-		if i < rampLen {
-			gain = from + (to-from)*float64(i)/float64(rampLen)
+// silenceOrFade: justo después de audio decodificado, un frame de PLC con fade a silencio
+// (continúa la voz en vez de cortarla); después, silencio.
+func (j *jitterBuffer) silenceOrFade() jitterFrameKind {
+	if j.prevKind == jitterFrameDecoded {
+		pcm := j.decodeBuf[:]
+		if j.dec.DecodePLC(pcm) != nil {
+			clear(pcm)
 		}
-		j.frame = append(j.frame, int16(float64(sample)*gain))
+		fade := config.JitterFadeOutSamples
+		for i := range pcm {
+			if i >= fade {
+				pcm[i] = 0
+				continue
+			}
+			pcm[i] = int16(float64(pcm[i]) * (1 - float64(i)/float64(fade)))
+		}
+		j.frame = pcm
+		return jitterFrameFade
 	}
+	j.frame = j.silence[:]
+	return jitterFrameSilence
 }
 
-func (j *jitterBuffer) fillSilence() {
-	frameLen := len(j.last)
-	if frameLen == 0 {
-		frameLen = FrameSamples
+// frameRMS es el nivel RMS del frame en escala S16.
+func frameRMS(samples []int16) float64 {
+	if len(samples) == 0 {
+		return 0
 	}
-	j.frame = j.frame[:0]
-	for i := 0; i < frameLen; i++ {
-		j.frame = append(j.frame, 0)
+	var sum float64
+	for _, s := range samples {
+		v := float64(s)
+		sum += v * v
 	}
+	return math.Sqrt(sum / float64(len(samples)))
+}
+
+// arrivalStats mide la red a partir de los tiempos de llegada de un emisor.
+//   - jitter: estimador RFC 3550 sobre llegadas consecutivas (D = llegada real − esperada).
+//   - Variación de retardo: dentro de cada frase, offset = llegada − seq·20 ms (relativo al
+//     primer paquete de la frase) menos el mínimo visto en la frase. Es lo que el colchón tiene
+//     que absorber. Va a un histograma sobre una ventana deslizante para sacar el percentil.
+//
+// La frase se reinicia cuando cambia el talkspurt del paquete: el emisor no manda nada con la
+// compuerta cerrada pero la secuencia sigue contigua, y sin ese corte el silencio se mediría
+// como retardo.
+type arrivalStats struct {
+	have      bool
+	talkspurt uint8
+	lastAt    time.Time
+	lastSeq   uint32
+	baseAt    time.Time
+	baseSeq   uint32
+	minOffset time.Duration
+	jitter    float64 // ns
+
+	hist        [jitterHistogramBuckets]uint16
+	window      [config.JitterAdaptiveWindow]uint8
+	windowPos   int
+	windowCount int
+}
+
+func (s *arrivalStats) observe(seq uint32, talkspurt uint8, now time.Time) {
+	if !s.have || talkspurt != s.talkspurt || now.Sub(s.lastAt) > time.Second {
+		s.have = true
+		s.talkspurt = talkspurt
+		s.baseAt, s.baseSeq, s.minOffset = now, seq, 0
+		s.lastAt, s.lastSeq = now, seq
+		return
+	}
+	if dseq := int32(seq - s.lastSeq); dseq != 0 {
+		d := now.Sub(s.lastAt) - time.Duration(dseq)*jitterFrameDuration
+		if d < 0 {
+			d = -d
+		}
+		s.jitter += (float64(d) - s.jitter) / 16
+	}
+	s.lastAt, s.lastSeq = now, seq
+
+	offset := now.Sub(s.baseAt) - time.Duration(int32(seq-s.baseSeq))*jitterFrameDuration
+	if offset < s.minOffset {
+		s.minOffset = offset
+	}
+	s.record(offset - s.minOffset)
+}
+
+func (s *arrivalStats) record(delay time.Duration) {
+	bucket := int(delay / (config.JitterHistogramBucketMS * time.Millisecond))
+	if bucket < 0 {
+		bucket = 0
+	} else if bucket >= jitterHistogramBuckets {
+		bucket = jitterHistogramBuckets - 1
+	}
+	if s.windowCount == len(s.window) {
+		s.hist[s.window[s.windowPos]]--
+	} else {
+		s.windowCount++
+	}
+	s.window[s.windowPos] = uint8(bucket)
+	s.hist[bucket]++
+	s.windowPos = (s.windowPos + 1) % len(s.window)
+}
+
+// percentileMS devuelve el borde superior (ms) del bucket donde cae el percentil p, o -1 sin datos.
+func (s *arrivalStats) percentileMS(p float64) int {
+	if s.windowCount == 0 {
+		return -1
+	}
+	need := int(math.Ceil(p * float64(s.windowCount)))
+	acc := 0
+	for i, count := range s.hist {
+		acc += int(count)
+		if acc >= need {
+			return (i + 1) * config.JitterHistogramBucketMS
+		}
+	}
+	return jitterHistogramBuckets * config.JitterHistogramBucketMS
 }

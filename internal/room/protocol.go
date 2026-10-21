@@ -19,6 +19,7 @@ const (
 	SoundRemoveMessage  = "sound_remove"
 	SoundPlayMessage    = "sound_play"
 	LeaveMessage        = "leave"
+	MuteMessage         = "mute"
 )
 
 type Envelope struct {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -173,68 +174,82 @@ func (a *App) triggerSoundByID(id string) {
 	}
 }
 
+// boundHotkey es un atajo ya parseado; soundID vacío = "detener sonido".
+type boundHotkey struct {
+	soundID string
+	hk      parsedHotkey
+}
+
+// activeHotkeys es lo único que lee el poller. publishHotkeys lo reemplaza entero cada vez que
+// cambia un atajo, así el poller no itera cfg.SoundBinds ni re-parsea strings cada 25 ms.
+var activeHotkeys atomic.Pointer[[]boundHotkey]
+
+func (a *App) publishHotkeys() {
+	var list []boundHotkey
+	cfg := a.conf()
+	if hk, ok := parseHotkeyString(cfg.StopSoundBind); ok {
+		list = append(list, boundHotkey{hk: hk})
+	}
+	for soundID, bind := range cfg.SoundBinds {
+		if hk, ok := parseHotkeyString(bind); ok {
+			list = append(list, boundHotkey{soundID: soundID, hk: hk})
+		}
+	}
+	activeHotkeys.Store(&list)
+}
+
+// isTypingInApp consulta el foco en el hilo de UI. Antes se leía Canvas().Focused() desde la
+// goroutine del poller 40 veces por segundo, sin sincronizar con el hilo de Fyne.
+func (a *App) isTypingInApp() bool {
+	if a.window == nil {
+		return false
+	}
+	focused := false
+	fyne.DoAndWait(func() {
+		focused = a.window.Canvas().Focused() != nil
+	})
+	return focused
+}
+
 func (a *App) startHotkeyListener() {
+	a.publishHotkeys()
 	go func() {
 		wasDown := make(map[string]bool)
 		for {
 			time.Sleep(25 * time.Millisecond)
-
-			// Check stop sound bind
-			if a.cfg.StopSoundBind != "" {
-				hk, ok := parseHotkeyString(a.cfg.StopSoundBind)
-				if ok {
-					canTrigger := true
-					if a.window != nil && a.window.Canvas() != nil && a.window.Canvas().Focused() != nil {
-						if !hk.shift && !hk.ctrl && !hk.alt && !isFunctionOrNumpad(hk.vk) {
-							wasDown["__stop__"] = false
-							canTrigger = false
-						}
-					}
-					if canTrigger {
-						active := isHotkeyActive(hk)
-						if active && !wasDown["__stop__"] {
-							a.stopSoundboard()
-						}
-						wasDown["__stop__"] = active
-					}
-				}
-			}
-
-			if a.cfg.SoundBinds == nil || len(a.cfg.SoundBinds) == 0 {
+			list := activeHotkeys.Load()
+			if list == nil {
 				continue
 			}
-
-			for soundID, bindStr := range a.cfg.SoundBinds {
-				if bindStr == "" {
+			for _, bound := range *list {
+				key := bound.soundID
+				if key == "" {
+					key = "__stop__"
+				}
+				active := isHotkeyActive(bound.hk)
+				pressed := active && !wasDown[key]
+				wasDown[key] = active
+				if !pressed {
 					continue
 				}
-				hk, ok := parseHotkeyString(bindStr)
-				if !ok {
+				// Una tecla suelta (letra/número) no se dispara mientras se escribe en VoxMesh.
+				// El foco solo se consulta en ese caso, que es raro (una vez por pulsación).
+				hk := bound.hk
+				if !hk.shift && !hk.ctrl && !hk.alt && !isFunctionOrNumpad(hk.vk) && a.isTypingInApp() {
 					continue
 				}
-
-				if a.window != nil && a.window.Canvas() != nil && a.window.Canvas().Focused() != nil {
-					if !hk.shift && !hk.ctrl && !hk.alt && !isFunctionOrNumpad(hk.vk) {
-						wasDown[soundID] = false
-						continue
-					}
+				if bound.soundID == "" {
+					a.stopSoundboard()
+				} else {
+					a.triggerSoundByID(bound.soundID)
 				}
-
-				active := isHotkeyActive(hk)
-				if active && !wasDown[soundID] {
-					a.triggerSoundByID(soundID)
-				}
-				wasDown[soundID] = active
 			}
 		}
 	}()
 }
 
 func (a *App) showSoundBindDialog(sound room.Sound) {
-	currentBind := ""
-	if a.cfg.SoundBinds != nil {
-		currentBind = a.cfg.SoundBinds[sound.ID]
-	}
+	currentBind := a.conf().SoundBinds[sound.ID]
 
 	detectedCombo := currentBind
 
@@ -260,6 +275,7 @@ func (a *App) showSoundBindDialog(sound room.Sound) {
 	go func() {
 		ticker := time.NewTicker(30 * time.Millisecond)
 		defer ticker.Stop()
+		lastCombo := ""
 		for {
 			select {
 			case <-stopScan:
@@ -283,10 +299,14 @@ func (a *App) showSoundBindDialog(sound room.Sound) {
 						}
 						parts = append(parts, k.name)
 						comboStr := strings.Join(parts, " + ")
-						detectedCombo = comboStr
-						fyne.Do(func() {
-							comboLabel.SetText("Detectado: " + comboStr)
-						})
+						if comboStr != lastCombo {
+							lastCombo = comboStr
+							// detectedCombo lo lee el botón Aceptar: se escribe en el hilo de UI.
+							fyne.Do(func() {
+								detectedCombo = comboStr
+								comboLabel.SetText("Detectado: " + comboStr)
+							})
+						}
 						break
 					}
 				}
@@ -299,11 +319,8 @@ func (a *App) showSoundBindDialog(sound room.Sound) {
 	btnAccept := widget.NewButton("Aceptar", func() {
 		cleanup()
 		if detectedCombo != "" {
-			if a.cfg.SoundBinds == nil {
-				a.cfg.SoundBinds = make(map[string]string)
-			}
-			a.cfg.SoundBinds[sound.ID] = detectedCombo
-			_ = config.Save(a.cfgPath, a.cfg)
+			combo := detectedCombo
+			a.updateSoundBinds(func(binds map[string]string) { binds[sound.ID] = combo })
 			a.rebuildSoundboard()
 			a.setStatus(fmt.Sprintf("Atajo '%s' asignado a '%s'", detectedCombo, sound.Name))
 		}
@@ -313,10 +330,7 @@ func (a *App) showSoundBindDialog(sound room.Sound) {
 
 	btnUnbind := widget.NewButton("Desbindear", func() {
 		cleanup()
-		if a.cfg.SoundBinds != nil {
-			delete(a.cfg.SoundBinds, sound.ID)
-			_ = config.Save(a.cfgPath, a.cfg)
-		}
+		a.updateSoundBinds(func(binds map[string]string) { delete(binds, sound.ID) })
 		a.rebuildSoundboard()
 		a.setStatus(fmt.Sprintf("Atajo removido de '%s'", sound.Name))
 		d.Hide()
@@ -345,7 +359,7 @@ func (a *App) showSoundBindDialog(sound room.Sound) {
 }
 
 func (a *App) showStopSoundBindDialog() {
-	currentBind := a.cfg.StopSoundBind
+	currentBind := a.conf().StopSoundBind
 	detectedCombo := currentBind
 
 	titleLabel := widget.NewLabelWithStyle("Detener sonido", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
@@ -370,6 +384,7 @@ func (a *App) showStopSoundBindDialog() {
 	go func() {
 		ticker := time.NewTicker(30 * time.Millisecond)
 		defer ticker.Stop()
+		lastCombo := ""
 		for {
 			select {
 			case <-stopScan:
@@ -393,10 +408,14 @@ func (a *App) showStopSoundBindDialog() {
 						}
 						parts = append(parts, k.name)
 						comboStr := strings.Join(parts, " + ")
-						detectedCombo = comboStr
-						fyne.Do(func() {
-							comboLabel.SetText("Detectado: " + comboStr)
-						})
+						if comboStr != lastCombo {
+							lastCombo = comboStr
+							// detectedCombo lo lee el botón Aceptar: se escribe en el hilo de UI.
+							fyne.Do(func() {
+								detectedCombo = comboStr
+								comboLabel.SetText("Detectado: " + comboStr)
+							})
+						}
 						break
 					}
 				}
@@ -409,8 +428,10 @@ func (a *App) showStopSoundBindDialog() {
 	btnAccept := widget.NewButton("Aceptar", func() {
 		cleanup()
 		if detectedCombo != "" {
-			a.cfg.StopSoundBind = detectedCombo
-			_ = config.Save(a.cfgPath, a.cfg)
+			combo := detectedCombo
+			a.updateConfig(func(c *config.Config) { c.StopSoundBind = combo })
+			a.publishHotkeys()
+			a.saveConfig()
 			if a.stopBindBtn != nil {
 				a.stopBindBtn.SetText("⌨ " + detectedCombo)
 			}
@@ -422,8 +443,9 @@ func (a *App) showStopSoundBindDialog() {
 
 	btnUnbind := widget.NewButton("Desbindear", func() {
 		cleanup()
-		a.cfg.StopSoundBind = ""
-		_ = config.Save(a.cfgPath, a.cfg)
+		a.updateConfig(func(c *config.Config) { c.StopSoundBind = "" })
+		a.publishHotkeys()
+		a.saveConfig()
 		if a.stopBindBtn != nil {
 			a.stopBindBtn.SetText("⌨ Bind")
 		}

@@ -181,6 +181,15 @@ func (s *Store) SaveSound(meta SoundMeta, data []byte) (string, error) {
 	return path, nil
 }
 
+// UpdateSoundMeta records new metadata (e.g. a rename) for a clip that is already on disk.
+// ListSounds keeps the last manifest entry per ID, so appending is enough.
+func (s *Store) UpdateSoundMeta(meta SoundMeta) error {
+	if _, err := os.Stat(s.SoundPath(meta.ID, meta.Ext)); err != nil {
+		return err
+	}
+	return s.appendSoundMeta(meta)
+}
+
 func (s *Store) DeleteSound(id, extension string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

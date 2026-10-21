@@ -87,3 +87,27 @@ func TestPhoneMicUDPSecurity(t *testing.T) {
 		t.Fatal("valid packet timed out and was not processed")
 	}
 }
+
+func TestShouldDropForDrift(t *testing.T) {
+	silent := make([]byte, frameBytes)
+	loud := make([]byte, frameBytes)
+	for i := 0; i+1 < len(loud); i += 2 {
+		loud[i+1] = 0x30 // ~12288
+	}
+	cases := []struct {
+		queued int
+		frame  []byte
+		want   bool
+	}{
+		{queued: 2, frame: silent, want: false},          // justo el prebuffer
+		{queued: 4, frame: silent, want: false},          // dentro del margen
+		{queued: 5, frame: silent, want: true},           // sobra: se tira el silencioso
+		{queued: 5, frame: loud, want: false},            // sobra, pero con voz se espera
+		{queued: 2 + 2 + 4 + 1, frame: loud, want: true}, // sobra mucho: se tira igual
+	}
+	for _, c := range cases {
+		if got := shouldDropForDrift(c.queued, 2, c.frame); got != c.want {
+			t.Fatalf("queued=%d loud=%v: got %v, want %v", c.queued, c.frame[1] != 0, got, c.want)
+		}
+	}
+}

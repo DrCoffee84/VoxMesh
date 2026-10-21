@@ -82,7 +82,7 @@ func (a *App) submitChat() {
 		return
 	}
 
-	if a.transport == nil {
+	if !a.connected() {
 		a.setStatus("Conecta a una sala antes de enviar un mensaje.")
 		return
 	}
@@ -105,7 +105,7 @@ func (a *App) submitChat() {
 }
 
 func (a *App) sendChatImageBytes(ext string, data []byte, caption string) {
-	if a.historyStore == nil || a.transport == nil {
+	if a.historyStore == nil || !a.connected() {
 		return
 	}
 	imageID := history.NewID(a.participantID)
@@ -122,7 +122,7 @@ func (a *App) sendChatImageBytes(ext string, data []byte, caption string) {
 		ID:        history.NewID(a.participantID),
 		Timestamp: time.Now().UTC(),
 		SenderID:  a.participantID,
-		Username:  a.cfg.Username,
+		Username:  a.conf().Username,
 		Kind:      "image",
 		ImageID:   imageID,
 		ImageExt:  ext,
@@ -138,7 +138,16 @@ func (a *App) sendChatImageBytes(ext string, data []byte, caption string) {
 	a.sendAsset(assets.KindImage, imageID, ext, data)
 }
 
-func (a *App) addActivityAt(text string, t time.Time) {
+// maxActivityEntries limita el registro de actividad: cada label con wrapping se re-mide en cada
+// layout, así que un historial largo hacía cada Add más lento que el anterior.
+const maxActivityEntries = 200
+
+type activityEntry struct {
+	text string
+	at   time.Time
+}
+
+func newActivityLabel(text string, t time.Time) *widget.Label {
 	var stamp string
 	now := time.Now()
 	localT := t.Local()
@@ -149,14 +158,38 @@ func (a *App) addActivityAt(text string, t time.Time) {
 	} else {
 		stamp = localT.Format("02/01 15:04")
 	}
+	lbl := widget.NewLabel(fmt.Sprintf("%s %s", stamp, text))
+	lbl.Wrapping = fyne.TextWrapWord
+	return lbl
+}
 
+func (a *App) addActivityAt(text string, t time.Time) {
+	a.addActivityBatch([]activityEntry{{text: text, at: t}})
+}
+
+// addActivityBatch agrega varias entradas con un solo fyne.Do (un Refresh y un ScrollToBottom).
+// initHistory antes encolaba un fyne.Do por mensaje de sistema y congelaba la UI al conectar.
+func (a *App) addActivityBatch(entries []activityEntry) {
+	if len(entries) == 0 {
+		return
+	}
+	if len(entries) > maxActivityEntries {
+		entries = entries[len(entries)-maxActivityEntries:]
+	}
+	labels := make([]fyne.CanvasObject, 0, len(entries))
+	for _, entry := range entries {
+		labels = append(labels, newActivityLabel(entry.text, entry.at))
+	}
 	fyne.Do(func() {
 		if a.activityBox == nil {
 			return
 		}
-		lbl := widget.NewLabel(fmt.Sprintf("%s %s", stamp, text))
-		lbl.Wrapping = fyne.TextWrapWord
-		a.activityBox.Add(lbl)
+		objects := append(a.activityBox.Objects, labels...)
+		if len(objects) > maxActivityEntries {
+			objects = append([]fyne.CanvasObject(nil), objects[len(objects)-maxActivityEntries:]...)
+		}
+		a.activityBox.Objects = objects
+		a.activityBox.Refresh()
 		if a.activityScroll != nil {
 			a.activityScroll.ScrollToBottom()
 		}
@@ -239,7 +272,7 @@ func buildChatSegments(m history.Message, userColor fyne.ThemeColorName) []widge
 
 func (a *App) buildChatMessageObject(m history.Message, isMatch bool) fyne.CanvasObject {
 	var userColor fyne.ThemeColorName
-	if m.SenderID == a.participantID || (a.cfg.Username != "" && m.Username == a.cfg.Username) {
+	if m.SenderID == a.participantID || (m.Username != "" && m.Username == a.conf().Username) {
 		userColor = theme.ColorNameSuccess
 	} else {
 		userColor = theme.ColorNamePrimary
@@ -268,8 +301,7 @@ func (a *App) buildChatMessageObject(m history.Message, isMatch bool) fyne.Canva
 		imagePath = a.historyStore.ImagePath(m.ImageID, m.ImageExt)
 	}
 	if imagePath != "" && fileExists(imagePath) {
-		img := &canvas.Image{File: imagePath, FillMode: canvas.ImageFillContain}
-		img.SetMinSize(fyne.NewSize(240, 160))
+		img := newChatThumbnail(imagePath)
 		p := imagePath
 		clickableThumb := newTappableImage(img, func() {
 			a.showLightbox(p)
@@ -355,13 +387,15 @@ func (a *App) initHistory(roomName string) {
 		return
 	}
 	chatOnly := make([]history.Message, 0, len(messages))
+	var activity []activityEntry
 	for _, m := range messages {
 		if m.System || m.Kind == "system" || strings.EqualFold(m.Username, "SISTEMA") {
-			a.addActivityAt(m.Text, m.Timestamp)
+			activity = append(activity, activityEntry{text: m.Text, at: m.Timestamp})
 			continue
 		}
 		chatOnly = append(chatOnly, m)
 	}
+	a.addActivityBatch(activity)
 	a.chatMu.Lock()
 	a.chatMessages = chatOnly
 	a.chatMu.Unlock()
@@ -400,29 +434,26 @@ func (a *App) addChatMessage(message history.Message) {
 	a.chatMessages = append(a.chatMessages, message)
 	a.chatMu.Unlock()
 
-	var searchFilter string
-	if a.chatSearch != nil {
-		searchFilter = strings.ToLower(strings.TrimSpace(a.chatSearch.Text))
-	}
-
-	if searchFilter == "" {
-		row := a.buildChatMessageObject(message, false)
-		fyne.Do(func() {
-			if a.chatBox != nil {
-				a.chatBox.Add(row)
-				if a.chatScroll != nil {
-					a.chatScroll.ScrollToBottom()
-				}
-			}
-		})
-	} else {
-		a.refreshChat()
-	}
+	row := a.buildChatMessageObject(message, false)
+	fyne.Do(func() {
+		if a.chatBox == nil {
+			return
+		}
+		// El texto del buscador es estado del widget: se lee acá, en el hilo de UI.
+		if a.chatSearch != nil && strings.TrimSpace(a.chatSearch.Text) != "" {
+			a.refreshChat()
+			return
+		}
+		a.chatBox.Add(row)
+		if a.chatScroll != nil {
+			a.chatScroll.ScrollToBottom()
+		}
+	})
 }
 
 func (a *App) addSystemMessage(text string) {
 	a.addActivity(text)
-	if a.transport != nil && a.roomState.HostID == a.participantID {
+	if udp := a.transport.Load(); udp != nil && a.roomState.HostID == a.participantID {
 		message := history.Message{
 			ID:        history.NewID("system"),
 			Timestamp: time.Now().UTC(),
@@ -432,7 +463,7 @@ func (a *App) addSystemMessage(text string) {
 			System:    true,
 		}
 		payload, _ := room.Encode(room.Envelope{Kind: room.SystemMessage, Message: &message})
-		a.transport.Broadcast(transport.Packet{Kind: transport.PacketChat, Sequence: a.sequence.Add(1), Payload: payload}, nil)
+		udp.Broadcast(transport.Packet{Kind: transport.PacketChat, Sequence: a.sequence.Add(1), Payload: payload}, nil)
 	}
 }
 
@@ -498,21 +529,32 @@ func (a *App) refreshRoomList(selected string) {
 }
 
 func (a *App) selectChatImage() {
-	defer func() {
-		if value := recover(); value != nil {
-			logging.Panic(value)
-			a.setStatus("No se pudo abrir el selector de imágenes.")
-		}
-	}()
-	if a.historyStore == nil || a.transport == nil {
+	if a.historyStore == nil || !a.connected() {
 		a.setStatus("Conecta a una sala antes de enviar una imagen.")
 		return
 	}
-	path, err := selectImageFile()
-	if err != nil {
-		if err.Error() != "selección cancelada" {
-			logging.Errorf("selector de imágenes: %s", logging.FormatError(err))
+	// El HWND se lee en el hilo de UI; el diálogo nativo corre en su propia goroutine (ver selectFile).
+	owner := a.dialogOwner()
+	go func() {
+		defer func() {
+			if value := recover(); value != nil {
+				logging.Panic(value)
+				a.setStatus("No se pudo abrir el selector de imágenes.")
+			}
+		}()
+		path, err := selectImageFile(owner)
+		if err != nil {
+			if err.Error() != "selección cancelada" {
+				logging.Errorf("selector de imágenes: %s", logging.FormatError(err))
+			}
+			return
 		}
+		a.sendImageFile(path)
+	}()
+}
+
+func (a *App) sendImageFile(path string) {
+	if a.historyStore == nil || !a.connected() {
 		return
 	}
 	data, readErr := os.ReadFile(path)
@@ -536,7 +578,7 @@ func (a *App) selectChatImage() {
 		a.setStatus("No se pudo guardar la imagen: " + saveErr.Error())
 		return
 	}
-	message := history.Message{ID: history.NewID(a.participantID), Timestamp: time.Now().UTC(), SenderID: a.participantID, Username: a.cfg.Username, Kind: "image", ImageID: imageID, ImageExt: extension, ImagePath: path}
+	message := history.Message{ID: history.NewID(a.participantID), Timestamp: time.Now().UTC(), SenderID: a.participantID, Username: a.conf().Username, Kind: "image", ImageID: imageID, ImageExt: extension, ImagePath: path}
 	a.addChatMessage(message)
 	a.playEventSound(audio.SFXMessage)
 	payload, encodeErr := room.Encode(room.Envelope{Kind: room.ChatMessage, Message: &message})

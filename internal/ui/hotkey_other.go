@@ -6,6 +6,8 @@ import "voxmesh/internal/room"
 
 func (a *App) startHotkeyListener() {}
 
+func (a *App) publishHotkeys() {}
+
 func (a *App) triggerSoundByID(id string) {}
 
 func (a *App) showSoundBindDialog(sound room.Sound) {

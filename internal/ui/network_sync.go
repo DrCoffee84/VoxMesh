@@ -136,22 +136,20 @@ func (a *App) sendAsset(kind byte, id, ext string, data []byte) {
 		a.setStatus("No se pudo preparar el archivo: " + err.Error())
 		return
 	}
-	if a.transport == nil {
+	if !a.connected() {
 		return
 	}
 	go func() {
 		for i, chunk := range chunks {
-			if a.transport == nil {
+			udp := a.transport.Load()
+			if udp == nil {
 				return
 			}
 			packet := transport.Packet{Kind: transport.PacketAssetChunk, Sequence: a.sequence.Add(1), Payload: assets.Encode(chunk)}
 			if a.roomState.HostID == a.participantID {
-				a.transport.Broadcast(packet, nil)
-			} else {
-				peer, resolveErr := net.ResolveUDPAddr("udp", a.endpoint)
-				if resolveErr == nil {
-					_ = a.transport.Send(peer, packet)
-				}
+				udp.Broadcast(packet, nil)
+			} else if peer := a.endpointAddr(); peer != nil {
+				_ = udp.Send(peer, packet)
 			}
 			if i%4 == 3 {
 				time.Sleep(2 * time.Millisecond)
@@ -248,10 +246,10 @@ func (a *App) handleSyncPacket(udp *transport.UDP, addr *net.UDPAddr, payload []
 
 func (a *App) sendChatMessage(text string) {
 	text = strings.TrimSpace(text)
-	if text == "" || a.transport == nil {
+	if text == "" || !a.connected() {
 		return
 	}
-	message := history.Message{ID: history.NewID(a.participantID), Timestamp: time.Now().UTC(), SenderID: a.participantID, Username: a.cfg.Username, Kind: "text", Text: text}
+	message := history.Message{ID: history.NewID(a.participantID), Timestamp: time.Now().UTC(), SenderID: a.participantID, Username: a.conf().Username, Kind: "text", Text: text}
 	a.addChatMessage(message)
 	a.playEventSound(audio.SFXMessage)
 	payload, err := room.Encode(room.Envelope{Kind: room.ChatMessage, Message: &message})
@@ -265,15 +263,15 @@ func (a *App) sendChatMessage(text string) {
 }
 
 func (a *App) sendChatPayload(payload []byte) {
-	if a.transport == nil {
+	udp := a.transport.Load()
+	if udp == nil {
 		return
 	}
 	if a.roomState.HostID == a.participantID {
-		a.transport.Broadcast(transport.Packet{Kind: transport.PacketChat, Sequence: a.sequence.Add(1), Payload: payload}, nil)
+		udp.Broadcast(transport.Packet{Kind: transport.PacketChat, Sequence: a.sequence.Add(1), Payload: payload}, nil)
 		return
 	}
-	peer, err := net.ResolveUDPAddr("udp", a.endpoint)
-	if err == nil {
-		_ = a.transport.Send(peer, transport.Packet{Kind: transport.PacketChat, Sequence: a.sequence.Add(1), Payload: payload})
+	if peer := a.endpointAddr(); peer != nil {
+		_ = udp.Send(peer, transport.Packet{Kind: transport.PacketChat, Sequence: a.sequence.Add(1), Payload: payload})
 	}
 }

@@ -28,16 +28,26 @@ import (
 )
 
 func (a *App) stopConnection() {
-	if a.transport == nil {
+	a.stopConnectionAsync()
+}
+
+// stopConnectionAsync devuelve un canal que se cierra cuando terminó la limpieza en segundo plano
+// (Leave a los peers, UPnP, cierre del socket). Al salir de la app se espera ese canal: si el
+// proceso termina antes, los peers nunca reciben el Leave.
+func (a *App) stopConnectionAsync() <-chan struct{} {
+	done := make(chan struct{})
+	// Swap: solo un llamador se queda con el transporte (doble clic en "Salir" + cierre de
+	// ventana no cierran dos veces). Se suelta antes que el Engine, ver publishEngine.
+	udp := a.transport.Swap(nil)
+	if udp == nil {
 		a.setStatus("No hay una sala o conexión activa.")
-		return
+		close(done)
+		return done
 	}
 	start := time.Now()
-	udp := a.transport
-	oldEndpoint := a.endpoint
+	oldEndpoint := a.endpointText()
 	logging.Infof("stopConnection: cerrando sala/conexión en %s", oldEndpoint)
-	a.transport = nil
-	a.endpoint = ""
+	a.setEndpoint("")
 	a.activeRoomName = ""
 	a.peerMu.Lock()
 	a.peerNames = nil
@@ -60,19 +70,17 @@ func (a *App) stopConnection() {
 			a.leaveButton.Disable()
 		}
 		a.showConnectionPanels()
-		if a.endpointEntry != nil && a.cfg.LastPeer != "" {
-			a.endpointEntry.SetText(a.cfg.LastPeer)
+		if lastPeer := a.conf().LastPeer; a.endpointEntry != nil && lastPeer != "" {
+			a.endpointEntry.SetText(lastPeer)
 		}
 	})
 	a.setStatus("Sala detenida.")
 
 	go func() {
+		defer close(done)
 		a.playEventSound(audio.SFXDisconnect)
 		time.Sleep(150 * time.Millisecond)
-		if a.audioEngine != nil {
-			a.audioEngine.Stop()
-			a.audioEngine = nil
-		}
+		a.stopEngine()
 		a.soundMu.Lock()
 		if a.soundPlayer != nil {
 			a.soundPlayer.Stop()
@@ -83,10 +91,11 @@ func (a *App) stopConnection() {
 			close(a.pingStop)
 			a.pingStop = nil
 		}
+		username := a.conf().Username
 		if !a.hostMode.Load() && oldEndpoint != "" {
 			peer, err := net.ResolveUDPAddr("udp", oldEndpoint)
 			if err == nil {
-				participant := room.Participant{ID: a.participantID, Username: a.cfg.Username, Address: udp.Address().String()}
+				participant := room.Participant{ID: a.participantID, Username: username, Address: udp.Address().String()}
 				payload, _ := room.Encode(room.Envelope{Kind: room.LeaveMessage, Participant: &participant})
 				_ = udp.Send(peer, transport.Packet{Kind: transport.PacketRoomLeave, Sequence: a.sequence.Add(1), Payload: payload})
 			}
@@ -95,7 +104,7 @@ func (a *App) stopConnection() {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			_ = netinfo.UnmapUDP(ctx, localPort)
 			cancel()
-			participant := room.Participant{ID: a.participantID, Username: a.cfg.Username, Address: udp.Address().String()}
+			participant := room.Participant{ID: a.participantID, Username: username, Address: udp.Address().String()}
 			payload, _ := room.Encode(room.Envelope{Kind: room.LeaveMessage, Participant: &participant})
 			udp.Broadcast(transport.Packet{Kind: transport.PacketRoomLeave, Sequence: a.sequence.Add(1), Payload: payload}, nil)
 		}
@@ -104,6 +113,7 @@ func (a *App) stopConnection() {
 		}
 		logging.Infof("stopConnection: recursos liberados para %s (tiempo de ejecución: %v)", oldEndpoint, time.Since(start))
 	}()
+	return done
 }
 
 func (a *App) createHost() {
@@ -114,7 +124,7 @@ func (a *App) createHost() {
 
 	newRoomEntry := widget.NewEntry()
 	newRoomEntry.SetPlaceHolder("Ej: Charla, Gaming...")
-	newRoomEntry.SetText(a.cfg.RoomName)
+	newRoomEntry.SetText(a.conf().RoomName)
 
 	btnCreate := widget.NewButtonWithIcon("Crear y abrir", theme.ContentAddIcon(), func() {
 		roomName := strings.TrimSpace(newRoomEntry.Text)
@@ -123,7 +133,7 @@ func (a *App) createHost() {
 			return
 		}
 		d.Hide()
-		username := strings.TrimSpace(a.cfg.Username)
+		username := strings.TrimSpace(a.conf().Username)
 		if username == "" {
 			username = "Usuario"
 		}
@@ -138,9 +148,9 @@ func (a *App) createHost() {
 	if len(existingRooms) > 0 {
 		existingSelect := widget.NewSelect(existingRooms, nil)
 		existingSelect.PlaceHolder = "Seleccionar de la lista..."
-		if a.cfg.RoomName != "" {
+		if savedRoom := a.conf().RoomName; savedRoom != "" {
 			for _, r := range existingRooms {
-				if r == a.cfg.RoomName {
+				if r == savedRoom {
 					existingSelect.SetSelected(r)
 					break
 				}
@@ -154,7 +164,7 @@ func (a *App) createHost() {
 				return
 			}
 			d.Hide()
-			username := strings.TrimSpace(a.cfg.Username)
+			username := strings.TrimSpace(a.conf().Username)
 			if username == "" {
 				username = "Usuario"
 			}
@@ -181,8 +191,8 @@ func (a *App) createHost() {
 }
 
 func (a *App) openHost(roomName, username string) {
-	if a.transport != nil {
-		a.setStatus("La sala ya está activa en " + a.endpoint)
+	if a.connected() {
+		a.setStatus("La sala ya está activa en " + a.endpointText())
 		return
 	}
 
@@ -190,7 +200,7 @@ func (a *App) openHost(roomName, username string) {
 
 	go func() {
 		start := time.Now()
-		listenAddr := a.cfg.ListenAddress
+		listenAddr := a.conf().ListenAddress
 		if listenAddr == "" {
 			listenAddr = ":47830"
 		}
@@ -208,15 +218,24 @@ func (a *App) openHost(roomName, username string) {
 			return
 		}
 
-		a.transport = udp
+		// CAS: el chequeo de connected() de arriba y este punto no son atómicos; si otro
+		// openHost/connectClient ganó en el medio, este socket sobra.
+		if !a.transport.CompareAndSwap(nil, udp) {
+			_ = udp.Close()
+			a.setStatus("Ya existe una sala o conexión activa.")
+			return
+		}
 		a.hostMode.Store(true)
-		a.cfg.RoomName = roomName
-		a.cfg.Username = username
+		cfg := a.updateConfig(func(c *config.Config) {
+			c.RoomName = roomName
+			c.Username = username
+		})
 
 		a.participantID = room.ParticipantID(username, udp.Address().String())
 		state := room.New(roomName, username, udp.Address())
 		if len(state.Participants) > 0 {
-			state.Participants[0].CanBeHost = a.cfg.AllowHostMigration
+			state.Participants[0].CanBeHost = cfg.AllowHostMigration
+			state.Participants[0].Muted = a.isMuted.Load()
 		}
 		a.roomState = state
 		a.roomStore = room.NewStore(state)
@@ -230,13 +249,13 @@ func (a *App) openHost(roomName, username string) {
 		port := udp.Address().Port
 		localIP, err := netinfo.LocalIPv4()
 		if err == nil && localIP != nil {
-			a.endpoint = net.JoinHostPort(localIP.String(), strconv.Itoa(port))
+			a.setEndpoint(net.JoinHostPort(localIP.String(), strconv.Itoa(port)))
 		} else {
-			a.endpoint = net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+			a.setEndpoint(net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 		}
 		for i := range a.roomState.Participants {
 			if a.roomState.Participants[i].ID == a.participantID {
-				a.roomState.Participants[i].Address = a.endpoint
+				a.roomState.Participants[i].Address = a.endpointText()
 				break
 			}
 		}
@@ -251,7 +270,7 @@ func (a *App) openHost(roomName, username string) {
 		go a.startAudio(udp, nil, true)
 		go a.configureHostNetwork(port)
 		a.playEventSound(audio.SFXConnect)
-		logging.Infof("openHost: sala %q iniciada en %s (tiempo de ejecución: %v)", roomName, a.endpoint, time.Since(start))
+		logging.Infof("openHost: sala %q iniciada en %s (tiempo de ejecución: %v)", roomName, a.endpointText(), time.Since(start))
 
 		// Cualquier actualización visual tiene que ir obligatoriamente en fyne.Do
 		fyne.Do(func() {
@@ -306,10 +325,11 @@ func (a *App) configureHostNetwork(startPort int) {
 		}
 
 		// 3. Guardar estado y actualizar la sala
-		a.endpoint = net.JoinHostPort(ip.String(), strconv.Itoa(port))
+		endpoint := net.JoinHostPort(ip.String(), strconv.Itoa(port))
+		a.setEndpoint(endpoint)
 		for i := range a.roomState.Participants {
 			if a.roomState.Participants[i].ID == a.participantID {
-				a.roomState.Participants[i].Address = a.endpoint
+				a.roomState.Participants[i].Address = endpoint
 				break
 			}
 		}
@@ -317,16 +337,16 @@ func (a *App) configureHostNetwork(startPort int) {
 			a.roomStore.Replace(a.roomState)
 		}
 
-		logging.Infof("IP pública obtenida: %s en %s", ip.String(), a.endpoint)
+		logging.Infof("IP pública obtenida: %s en %s", ip.String(), endpoint)
 
 		// 4. Evaluar éxito o reintento
 		if mapErr == nil {
-			a.setStatus("Sala lista (UPnP): " + a.endpoint)
+			a.setStatus("Sala lista (UPnP): " + endpoint)
 			a.publishRoomCloudFlare()
 			return
 		}
 
-		a.setStatus(fmt.Sprintf("Comparte: %s (UPnP falló en puerto %d)", a.endpoint, port))
+		a.setStatus(fmt.Sprintf("Comparte: %s (UPnP falló en puerto %d)", endpoint, port))
 
 		if retry >= maxRetries {
 			a.setStatus("No se pudo configurar UPnP después de varios intentos.")
@@ -344,7 +364,7 @@ func (a *App) publishRoomCloudFlare() {
 }
 
 func (a *App) connectClient(raw string) {
-	if a.transport != nil {
+	if a.connected() {
 		a.setStatus("Ya existe una conexión UDP.")
 		return
 	}
@@ -389,7 +409,7 @@ func (a *App) connectClient(raw string) {
 			return
 		}
 
-		listenAddr := a.cfg.ListenAddress
+		listenAddr := a.conf().ListenAddress
 		if listenAddr == "" {
 			listenAddr = ":47830"
 		}
@@ -415,34 +435,41 @@ func (a *App) connectClient(raw string) {
 			}
 		}
 
-		a.transport = udp
+		if !a.transport.CompareAndSwap(nil, udp) {
+			_ = udp.Close()
+			a.setStatus("Ya existe una conexión UDP.")
+			return
+		}
 		a.hostMode.Store(false)
-		a.cfg.RoomName = strings.TrimSpace(a.cfg.RoomName)
-		a.participantID = room.ParticipantID(a.cfg.Username, udp.Address().String())
-		a.roomState = room.State{Name: a.cfg.RoomName, Participants: []room.Participant{{
+		cfg := a.updateConfig(func(c *config.Config) {
+			c.RoomName = strings.TrimSpace(c.RoomName)
+			c.LastPeer = raw
+		})
+		a.saveConfig()
+		a.participantID = room.ParticipantID(cfg.Username, udp.Address().String())
+		a.roomState = room.State{Name: cfg.RoomName, Participants: []room.Participant{{
 			ID:          a.participantID,
-			Username:    a.cfg.Username,
+			Username:    cfg.Username,
 			Address:     udp.Address().String(),
 			Order:       0,
 			Connected:   true,
-			CanBeHost:   a.cfg.AllowHostMigration,
+			CanBeHost:   cfg.AllowHostMigration,
+			Muted:       a.isMuted.Load(),
 			LastSeenUTC: time.Now().UTC(),
 		}}}
 
 		// Disco + peers (puede tardar)
-		a.initHistory(a.cfg.RoomName)
+		a.initHistory(cfg.RoomName)
 		a.refreshPeersFromRoom()
 
-		a.cfg.LastPeer = raw
-		_ = config.Save(a.cfgPath, a.cfg)
-
-		a.endpoint = addr.String()
+		a.setEndpoint(addr.String())
 		participant := room.Participant{
 			ID:          a.participantID,
-			Username:    a.cfg.Username,
+			Username:    cfg.Username,
 			Address:     udp.Address().String(),
 			Connected:   true,
-			CanBeHost:   a.cfg.AllowHostMigration,
+			CanBeHost:   cfg.AllowHostMigration,
+			Muted:       a.isMuted.Load(),
 			LastSeenUTC: time.Now().UTC(),
 		}
 		payload, _ := room.Encode(room.Envelope{Kind: room.HelloMessage, Room: &a.roomState, Participant: &participant})
@@ -466,7 +493,7 @@ func (a *App) connectClient(raw string) {
 		// Todo lo visual en fyne.Do
 		fyne.Do(func() {
 			if a.selfNameLabel != nil {
-				a.selfNameLabel.SetText(a.cfg.Username)
+				a.selfNameLabel.SetText(cfg.Username)
 			}
 			if a.endpointEntry != nil {
 				a.endpointEntry.SetText(raw)

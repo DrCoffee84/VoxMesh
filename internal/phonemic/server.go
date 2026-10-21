@@ -9,10 +9,12 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"html/template"
+	"math"
 	"math/big"
 	"net"
 	"net/http"
@@ -25,6 +27,7 @@ import (
 	"github.com/skip2/go-qrcode"
 	"nhooyr.io/websocket"
 
+	"voxmesh/internal/config"
 	"voxmesh/internal/logging"
 )
 
@@ -318,12 +321,47 @@ func (s *Server) forwardPCM() {
 			}
 			select {
 			case frame := <-s.frames:
+				// Deriva: si el reloj del celular corre más rápido que el de la PC, la cola crece
+				// despacio hasta el tope y la latencia queda fija cientos de ms arriba. Si sobran
+				// frames se tira uno, preferentemente silencioso.
+				if shouldDropForDrift(len(s.frames)+1, s.prebufferFrames, frame) {
+					select {
+					case next := <-s.frames:
+						frame = next
+					default:
+					}
+				}
 				s.deliverFrame(frame)
 			default:
 				playing = false
 			}
 		}
 	}
+}
+
+// shouldDropForDrift decide si el frame que está por salir se descarta: con más de
+// prebuffer + slack frames en cola, si el frame es silencioso; con prebuffer + slack + force,
+// aunque tenga voz. queued incluye al frame.
+func shouldDropForDrift(queued, prebufferFrames int, frame []byte) bool {
+	excess := queued - prebufferFrames
+	if excess <= config.PhoneMicDriftSlackFrames {
+		return false
+	}
+	return excess > config.PhoneMicDriftSlackFrames+config.PhoneMicDriftForceFrames || frameRMS(frame) < config.JitterDriftQuietRMS
+}
+
+// frameRMS es el nivel RMS de un frame S16LE.
+func frameRMS(frame []byte) float64 {
+	samples := len(frame) / 2
+	if samples == 0 {
+		return 0
+	}
+	var sum float64
+	for i := 0; i+1 < len(frame); i += 2 {
+		v := float64(int16(binary.LittleEndian.Uint16(frame[i:])))
+		sum += v * v
+	}
+	return math.Sqrt(sum / float64(samples))
 }
 
 func normalizeBufferMS(bufferMS int) int {

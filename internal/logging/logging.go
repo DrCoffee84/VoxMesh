@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"voxmesh/internal/version"
 )
 
 const (
@@ -73,6 +75,14 @@ func Start() error {
 	}
 	state.file = file
 	state.logger = log.New(file, "", log.LstdFlags|log.Lmicroseconds)
+	// Con -H windowsgui no hay stderr: sin esto, un panic fuera de la goroutine principal o un
+	// fatal error del runtime (concurrent map writes, deadlock, segfault en cgo) muere sin dejar
+	// rastro. El runtime escribe la traza directo a este archivo, con todas las goroutines.
+	debug.SetTraceback("all")
+	if err := debug.SetCrashOutput(file, debug.CrashOptions{}); err != nil {
+		state.logger.Printf("ERROR configurar salida de crash: %v", err)
+	}
+	state.logger.Printf("=== inicio VoxMesh %s pid=%d %s/%s ===", version.Value, os.Getpid(), runtime.GOOS, runtime.GOARCH)
 	return nil
 }
 
@@ -142,6 +152,9 @@ func Close() {
 	state.Lock()
 	defer state.Unlock()
 	if state.file != nil {
+		// Si un inicio no tiene su cierre, el proceso murió de golpe (crash nativo o kill).
+		state.logger.Printf("=== cierre VoxMesh pid=%d ===", os.Getpid())
+		_ = debug.SetCrashOutput(nil, debug.CrashOptions{})
 		_ = state.file.Close()
 	}
 	state.file = nil

@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gen2brain/malgo"
@@ -19,26 +20,34 @@ const (
 )
 
 type audioStream struct {
-	buffer     []byte
-	buffering  bool
-	lastSample int16
-	lastActive time.Time
-	volume     float64
+	buffer      []byte
+	buffering   bool
+	lastSample  int16
+	lastActive  time.Time // último paquete recibido
+	lastAudible time.Time // último buffer del callback con audio de este stream (indicador "hablando")
+	volume      float64
 
-	// jitter reordena y oculta pérdidas para los emisores de red con secuencia de
-	// audio propia (PlayStreamSeq). Es nil para SFX, monitor local y emisores legacy,
-	// que siguen usando buffer.
+	// jitter reordena, decodifica (Opus) y oculta pérdidas para los emisores de red
+	// (PlayStreamSeq). Es nil para SFX y monitor local, que usan buffer (PCM FIFO).
 	jitter *jitterBuffer
+	// fx es la cadena de salida (Ajustes → Salida) propia del emisor: corre sobre el audio ya
+	// decodificado y en orden de secuencia, así los filtros con estado no mezclan emisores.
+	fx *Effects
 }
 
 type streamWorkItem struct {
-	chunk       []byte
+	chunk       []int16
 	samples     int
 	lastSample  int16
 	applyFadeIn bool
 	hasGap      bool
 	volume      float64
+	fx          *Effects // nil = sin cadena de salida (SFX, monitor local)
 }
+
+// OutputFilter devuelve la configuración de la cadena de salida y si está activa. El callback
+// de playback la llama una vez por buffer: tiene que ser rápida y sin locks (a.conf()).
+type OutputFilter func() (FilterSettings, bool)
 
 type Engine struct {
 	context       *malgo.AllocatedContext
@@ -50,15 +59,18 @@ type Engine struct {
 	stopOnce      sync.Once
 
 	streams        map[string]*audioStream
+	volumes        map[string]float64 // volumen por emisor; sobrevive a la purga del stream
 	mixBuffer      []int32
 	playbackMu     sync.Mutex
 	jitterBufferMS int
 
 	workItems     []streamWorkItem
-	scratchBuffer []byte
+	scratchBuffer []int16
+
+	outputFilter atomic.Pointer[OutputFilter]
 
 	// Limitador con envolvente del bus de mezcla; solo lo toca el callback de playback.
-	mixLimiter busLimiter
+	mixLimiter peakLimiter
 }
 
 func softClip(sample int32) int16 {
@@ -82,54 +94,7 @@ func softClip(sample int32) int16 {
 	return int16(sample)
 }
 
-func applyFadeIn(pcm []byte, ramp int) {
-	samples := len(pcm) / 2
-	if samples > ramp {
-		samples = ramp
-	}
-	for i := 0; i < samples; i++ {
-		orig := int16(binary.LittleEndian.Uint16(pcm[i*2:]))
-		factor := float64(i) / float64(samples)
-		scaled := int16(float64(orig) * factor)
-		binary.LittleEndian.PutUint16(pcm[i*2:], uint16(scaled))
-	}
-}
-
-// limitFrame ajusta el volumen de un frame de audio si su pico supera un umbral dado.
-// Ya no se usa en el callback de playback: aplicaba una ganancia fija por buffer y
-// generaba escalones entre buffers. Lo reemplaza busLimiter sobre el bus int32.
-func limitFrame(pcm []byte, threshold int16) {
-	if len(pcm) < 2 {
-		return
-	}
-
-	// 1. Encontrar el pico absoluto del frame
-	var peak int16
-	for i := 0; i+1 < len(pcm); i += 2 {
-		sample := int16(binary.LittleEndian.Uint16(pcm[i : i+2]))
-		if sample < 0 {
-			sample = -sample
-		}
-		if sample > peak {
-			peak = sample
-		}
-	}
-
-	if peak <= threshold {
-		return // no hace falta tocar nada
-	}
-
-	// 2. Calcular cuánto hay que bajar el volumen
-	scale := float64(threshold) / float64(peak)
-
-	// 3. Aplicar la atenuación a todo el frame
-	for i := 0; i+1 < len(pcm); i += 2 {
-		sample := int16(binary.LittleEndian.Uint16(pcm[i : i+2]))
-		scaled := int16(float64(sample) * scale)
-		binary.LittleEndian.PutUint16(pcm[i:i+2], uint16(scaled))
-	}
-}
-
+// SetJitterBufferMS fija el tope del colchón de recepción; el colchón real es adaptativo.
 func (e *Engine) SetJitterBufferMS(ms int) {
 	if ms < 40 {
 		ms = 40
@@ -146,25 +111,30 @@ func (e *Engine) SetJitterBufferMS(ms int) {
 	e.playbackMu.Unlock()
 }
 
-func NewEngine(inputName, outputName string, onFrame func([]byte)) (*Engine, error) {
-	context, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
-	if err != nil {
-		return nil, fmt.Errorf("inicializar motor de audio: %w", err)
-	}
-	engine := &Engine{
-		context:        context,
+func newEngineState() *Engine {
+	return &Engine{
 		captureFrames:  make(chan []byte, 8),
 		streams:        make(map[string]*audioStream),
+		volumes:        make(map[string]float64),
 		jitterBufferMS: 120,
 		mixBuffer:      make([]int32, 4096),
 		workItems:      make([]streamWorkItem, 0, 16),
-		scratchBuffer:  make([]byte, 4096*2),
-		mixLimiter: newBusLimiter(
+		scratchBuffer:  make([]int16, 4096),
+		mixLimiter: newPeakLimiter(
 			config.AudioBusLimiterThreshold,
 			config.AudioBusLimiterAttackMS,
 			config.AudioBusLimiterReleaseMS,
 		),
 	}
+}
+
+func NewEngine(inputName, outputName string, onFrame func([]byte)) (*Engine, error) {
+	context, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("inicializar motor de audio: %w", err)
+	}
+	engine := newEngineState()
+	engine.context = context
 	inputID, err := findDeviceID(context, malgo.Capture, inputName)
 	if err != nil {
 		engine.Stop()
@@ -217,177 +187,7 @@ func NewEngine(inputName, outputName string, onFrame func([]byte)) (*Engine, err
 	}
 	playback, err := malgo.InitDevice(context.Context, playbackConfig, malgo.DeviceCallbacks{
 		Data: func(output, _ []byte, _ uint32) {
-			samples := len(output) / 2
-			if samples == 0 {
-				return
-			}
-
-			// --- Lock corto: inspección de streams y extracción de chunks ---
-			engine.playbackMu.Lock()
-			if engine.streams == nil {
-				engine.playbackMu.Unlock()
-				return
-			}
-
-			now := time.Now()
-			targetBytes := (engine.jitterBufferMS / 20) * streamFrameBytes
-			if targetBytes < streamFrameBytes {
-				targetBytes = streamFrameBytes
-			}
-
-			numStreams := len(engine.streams)
-			neededScratch := numStreams * samples * 2
-			if len(engine.scratchBuffer) < neededScratch {
-				engine.scratchBuffer = make([]byte, neededScratch)
-			}
-			scratchOffset := 0
-
-			engine.workItems = engine.workItems[:0]
-
-			for id, stream := range engine.streams {
-				// Emisores de red con jitter buffer: él ya resuelve reorden, PLC,
-				// fades y deriva, así que solo copiamos su salida al bus.
-				if stream.jitter != nil {
-					chunk := engine.scratchBuffer[scratchOffset : scratchOffset+samples*2]
-					if !stream.jitter.Read(chunk, now) {
-						// Purgar streams inactivos tras 2 segundos sin paquetes de audio
-						if now.Sub(stream.lastActive) > 2*time.Second {
-							delete(engine.streams, id)
-						}
-						continue
-					}
-					scratchOffset += samples * 2
-					engine.workItems = append(engine.workItems, streamWorkItem{
-						chunk:   chunk,
-						samples: samples,
-						volume:  stream.volume,
-					})
-					continue
-				}
-
-				if len(stream.buffer) == 0 {
-					// Purgar streams inactivos tras 2 segundos sin paquetes de audio
-					if now.Sub(stream.lastActive) > 2*time.Second {
-						delete(engine.streams, id)
-						continue
-					}
-					// Silencio real prolongado (> 300 ms)
-					if now.Sub(stream.lastActive) > 300*time.Millisecond {
-						stream.buffering = true
-					}
-					if stream.lastSample != 0 {
-						engine.workItems = append(engine.workItems, streamWorkItem{
-							samples:    0,
-							lastSample: stream.lastSample,
-							hasGap:     true,
-							volume:     stream.volume,
-						})
-						stream.lastSample = 0
-					}
-					continue
-				}
-
-				// Pre-buffering al arrancar una frase
-				applyFade := false
-				if stream.buffering && id != "__sfx__" && id != "__local__" {
-					if len(stream.buffer) < targetBytes {
-						continue
-					}
-					stream.buffering = false
-					if stream.lastSample == 0 {
-						applyFade = true
-					}
-				}
-
-				streamSamples := len(stream.buffer) / 2
-				samplesToRead := samples
-				if streamSamples < samplesToRead {
-					samplesToRead = streamSamples
-				}
-
-				consumedBytes := samplesToRead * 2
-				var chunk []byte
-				if consumedBytes > 0 {
-					chunk = engine.scratchBuffer[scratchOffset : scratchOffset+consumedBytes]
-					copy(chunk, stream.buffer[:consumedBytes])
-					scratchOffset += consumedBytes
-
-					// Movemos el buffer sin realloc innecesario
-					copy(stream.buffer, stream.buffer[consumedBytes:])
-					stream.buffer = stream.buffer[:len(stream.buffer)-consumedBytes]
-				}
-
-				hadGap := samplesToRead < samples
-				lastSampleForDecay := int16(0)
-				if samplesToRead > 0 {
-					lastVal := int16(binary.LittleEndian.Uint16(chunk[consumedBytes-2 : consumedBytes]))
-					if hadGap {
-						lastSampleForDecay = lastVal
-						stream.lastSample = 0
-					} else {
-						stream.lastSample = lastVal
-					}
-				} else if stream.lastSample != 0 {
-					lastSampleForDecay = stream.lastSample
-					stream.lastSample = 0
-				}
-
-				engine.workItems = append(engine.workItems, streamWorkItem{
-					chunk:       chunk,
-					samples:     samplesToRead,
-					lastSample:  lastSampleForDecay,
-					applyFadeIn: applyFade,
-					hasGap:      hadGap,
-					volume:      stream.volume,
-				})
-			}
-			engine.playbackMu.Unlock()
-			// --- Fin del lock corto ---
-
-			// Mezclado fuera del lock (DSP / suma algebraica)
-			if len(engine.mixBuffer) < samples {
-				engine.mixBuffer = make([]int32, samples)
-			} else {
-				clear(engine.mixBuffer[:samples])
-			}
-			for _, item := range engine.workItems {
-				if item.applyFadeIn && len(item.chunk) > 0 {
-					applyFadeIn(item.chunk, antiClickSamples)
-				}
-
-				for i := 0; i < item.samples; i++ {
-					val := int16(binary.LittleEndian.Uint16(item.chunk[i*2 : i*2+2]))
-					if item.volume != 1.0 {
-						engine.mixBuffer[i] += int32(float64(val) * item.volume)
-					} else {
-						engine.mixBuffer[i] += int32(val)
-					}
-				}
-
-				if item.hasGap && item.lastSample != 0 {
-					// Micro-bache: suavizar hacia cero sin frenar el flujo futuro
-					decay := item.lastSample
-					for i := item.samples; i < item.samples+antiClickSamples && i < samples; i++ {
-						decay = int16(float64(decay) * 0.8)
-						if item.volume != 1.0 {
-							engine.mixBuffer[i] += int32(float64(decay) * item.volume)
-						} else {
-							engine.mixBuffer[i] += int32(decay)
-						}
-					}
-				}
-			}
-
-			// Limitador con envolvente sobre el bus int32: absorbe la suma de varios
-			// streams fuertes con ganancia continua, sin escalones entre buffers.
-			engine.mixLimiter.Process(engine.mixBuffer[:samples])
-
-			// Renderizar a output con limitador soft-knee anti-clipping
-			// (red de seguridad para los transientes que pasan durante el attack)
-			for i := 0; i < samples; i++ {
-				clipped := softClip(engine.mixBuffer[i])
-				binary.LittleEndian.PutUint16(output[i*2:i*2+2], uint16(clipped))
-			}
+			engine.mix(output)
 		},
 	})
 	if err != nil {
@@ -413,12 +213,198 @@ func NewEngine(inputName, outputName string, onFrame func([]byte)) (*Engine, err
 	return engine, nil
 }
 
+// mix es el callback de playback: arma output (S16LE) con la suma de todos los streams.
+func (e *Engine) mix(output []byte) {
+	samples := len(output) / 2
+	if samples == 0 {
+		return
+	}
+
+	// --- Lock corto: inspección de streams y extracción de chunks ---
+	e.playbackMu.Lock()
+	if e.streams == nil {
+		e.playbackMu.Unlock()
+		return
+	}
+
+	now := time.Now()
+	targetBytes := (e.jitterBufferMS / 20) * streamFrameBytes
+	if targetBytes < streamFrameBytes {
+		targetBytes = streamFrameBytes
+	}
+
+	neededScratch := len(e.streams) * samples
+	if len(e.scratchBuffer) < neededScratch {
+		e.scratchBuffer = make([]int16, neededScratch)
+	}
+	scratchOffset := 0
+
+	e.workItems = e.workItems[:0]
+
+	for id, stream := range e.streams {
+		// Emisores de red con jitter buffer: él ya resuelve reorden, decodificación, PLC,
+		// fades y deriva, así que solo copiamos su salida al bus.
+		if stream.jitter != nil {
+			chunk := e.scratchBuffer[scratchOffset : scratchOffset+samples]
+			if !stream.jitter.Read(chunk, now) {
+				// Purgar streams inactivos tras 2 segundos sin paquetes de audio
+				if now.Sub(stream.lastActive) > 2*time.Second {
+					delete(e.streams, id)
+				}
+				continue
+			}
+			stream.lastAudible = now
+			scratchOffset += samples
+			e.workItems = append(e.workItems, streamWorkItem{
+				chunk:   chunk,
+				samples: samples,
+				volume:  stream.volume,
+				fx:      stream.fx,
+			})
+			continue
+		}
+
+		if len(stream.buffer) == 0 {
+			// Purgar streams inactivos tras 2 segundos sin paquetes de audio
+			if now.Sub(stream.lastActive) > 2*time.Second {
+				delete(e.streams, id)
+				continue
+			}
+			// Silencio real prolongado (> 300 ms)
+			if now.Sub(stream.lastActive) > 300*time.Millisecond {
+				stream.buffering = true
+			}
+			if stream.lastSample != 0 {
+				e.workItems = append(e.workItems, streamWorkItem{
+					samples:    0,
+					lastSample: stream.lastSample,
+					hasGap:     true,
+					volume:     stream.volume,
+				})
+				stream.lastSample = 0
+			}
+			continue
+		}
+
+		// Pre-buffering al arrancar una frase
+		applyFade := false
+		if stream.buffering && id != "__sfx__" && id != "__local__" {
+			if len(stream.buffer) < targetBytes {
+				continue
+			}
+			stream.buffering = false
+			if stream.lastSample == 0 {
+				applyFade = true
+			}
+		}
+
+		samplesToRead := len(stream.buffer) / 2
+		if samplesToRead > samples {
+			samplesToRead = samples
+		}
+
+		consumedBytes := samplesToRead * 2
+		var chunk []int16
+		if samplesToRead > 0 {
+			chunk = e.scratchBuffer[scratchOffset : scratchOffset+samplesToRead]
+			for i := range chunk {
+				chunk[i] = int16(binary.LittleEndian.Uint16(stream.buffer[i*2:]))
+			}
+			scratchOffset += samplesToRead
+
+			// Movemos el buffer sin realloc innecesario
+			copy(stream.buffer, stream.buffer[consumedBytes:])
+			stream.buffer = stream.buffer[:len(stream.buffer)-consumedBytes]
+		}
+
+		hadGap := samplesToRead < samples
+		lastSampleForDecay := int16(0)
+		if samplesToRead > 0 {
+			lastVal := chunk[samplesToRead-1]
+			if hadGap {
+				lastSampleForDecay = lastVal
+				stream.lastSample = 0
+			} else {
+				stream.lastSample = lastVal
+			}
+		} else if stream.lastSample != 0 {
+			lastSampleForDecay = stream.lastSample
+			stream.lastSample = 0
+		}
+
+		e.workItems = append(e.workItems, streamWorkItem{
+			chunk:       chunk,
+			samples:     samplesToRead,
+			lastSample:  lastSampleForDecay,
+			applyFadeIn: applyFade,
+			hasGap:      hadGap,
+			volume:      stream.volume,
+		})
+	}
+	e.playbackMu.Unlock()
+	// --- Fin del lock corto ---
+
+	// Cadena de salida por emisor y mezclado fuera del lock (DSP / suma algebraica). Cada fx
+	// solo lo toca este callback.
+	var filterSettings FilterSettings
+	filterOn := false
+	if filter := e.outputFilter.Load(); filter != nil {
+		filterSettings, filterOn = (*filter)()
+	}
+	if len(e.mixBuffer) < samples {
+		e.mixBuffer = make([]int32, samples)
+	} else {
+		clear(e.mixBuffer[:samples])
+	}
+	for _, item := range e.workItems {
+		chunk := item.chunk[:item.samples]
+		if item.applyFadeIn && len(chunk) > 0 {
+			applyFadeInInt16(chunk, antiClickSamples)
+		}
+		if filterOn && item.fx != nil {
+			item.fx.ApplyOutput(chunk, filterSettings)
+		}
+
+		for i, val := range chunk {
+			if item.volume != 1.0 {
+				e.mixBuffer[i] += int32(float64(val) * item.volume)
+			} else {
+				e.mixBuffer[i] += int32(val)
+			}
+		}
+
+		if item.hasGap && item.lastSample != 0 {
+			// Micro-bache: suavizar hacia cero sin frenar el flujo futuro
+			decay := item.lastSample
+			for i := item.samples; i < item.samples+antiClickSamples && i < samples; i++ {
+				decay = int16(float64(decay) * 0.8)
+				if item.volume != 1.0 {
+					e.mixBuffer[i] += int32(float64(decay) * item.volume)
+				} else {
+					e.mixBuffer[i] += int32(decay)
+				}
+			}
+		}
+	}
+
+	// Limitador con envolvente sobre el bus int32: absorbe la suma de varios
+	// streams fuertes con ganancia continua, sin escalones entre buffers.
+	e.mixLimiter.Process(e.mixBuffer[:samples])
+
+	// Renderizar a output con limitador soft-knee anti-clipping
+	// (red de seguridad para los transientes que pasan durante el attack)
+	for i := 0; i < samples; i++ {
+		clipped := softClip(e.mixBuffer[i])
+		binary.LittleEndian.PutUint16(output[i*2:i*2+2], uint16(clipped))
+	}
+}
+
+// PlayStream encola PCM S16LE en un stream FIFO sin jitter buffer: solo para "__sfx__"
+// (sonidos de eventos) y "__local__" (monitoreo de la voz propia). El audio de red usa
+// PlayStreamSeq.
 func (e *Engine) PlayStream(senderID string, data []byte) {
 	if e == nil || len(data) == 0 || len(data)%2 != 0 {
 		return
-	}
-	if senderID == "" {
-		senderID = "__default__"
 	}
 
 	e.playbackMu.Lock()
@@ -434,25 +420,10 @@ func (e *Engine) PlayStream(senderID string, data []byte) {
 		// Pre-allocamos capacidad razonable para evitar reallocs frecuentes
 		stream = &audioStream{
 			buffer:     make([]byte, 0, streamFrameBytes*16),
-			buffering:  true,
 			lastActive: now,
 			volume:     1.0,
 		}
 		e.streams[senderID] = stream
-	} else if now.Sub(stream.lastActive) > 300*time.Millisecond {
-		stream.buffering = true
-	}
-
-	// Si el emisor pasó a mandar audio sin secuencia propia (versión anterior),
-	// volvemos al buffer FIFO.
-	if stream.jitter != nil {
-		stream.jitter = nil
-		stream.buffering = true
-	}
-
-	// SFX y monitor local sin buffer
-	if senderID == "__sfx__" || senderID == "__local__" {
-		stream.buffering = false
 	}
 
 	// Append eficiente
@@ -474,11 +445,11 @@ func (e *Engine) PlayStream(senderID string, data []byte) {
 	}
 }
 
-// PlayStreamSeq encola un frame de audio de red junto con la secuencia de audio
-// propia del emisor. Los frames pasan por un jitter buffer por emisor que los
-// reordena, descarta los que llegan tarde y oculta las pérdidas (PLC).
-func (e *Engine) PlayStreamSeq(senderID string, seq uint32, data []byte) {
-	if e == nil || len(data) == 0 || len(data)%2 != 0 {
+// PlayStreamSeq encola un paquete Opus de red junto con la secuencia de audio propia del
+// emisor y su número de frase (talkspurt). Pasa por un jitter buffer por emisor que reordena,
+// descarta los tardíos, decodifica al reproducir y oculta las pérdidas (FEC / PLC de Opus).
+func (e *Engine) PlayStreamSeq(senderID string, seq uint32, talkspurt uint8, packet []byte) {
+	if e == nil || len(packet) == 0 {
 		return
 	}
 	if senderID == "" {
@@ -495,18 +466,70 @@ func (e *Engine) PlayStreamSeq(senderID string, seq uint32, data []byte) {
 	now := time.Now()
 	stream, exists := e.streams[senderID]
 	if !exists {
-		stream = &audioStream{
-			lastActive: now,
-			volume:     1.0,
+		volume, ok := e.volumes[senderID]
+		if !ok {
+			volume = 1.0
 		}
+		stream = &audioStream{lastActive: now, volume: volume}
 		e.streams[senderID] = stream
 	}
 	if stream.jitter == nil {
-		stream.jitter = newJitterBuffer(e.jitterBufferMS)
-		stream.buffer = stream.buffer[:0]
+		decoder, err := newOpusDecoder()
+		if err != nil {
+			return
+		}
+		stream.jitter = newJitterBuffer(e.jitterBufferMS, decoder)
+		stream.fx = &Effects{}
+		stream.buffer = nil
 	}
-	stream.jitter.Push(seq, data, now)
+	stream.jitter.Push(seq, talkspurt, packet, now)
 	stream.lastActive = now
+}
+
+// SetOutputFilter registra de dónde sale la configuración de la cadena de salida por emisor.
+func (e *Engine) SetOutputFilter(filter OutputFilter) {
+	if e == nil {
+		return
+	}
+	if filter == nil {
+		e.outputFilter.Store(nil)
+		return
+	}
+	e.outputFilter.Store(&filter)
+}
+
+// JitterReport devuelve una copia de las estadísticas del jitter buffer de cada emisor de red.
+func (e *Engine) JitterReport() map[string]JitterStats {
+	if e == nil {
+		return nil
+	}
+	e.playbackMu.Lock()
+	defer e.playbackMu.Unlock()
+	report := make(map[string]JitterStats, len(e.streams))
+	for id, stream := range e.streams {
+		if stream.jitter != nil {
+			report[id] = stream.jitter.Stats()
+		}
+	}
+	return report
+}
+
+// AudibleStreams agrega a dst los emisores de red que sonaron en la ventana within: lo que el
+// callback efectivamente reprodujo, no lo que llegó (que suena un colchón después). Es la
+// fuente del indicador "hablando".
+func (e *Engine) AudibleStreams(dst []string, within time.Duration) []string {
+	if e == nil {
+		return dst
+	}
+	now := time.Now()
+	e.playbackMu.Lock()
+	defer e.playbackMu.Unlock()
+	for id, stream := range e.streams {
+		if stream.jitter != nil && !stream.lastAudible.IsZero() && now.Sub(stream.lastAudible) <= within {
+			dst = append(dst, id)
+		}
+	}
+	return dst
 }
 
 func (e *Engine) Play(data []byte) {
@@ -539,10 +562,16 @@ func (e *Engine) Stop() {
 	})
 }
 
-// SetStreamVolume ajusta el volumen individual de un usuario (1.0 = 100%, 0.5 = 50%, 2.0 = 200%)
+// SetStreamVolume ajusta el volumen individual de un emisor (1.0 = 100 %, 0.5 = 50 %, 3.0 = 300 %).
+// Queda guardado aunque el stream todavía no exista o se purgue por inactividad.
 func (e *Engine) SetStreamVolume(senderID string, volume float64) {
 	if e == nil {
 		return
+	}
+	if volume < 0 {
+		volume = 0
+	} else if volume > config.PeerVolumeMax {
+		volume = config.PeerVolumeMax
 	}
 	e.playbackMu.Lock()
 	defer e.playbackMu.Unlock()
@@ -550,15 +579,12 @@ func (e *Engine) SetStreamVolume(senderID string, volume float64) {
 	if e.streams == nil {
 		return
 	}
-
+	if volume == 1.0 {
+		delete(e.volumes, senderID)
+	} else {
+		e.volumes[senderID] = volume
+	}
 	if stream, exists := e.streams[senderID]; exists {
 		stream.volume = volume
-	} else {
-		e.streams[senderID] = &audioStream{
-			buffer:     make([]byte, 0, streamFrameBytes*16),
-			buffering:  true,
-			lastActive: time.Now(),
-			volume:     volume,
-		}
 	}
 }

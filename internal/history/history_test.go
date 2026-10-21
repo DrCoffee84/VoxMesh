@@ -79,3 +79,26 @@ func TestStoreSavesAndDeletesSound(t *testing.T) {
 		t.Fatalf("expected 0 sounds after delete, got: %#v", soundsAfter)
 	}
 }
+
+func TestStoreRenamesSound(t *testing.T) {
+	store, err := New(t.TempDir(), "gaming")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveSound(SoundMeta{ID: "snd-1", Ext: ".pcm", Name: "Aplauso"}, []byte("pcmdata")); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateSoundMeta(SoundMeta{ID: "snd-1", Ext: ".pcm", Name: "Ovación"}); err != nil {
+		t.Fatal(err)
+	}
+	sounds, err := store.ListSounds()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sounds) != 1 || sounds[0].Name != "Ovación" {
+		t.Fatalf("expected the renamed sound only, got: %#v", sounds)
+	}
+	if err := store.UpdateSoundMeta(SoundMeta{ID: "missing", Ext: ".pcm", Name: "X"}); err == nil {
+		t.Fatal("expected an error for a sound that is not on disk")
+	}
+}

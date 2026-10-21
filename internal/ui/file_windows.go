@@ -9,11 +9,13 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"unicode/utf16"
 	"unsafe"
 
+	"fyne.io/fyne/v2/driver"
 	"golang.org/x/image/bmp"
 )
 
@@ -64,18 +66,60 @@ type openFileName struct {
 	flagsEx          uint32
 }
 
-func selectImageFile() (string, error) {
+const (
+	ofnNoChangeDir    = 0x00000008
+	ofnPathMustExist  = 0x00000800
+	ofnFileMustExist  = 0x00001000
+	ofnExplorer       = 0x00080000
+	coinitApartment   = 0x2
+	coinitDisableOLE1 = 0x4
+)
+
+var (
+	ole32          = syscall.NewLazyDLL("ole32.dll")
+	coInitializeEx = ole32.NewProc("CoInitializeEx")
+	coUninitialize = ole32.NewProc("CoUninitialize")
+)
+
+// dialogOwner devuelve el HWND de la ventana principal. Debe llamarse en el hilo de UI
+// (RunNative lee el viewport de GLFW). Con owner el diálogo es modal a VoxMesh y no crea
+// un botón propio en la barra de tareas.
+func (a *App) dialogOwner() uintptr {
+	var hwnd uintptr
+	if native, ok := a.window.(driver.NativeWindow); ok {
+		native.RunNative(func(context any) {
+			if win, ok := context.(driver.WindowsWindowContext); ok {
+				hwnd = win.HWND
+			}
+		})
+	}
+	return hwnd
+}
+
+// selectFile abre GetOpenFileNameW. Bloquea hasta que el usuario elige o cancela, así que
+// NUNCA debe llamarse desde un callback de Fyne: el hilo principal de Fyne es el que corre el
+// loop de GLFW y mientras el diálogo está abierto la ventana no se repinta. Se llama desde una
+// goroutine, que acá se fija a su hilo de SO e inicializa COM (STA) como exige el diálogo.
+func selectFile(owner uintptr, filterText, titleText string) (string, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if hr, _, _ := coInitializeEx.Call(0, coinitApartment|coinitDisableOLE1); int32(hr) >= 0 {
+		defer coUninitialize.Call()
+	}
+
 	buffer := make([]uint16, 32768)
-	filter := utf16.Encode([]rune("Imágenes (*.png;*.jpg;*.jpeg;*.gif;*.webp\x00*.png;*.jpg;*.jpeg;*.gif;*.webp\x00Todos los archivos\x00*.*\x00"))
+	filter := utf16.Encode([]rune(filterText))
 	filter = append(filter, 0)
-	title, _ := syscall.UTF16PtrFromString("Seleccionar imagen")
+	title, _ := syscall.UTF16PtrFromString(titleText)
 	dialog := openFileName{
 		structSize: uint32(unsafe.Sizeof(openFileName{})),
+		hwndOwner:  owner,
 		filter:     &filter[0],
 		file:       &buffer[0],
 		maxFile:    uint32(len(buffer)),
 		title:      title,
-		flags:      0x00001000 | 0x00000800,
+		// NOCHANGEDIR: sin él el diálogo cambia el directorio actual de todo el proceso.
+		flags: ofnFileMustExist | ofnPathMustExist | ofnExplorer | ofnNoChangeDir,
 	}
 	result, _, callErr := getOpenFileNameW.Call(uintptr(unsafe.Pointer(&dialog)))
 	if result == 0 {
@@ -87,27 +131,12 @@ func selectImageFile() (string, error) {
 	return syscall.UTF16ToString(buffer), nil
 }
 
-func selectSoundFile() (string, error) {
-	buffer := make([]uint16, 32768)
-	filter := utf16.Encode([]rune("Sonidos (*.wav;*.mp3)\x00*.wav;*.mp3\x00Todos los archivos\x00*.*\x00"))
-	filter = append(filter, 0)
-	title, _ := syscall.UTF16PtrFromString("Seleccionar sonido")
-	dialog := openFileName{
-		structSize: uint32(unsafe.Sizeof(openFileName{})),
-		filter:     &filter[0],
-		file:       &buffer[0],
-		maxFile:    uint32(len(buffer)),
-		title:      title,
-		flags:      0x00001000 | 0x00000800,
-	}
-	result, _, callErr := getOpenFileNameW.Call(uintptr(unsafe.Pointer(&dialog)))
-	if result == 0 {
-		if code, _, _ := commDlgError.Call(); code != 0 {
-			return "", callErr
-		}
-		return "", errors.New("selección cancelada")
-	}
-	return syscall.UTF16ToString(buffer), nil
+func selectImageFile(owner uintptr) (string, error) {
+	return selectFile(owner, "Imágenes (*.png;*.jpg;*.jpeg;*.gif;*.webp\x00*.png;*.jpg;*.jpeg;*.gif;*.webp\x00Todos los archivos\x00*.*\x00", "Seleccionar imagen")
+}
+
+func selectSoundFile(owner uintptr) (string, error) {
+	return selectFile(owner, "Sonidos (*.wav;*.mp3)\x00*.wav;*.mp3\x00Todos los archivos\x00*.*\x00", "Seleccionar sonido")
 }
 
 func readClipboardImage() (string, []byte, string, error) {

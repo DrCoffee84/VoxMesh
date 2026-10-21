@@ -18,6 +18,7 @@ type Participant struct {
 	Order       int       `json:"order"`
 	Connected   bool      `json:"connected"`
 	CanBeHost   bool      `json:"can_be_host"`
+	Muted       bool      `json:"muted,omitempty"`
 	LastSeenUTC time.Time `json:"last_seen_utc"`
 }
 
@@ -54,6 +55,26 @@ func (s *State) Upsert(participant Participant) {
 	participant.Order = len(s.Participants)
 	s.Participants = append(s.Participants, participant)
 	s.Sort()
+}
+
+// SetMuted cambia el mute del participante id. Si address no es vacío también tiene que
+// coincidir (el host solo acepta el cambio desde la dirección registrada en el Hello).
+// Reemplaza el slice en vez de escribir en el compartido: quien tenga una copia del State
+// anterior no ve el cambio a medias. Devuelve si el estado cambió.
+func (s *State) SetMuted(id, address string, muted bool) bool {
+	for index, participant := range s.Participants {
+		if participant.ID != id || (address != "" && participant.Address != address) {
+			continue
+		}
+		if participant.Muted == muted {
+			return false
+		}
+		participants := append([]Participant(nil), s.Participants...)
+		participants[index].Muted = muted
+		s.Participants = participants
+		return true
+	}
+	return false
 }
 
 func (s *State) MarkDisconnected(id string) {

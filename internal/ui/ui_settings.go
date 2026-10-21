@@ -42,52 +42,64 @@ func (a *App) showSettings() {
 func (a *App) renderSettingsView(devices audio.DeviceLists) {
 	inputOptions := append([]string{"Sistema predeterminado", phoneMicInput}, devices.Inputs...)
 	outputOptions := append([]string{"Sistema predeterminado"}, devices.Outputs...)
+	// cfg es la instantánea al abrir la vista: solo para valores iniciales de los widgets. Los
+	// callbacks publican con updateConfig y, si necesitan el valor vigente, leen a.conf().
+	cfg := a.conf()
+	openedInput, openedOutput := cfg.InputDevice, cfg.OutputDevice
+	// baseline es LiveSettings al abrir: mientras la vista esté abierta writeConfig persiste esto
+	// (no el borrador en vivo) y discardSettings lo restaura. Los campos de texto (nombre, puertos)
+	// no se publican hasta Guardar.
+	baseline := cfg.LiveSettings
+	a.cfgBaseline.Store(&baseline)
+	a.phoneMicMu.RLock()
+	phoneWasRunning := a.phoneMic != nil
+	a.phoneMicMu.RUnlock()
 	username := widget.NewEntry()
-	username.SetText(a.cfg.Username)
+	username.SetText(cfg.Username)
 	input := widget.NewSelect(inputOptions, nil)
-	input.SetSelected(a.cfg.InputDevice)
+	input.SetSelected(cfg.InputDevice)
 	output := widget.NewSelect(outputOptions, nil)
-	output.SetSelected(a.cfg.OutputDevice)
+	output.SetSelected(cfg.OutputDevice)
 	sensitivity := widget.NewSlider(0, 1)
 	sensitivity.Step = 0.05
-	sensitivity.Value = float64(a.cfg.VADThreshold)
-	thresholdLabel := widget.NewLabel(fmt.Sprintf("Sensibilidad VAD: %.2f", a.cfg.VADThreshold))
+	sensitivity.Value = float64(cfg.VADThreshold)
+	thresholdLabel := widget.NewLabel(fmt.Sprintf("Sensibilidad VAD: %.2f", cfg.VADThreshold))
 	sensitivity.OnChanged = func(value float64) {
-		a.cfg.VADThreshold = float32(value)
+		a.updateConfig(func(c *config.Config) { c.VADThreshold = float32(value) })
 		thresholdLabel.SetText(fmt.Sprintf("Sensibilidad VAD: %.2f", value))
 	}
 	mode := widget.NewRadioGroup([]string{"Activación por voz", "Push-to-talk"}, func(selected string) {
 		if selected == "Push-to-talk" {
-			a.cfg.MicMode = config.PushToTalk
+			a.updateConfig(func(c *config.Config) { c.MicMode = config.PushToTalk })
 		} else {
-			a.cfg.MicMode = config.VoiceActivation
+			a.updateConfig(func(c *config.Config) { c.MicMode = config.VoiceActivation })
 		}
 	})
-	if a.cfg.MicMode == config.PushToTalk {
+	if cfg.MicMode == config.PushToTalk {
 		mode.SetSelected("Push-to-talk")
 	} else {
 		mode.SetSelected("Activación por voz")
 	}
-	filterCheck := widget.NewCheck("Aplicar filtro de voz", func(checked bool) { a.cfg.AudioFilterEnabled = checked })
-	filterCheck.SetChecked(a.cfg.AudioFilterEnabled)
-	rnnoiseCheck := widget.NewCheck("Supresión de ruido (RNNoise)", func(checked bool) { a.cfg.RNNoiseEnabled = checked })
-	rnnoiseCheck.SetChecked(a.cfg.RNNoiseEnabled)
-	vadCheck := widget.NewCheck("Detección de voz (VAD)", func(checked bool) { a.cfg.VADEnabled = checked })
-	vadCheck.SetChecked(a.cfg.VADEnabled)
-	gateCheck := widget.NewCheck("Puerta de ruido", func(checked bool) { a.cfg.NoiseGateEnabled = checked })
-	gateCheck.SetChecked(a.cfg.NoiseGateEnabled)
-	highPassCheck := widget.NewCheck("Pasa-altos", func(checked bool) { a.cfg.HighPassEnabled = checked })
-	highPassCheck.SetChecked(a.cfg.HighPassEnabled)
-	lowPassCheck := widget.NewCheck("Pasa-bajos", func(checked bool) { a.cfg.LowPassEnabled = checked })
-	lowPassCheck.SetChecked(a.cfg.LowPassEnabled)
-	notchCheck := widget.NewCheck("Notch de zumbido", func(checked bool) { a.cfg.NotchEnabled = checked })
-	notchCheck.SetChecked(a.cfg.NotchEnabled)
-	compressorCheck := widget.NewCheck("Compresor", func(checked bool) { a.cfg.CompressorEnabled = checked })
-	compressorCheck.SetChecked(a.cfg.CompressorEnabled)
-	expanderCheck := widget.NewCheck("Expansor", func(checked bool) { a.cfg.ExpanderEnabled = checked })
-	expanderCheck.SetChecked(a.cfg.ExpanderEnabled)
-	limiterCheck := widget.NewCheck("Limitador", func(checked bool) { a.cfg.LimiterEnabled = checked })
-	limiterCheck.SetChecked(a.cfg.LimiterEnabled)
+	filterCheck := widget.NewCheck("Aplicar filtro de voz", func(checked bool) { a.updateConfig(func(c *config.Config) { c.AudioFilterEnabled = checked }) })
+	filterCheck.SetChecked(cfg.AudioFilterEnabled)
+	rnnoiseCheck := widget.NewCheck("Supresión de ruido (RNNoise)", func(checked bool) { a.updateConfig(func(c *config.Config) { c.RNNoiseEnabled = checked }) })
+	rnnoiseCheck.SetChecked(cfg.RNNoiseEnabled)
+	vadCheck := widget.NewCheck("Detección de voz (VAD)", func(checked bool) { a.updateConfig(func(c *config.Config) { c.VADEnabled = checked }) })
+	vadCheck.SetChecked(cfg.VADEnabled)
+	gateCheck := widget.NewCheck("Puerta de ruido", func(checked bool) { a.updateConfig(func(c *config.Config) { c.NoiseGateEnabled = checked }) })
+	gateCheck.SetChecked(cfg.NoiseGateEnabled)
+	highPassCheck := widget.NewCheck("Pasa-altos", func(checked bool) { a.updateConfig(func(c *config.Config) { c.HighPassEnabled = checked }) })
+	highPassCheck.SetChecked(cfg.HighPassEnabled)
+	lowPassCheck := widget.NewCheck("Pasa-bajos", func(checked bool) { a.updateConfig(func(c *config.Config) { c.LowPassEnabled = checked }) })
+	lowPassCheck.SetChecked(cfg.LowPassEnabled)
+	notchCheck := widget.NewCheck("Notch de zumbido", func(checked bool) { a.updateConfig(func(c *config.Config) { c.NotchEnabled = checked }) })
+	notchCheck.SetChecked(cfg.NotchEnabled)
+	compressorCheck := widget.NewCheck("Compresor", func(checked bool) { a.updateConfig(func(c *config.Config) { c.CompressorEnabled = checked }) })
+	compressorCheck.SetChecked(cfg.CompressorEnabled)
+	expanderCheck := widget.NewCheck("Expansor", func(checked bool) { a.updateConfig(func(c *config.Config) { c.ExpanderEnabled = checked }) })
+	expanderCheck.SetChecked(cfg.ExpanderEnabled)
+	limiterCheck := widget.NewCheck("Limitador", func(checked bool) { a.updateConfig(func(c *config.Config) { c.LimiterEnabled = checked }) })
+	limiterCheck.SetChecked(cfg.LimiterEnabled)
 	newSlider := func(label string, minimum, maximum, value float64, onChanged func(float64)) (*widget.Slider, *widget.Label) {
 		valueLabel := widget.NewLabel("")
 		slider := widget.NewSlider(minimum, maximum)
@@ -100,18 +112,20 @@ func (a *App) renderSettingsView(devices audio.DeviceLists) {
 		valueLabel.SetText(fmt.Sprintf("%s: %.1f", label, value))
 		return slider, valueLabel
 	}
-	gain, gainLabel := newSlider("Ganancia (dB)", -24, 24, float64(a.cfg.InputGainDB), func(value float64) { a.cfg.InputGainDB = float32(value) })
-	highPass, highPassLabel := newSlider("Frecuencia pasa-altos (Hz)", 20, 500, float64(a.cfg.HighPassHz), func(value float64) { a.cfg.HighPassHz = float32(value) })
-	lowPass, lowPassLabel := newSlider("Frecuencia pasa-bajos (Hz)", 1000, 18000, float64(a.cfg.LowPassHz), func(value float64) { a.cfg.LowPassHz = float32(value) })
-	notch, notchLabel := newSlider("Frecuencia notch (Hz)", 40, 1000, float64(a.cfg.NotchHz), func(value float64) { a.cfg.NotchHz = float32(value) })
-	compressorThreshold, compressorThresholdLabel := newSlider("Umbral compresor (dB)", -50, 0, float64(a.cfg.CompressorThresholdDB), func(value float64) { a.cfg.CompressorThresholdDB = float32(value) })
-	compressorRatio, compressorRatioLabel := newSlider("Ratio compresor", 1, 12, float64(a.cfg.CompressorRatio), func(value float64) { a.cfg.CompressorRatio = float32(value) })
-	expanderThreshold, expanderThresholdLabel := newSlider("Umbral expansor (dB)", -70, -10, float64(a.cfg.ExpanderThresholdDB), func(value float64) { a.cfg.ExpanderThresholdDB = float32(value) })
-	expanderRatio, expanderRatioLabel := newSlider("Ratio expansor", 1, 12, float64(a.cfg.ExpanderRatio), func(value float64) { a.cfg.ExpanderRatio = float32(value) })
-	limiterThreshold, limiterThresholdLabel := newSlider("Techo limitador (dB)", -12, 0, float64(a.cfg.LimiterThresholdDB), func(value float64) { a.cfg.LimiterThresholdDB = float32(value) })
-	gateThreshold, gateThresholdLabel := newSlider("Umbral de puerta (dBFS)", -60, -5, float64(a.cfg.ThresholdDB), func(value float64) { a.cfg.ThresholdDB = float32(value) })
-	vadHold, vadHoldLabel := newSlider("Mantener VAD abierto (ms)", 0, 500, float64(a.cfg.VADHoldMS), func(value float64) { a.cfg.VADHoldMS = int(value) })
-	gateHold, gateHoldLabel := newSlider("Mantener puerta abierta (ms)", 0, 500, float64(a.cfg.GateHoldMS), func(value float64) { a.cfg.GateHoldMS = int(value) })
+	gain, gainLabel := newSlider("Ganancia (dB)", -24, 24, float64(cfg.InputGainDB), func(value float64) { a.updateConfig(func(c *config.Config) { c.InputGainDB = float32(value) }) })
+	highPass, highPassLabel := newSlider("Frecuencia pasa-altos (Hz)", 20, 500, float64(cfg.HighPassHz), func(value float64) { a.updateConfig(func(c *config.Config) { c.HighPassHz = float32(value) }) })
+	lowPass, lowPassLabel := newSlider("Frecuencia pasa-bajos (Hz)", 1000, 18000, float64(cfg.LowPassHz), func(value float64) { a.updateConfig(func(c *config.Config) { c.LowPassHz = float32(value) }) })
+	notch, notchLabel := newSlider("Frecuencia notch (Hz)", 40, 1000, float64(cfg.NotchHz), func(value float64) { a.updateConfig(func(c *config.Config) { c.NotchHz = float32(value) }) })
+	compressorThreshold, compressorThresholdLabel := newSlider("Umbral compresor (dB)", -50, 0, float64(cfg.CompressorThresholdDB), func(value float64) {
+		a.updateConfig(func(c *config.Config) { c.CompressorThresholdDB = float32(value) })
+	})
+	compressorRatio, compressorRatioLabel := newSlider("Ratio compresor", 1, 12, float64(cfg.CompressorRatio), func(value float64) { a.updateConfig(func(c *config.Config) { c.CompressorRatio = float32(value) }) })
+	expanderThreshold, expanderThresholdLabel := newSlider("Umbral expansor (dB)", -70, -10, float64(cfg.ExpanderThresholdDB), func(value float64) { a.updateConfig(func(c *config.Config) { c.ExpanderThresholdDB = float32(value) }) })
+	expanderRatio, expanderRatioLabel := newSlider("Ratio expansor", 1, 12, float64(cfg.ExpanderRatio), func(value float64) { a.updateConfig(func(c *config.Config) { c.ExpanderRatio = float32(value) }) })
+	limiterThreshold, limiterThresholdLabel := newSlider("Techo limitador (dB)", -12, 0, float64(cfg.LimiterThresholdDB), func(value float64) { a.updateConfig(func(c *config.Config) { c.LimiterThresholdDB = float32(value) }) })
+	gateThreshold, gateThresholdLabel := newSlider("Umbral de puerta (dBFS)", -60, -5, float64(cfg.ThresholdDB), func(value float64) { a.updateConfig(func(c *config.Config) { c.ThresholdDB = float32(value) }) })
+	vadHold, vadHoldLabel := newSlider("Mantener VAD abierto (ms)", 0, 500, float64(cfg.VADHoldMS), func(value float64) { a.updateConfig(func(c *config.Config) { c.VADHoldMS = int(value) }) })
+	gateHold, gateHoldLabel := newSlider("Mantener puerta abierta (ms)", 0, 500, float64(cfg.GateHoldMS), func(value float64) { a.updateConfig(func(c *config.Config) { c.GateHoldMS = int(value) }) })
 	filterCard := func(title, detail string, controls ...fyne.CanvasObject) fyne.CanvasObject {
 		titleLabel := widget.NewLabelWithStyle(title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 		detailLabel := canvas.NewText(detail, color.NRGBA{R: 145, G: 155, B: 165, A: 255})
@@ -143,90 +157,98 @@ func (a *App) renderSettingsView(devices audio.DeviceLists) {
 	})
 	resetFilters := widget.NewButton("↺", func() {
 		defaults := config.Default()
-		a.cfg.AudioFilterEnabled = defaults.AudioFilterEnabled
-		a.cfg.RNNoiseEnabled = defaults.RNNoiseEnabled
-		a.cfg.VADEnabled = defaults.VADEnabled
-		a.cfg.NoiseGateEnabled = defaults.NoiseGateEnabled
-		a.cfg.ThresholdDB = defaults.ThresholdDB
-		a.cfg.VADThreshold = defaults.VADThreshold
-		a.cfg.InputGainDB = defaults.InputGainDB
-		a.cfg.HighPassEnabled, a.cfg.HighPassHz = defaults.HighPassEnabled, defaults.HighPassHz
-		a.cfg.LowPassEnabled, a.cfg.LowPassHz = defaults.LowPassEnabled, defaults.LowPassHz
-		a.cfg.NotchEnabled, a.cfg.NotchHz = defaults.NotchEnabled, defaults.NotchHz
-		a.cfg.CompressorEnabled, a.cfg.CompressorThresholdDB, a.cfg.CompressorRatio = defaults.CompressorEnabled, defaults.CompressorThresholdDB, defaults.CompressorRatio
-		a.cfg.ExpanderEnabled, a.cfg.ExpanderThresholdDB, a.cfg.ExpanderRatio = defaults.ExpanderEnabled, defaults.ExpanderThresholdDB, defaults.ExpanderRatio
-		a.cfg.LimiterEnabled, a.cfg.LimiterThresholdDB = defaults.LimiterEnabled, defaults.LimiterThresholdDB
-		a.cfg.VADHoldMS, a.cfg.GateHoldMS = defaults.VADHoldMS, defaults.GateHoldMS
-		filterCheck.SetChecked(a.cfg.AudioFilterEnabled)
-		rnnoiseCheck.SetChecked(a.cfg.RNNoiseEnabled)
-		vadCheck.SetChecked(a.cfg.VADEnabled)
-		gateCheck.SetChecked(a.cfg.NoiseGateEnabled)
-		highPassCheck.SetChecked(a.cfg.HighPassEnabled)
-		lowPassCheck.SetChecked(a.cfg.LowPassEnabled)
-		notchCheck.SetChecked(a.cfg.NotchEnabled)
-		compressorCheck.SetChecked(a.cfg.CompressorEnabled)
-		expanderCheck.SetChecked(a.cfg.ExpanderEnabled)
-		limiterCheck.SetChecked(a.cfg.LimiterEnabled)
-		gain.SetValue(float64(a.cfg.InputGainDB))
-		highPass.SetValue(float64(a.cfg.HighPassHz))
-		lowPass.SetValue(float64(a.cfg.LowPassHz))
-		notch.SetValue(float64(a.cfg.NotchHz))
-		compressorThreshold.SetValue(float64(a.cfg.CompressorThresholdDB))
-		compressorRatio.SetValue(float64(a.cfg.CompressorRatio))
-		expanderThreshold.SetValue(float64(a.cfg.ExpanderThresholdDB))
-		expanderRatio.SetValue(float64(a.cfg.ExpanderRatio))
-		limiterThreshold.SetValue(float64(a.cfg.LimiterThresholdDB))
-		gateThreshold.SetValue(float64(a.cfg.ThresholdDB))
-		sensitivity.SetValue(float64(a.cfg.VADThreshold))
-		vadHold.SetValue(float64(a.cfg.VADHoldMS))
-		gateHold.SetValue(float64(a.cfg.GateHoldMS))
+		cfg := a.updateConfig(func(c *config.Config) {
+			c.AudioFilterEnabled = defaults.AudioFilterEnabled
+			c.RNNoiseEnabled = defaults.RNNoiseEnabled
+			c.VADEnabled = defaults.VADEnabled
+			c.NoiseGateEnabled = defaults.NoiseGateEnabled
+			c.ThresholdDB = defaults.ThresholdDB
+			c.VADThreshold = defaults.VADThreshold
+			c.InputGainDB = defaults.InputGainDB
+			c.HighPassEnabled, c.HighPassHz = defaults.HighPassEnabled, defaults.HighPassHz
+			c.LowPassEnabled, c.LowPassHz = defaults.LowPassEnabled, defaults.LowPassHz
+			c.NotchEnabled, c.NotchHz = defaults.NotchEnabled, defaults.NotchHz
+			c.CompressorEnabled, c.CompressorThresholdDB, c.CompressorRatio = defaults.CompressorEnabled, defaults.CompressorThresholdDB, defaults.CompressorRatio
+			c.ExpanderEnabled, c.ExpanderThresholdDB, c.ExpanderRatio = defaults.ExpanderEnabled, defaults.ExpanderThresholdDB, defaults.ExpanderRatio
+			c.LimiterEnabled, c.LimiterThresholdDB = defaults.LimiterEnabled, defaults.LimiterThresholdDB
+			c.VADHoldMS, c.GateHoldMS = defaults.VADHoldMS, defaults.GateHoldMS
+		})
+		filterCheck.SetChecked(cfg.AudioFilterEnabled)
+		rnnoiseCheck.SetChecked(cfg.RNNoiseEnabled)
+		vadCheck.SetChecked(cfg.VADEnabled)
+		gateCheck.SetChecked(cfg.NoiseGateEnabled)
+		highPassCheck.SetChecked(cfg.HighPassEnabled)
+		lowPassCheck.SetChecked(cfg.LowPassEnabled)
+		notchCheck.SetChecked(cfg.NotchEnabled)
+		compressorCheck.SetChecked(cfg.CompressorEnabled)
+		expanderCheck.SetChecked(cfg.ExpanderEnabled)
+		limiterCheck.SetChecked(cfg.LimiterEnabled)
+		gain.SetValue(float64(cfg.InputGainDB))
+		highPass.SetValue(float64(cfg.HighPassHz))
+		lowPass.SetValue(float64(cfg.LowPassHz))
+		notch.SetValue(float64(cfg.NotchHz))
+		compressorThreshold.SetValue(float64(cfg.CompressorThresholdDB))
+		compressorRatio.SetValue(float64(cfg.CompressorRatio))
+		expanderThreshold.SetValue(float64(cfg.ExpanderThresholdDB))
+		expanderRatio.SetValue(float64(cfg.ExpanderRatio))
+		limiterThreshold.SetValue(float64(cfg.LimiterThresholdDB))
+		gateThreshold.SetValue(float64(cfg.ThresholdDB))
+		sensitivity.SetValue(float64(cfg.VADThreshold))
+		vadHold.SetValue(float64(cfg.VADHoldMS))
+		gateHold.SetValue(float64(cfg.GateHoldMS))
 		a.setStatus("Filtros restaurados a valores de fábrica.")
 	})
-	liveMonitoring := widget.NewCheck("Escuchar mi voz en vivo (en la sala)", func(enabled bool) { a.cfg.LiveMonitoring = enabled })
-	liveMonitoring.SetChecked(a.cfg.LiveMonitoring)
-	phoneBufferCheck := widget.NewCheck("Activar buffer", func(enabled bool) { a.cfg.PhoneMicBufferEnabled = enabled })
-	phoneBufferCheck.SetChecked(a.cfg.PhoneMicBufferEnabled)
+	liveMonitoring := widget.NewCheck("Escuchar mi voz en vivo (en la sala)", func(enabled bool) { a.updateConfig(func(c *config.Config) { c.LiveMonitoring = enabled }) })
+	liveMonitoring.SetChecked(cfg.LiveMonitoring)
+	phoneBufferCheck := widget.NewCheck("Activar buffer", func(enabled bool) { a.updateConfig(func(c *config.Config) { c.PhoneMicBufferEnabled = enabled }) })
+	phoneBufferCheck.SetChecked(cfg.PhoneMicBufferEnabled)
 	phoneBufferMS := widget.NewEntry()
-	phoneBufferMS.SetText(strconv.Itoa(a.cfg.PhoneMicBufferMS))
+	phoneBufferMS.SetText(strconv.Itoa(cfg.PhoneMicBufferMS))
 	level := newLevelBar()
 	level.SetValue(0)
 	levelText := widget.NewLabel("Nivel: -60 dBFS")
-	var monitor *audio.Monitor
+	monitor := &levelMonitor{}
+	var lastLevelPaint atomic.Int64
+	// malgo llama a onLevel por cada buffer de captura (~100 veces/s). Un fyne.Do por llamada
+	// saturaba la cola del hilo de UI y cada SetText re-layouteaba la vista: se limita a ~15 fps.
+	onLevel := func(db float32) {
+		now := time.Now().UnixNano()
+		last := lastLevelPaint.Load()
+		if now-last < int64(levelPaintInterval) || !lastLevelPaint.CompareAndSwap(last, now) {
+			return
+		}
+		fyne.Do(func() {
+			level.SetValue(float64((db + 60) / 60))
+			levelText.SetText(fmt.Sprintf("Nivel: %.0f dBFS", db))
+		})
+	}
 	var previewButton *widget.Button
 	previewActive := false
+	settingsClosed := false
+	// Las closures de abajo corren en el hilo de UI; abrir/cerrar dispositivos va en levelMonitor.
 	startMonitor := func(name string) {
-		if monitor != nil {
+		if a.connected() {
 			monitor.Stop()
-			monitor = nil
-		}
-		if a.transport != nil {
-			fyne.Do(func() {
-				level.SetValue(0)
-				levelText.SetText("Nivel: micrófono activo en la sala")
-			})
+			level.SetValue(0)
+			levelText.SetText("Nivel: micrófono activo en la sala")
 			return
 		}
 		if name == phoneMicInput {
-			fyne.Do(func() {
-				level.SetValue(0)
-				levelText.SetText("Nivel: controlado desde el celular")
-			})
+			monitor.Stop()
+			level.SetValue(0)
+			levelText.SetText("Nivel: controlado desde el celular")
 			return
 		}
-		monitor, _ = audio.StartMonitor(name, func(db float32) {
-			fyne.Do(func() {
-				level.SetValue(float64((db + 60) / 60))
-				levelText.SetText(fmt.Sprintf("Nivel: %.0f dBFS", db))
-			})
-		})
+		monitor.Start(name, onLevel)
 	}
 	startMonitor(input.Selected)
 	stopPreview := func() {
 		if !previewActive {
 			return
 		}
-		a.stopPreviewAudio()
 		previewActive = false
+		stop := a.detachPreviewAudio()
+		go stop()
 		if previewButton != nil {
 			previewButton.SetText("Escuchar micrófono")
 		}
@@ -237,20 +259,21 @@ func (a *App) renderSettingsView(devices audio.DeviceLists) {
 	var closeOnce sync.Once
 	var recordingTest atomic.Bool
 	var refreshPhoneStatus func()
+	lastPhoneState := "" // último estado pintado por refreshPhoneStatus (solo hilo de UI)
 	input.OnChanged = func(selected string) {
 		stopPreview()
-		a.cfg.InputDevice = selected
+		a.updateConfig(func(c *config.Config) { c.InputDevice = selected })
 		startMonitor(selected)
 		if selected == phoneMicInput {
 			a.showPhoneMic()
 		} else {
-			a.stopPhoneMic()
+			go a.stopPhoneMic()
 		}
 		refreshPhoneStatus()
 	}
 	output.OnChanged = func(selected string) {
 		stopPreview()
-		a.cfg.OutputDevice = selected
+		a.updateConfig(func(c *config.Config) { c.OutputDevice = selected })
 	}
 	testInput := widget.NewButton("Grabar prueba", nil)
 	playRecording := widget.NewButton("Reproducir prueba", func() { a.playRecording(output.Selected) })
@@ -260,15 +283,17 @@ func (a *App) renderSettingsView(devices audio.DeviceLists) {
 		refreshPhoneStatus()
 	})
 	stopPhone := widget.NewButton("Detener celular", func() {
-		a.phoneMicMu.RLock()
-		server := a.phoneMic
-		a.phoneMicMu.RUnlock()
-		if server != nil {
-			a.stopPhoneMic()
-			a.cfg.InputDevice = phoneMicInput
-			a.setStatus("Servidor de micrófono de celular detenido.")
-		}
-		refreshPhoneStatus()
+		// server.Stop() cierra el servidor HTTP/UDP y espera conexiones: fuera del hilo de UI.
+		go func() {
+			a.phoneMicMu.RLock()
+			server := a.phoneMic
+			a.phoneMicMu.RUnlock()
+			if server != nil {
+				a.stopPhoneMic()
+				a.setStatus("Servidor de micrófono de celular detenido.")
+			}
+			refreshPhoneStatus()
+		}()
 	})
 	bufferSave := widget.NewButton("✓", nil)
 	serverLED := canvas.NewCircle(color.NRGBA{R: 210, G: 85, B: 85, A: 255})
@@ -280,48 +305,36 @@ func (a *App) renderSettingsView(devices audio.DeviceLists) {
 			stopPreview()
 			return
 		}
-		if a.transport != nil {
+		if a.connected() {
 			a.setStatus("La prueba de micrófono solo está disponible fuera de una sala.")
 			return
 		}
-		if monitor != nil {
-			monitor.Stop()
-			monitor = nil
+		inputName, outputName := input.Selected, output.Selected
+		if inputName == phoneMicInput && !a.phoneMicEnabled() {
+			a.setStatus("Primero iniciá el servidor y conectá el celular.")
+			return
 		}
-		if input.Selected == phoneMicInput {
-			if !a.phoneMicEnabled() {
-				a.setStatus("Primero iniciá el servidor y conectá el celular.")
-				startMonitor(input.Selected)
-				return
-			}
-			player, err := audio.NewPlayer(output.Selected)
-			if err != nil {
-				a.setStatus("No se pudo iniciar la escucha: " + err.Error())
-				startMonitor(input.Selected)
-				return
-			}
-			a.setPreviewPlayer(player)
-		} else {
-			var engine *audio.Engine
-			var err error
-			engine, err = audio.NewEngine(input.Selected, output.Selected, func(frame []byte) {
-				payload, shouldPlay := a.prepareOutgoingPCM(frame)
-				if shouldPlay && engine != nil {
-					engine.Play(payload)
+		monitor.Stop()
+		previewButton.Disable()
+		go func() {
+			err := a.startMicPreview(inputName, outputName)
+			fyne.Do(func() {
+				previewButton.Enable()
+				if settingsClosed {
+					stop := a.detachPreviewAudio()
+					go stop()
+					return
 				}
+				if err != nil {
+					a.setStatus("No se pudo iniciar la escucha: " + err.Error())
+					startMonitor(input.Selected)
+					return
+				}
+				previewActive = true
+				previewButton.SetText("Dejar de escuchar")
+				a.setStatus("Escuchando el micrófono. Ajustá filtro y VAD para probar.")
 			})
-			if err != nil {
-				a.setStatus("No se pudo iniciar la escucha: " + err.Error())
-				startMonitor(input.Selected)
-				return
-			}
-			a.previewMu.Lock()
-			a.previewEngine = engine
-			a.previewMu.Unlock()
-		}
-		previewActive = true
-		previewButton.SetText("Dejar de escuchar")
-		a.setStatus("Escuchando el micrófono. Ajustá filtro y VAD para probar.")
+		}()
 	})
 	applyBuffer := func() bool {
 		bufferMS, parseErr := strconv.Atoi(strings.TrimSpace(phoneBufferMS.Text))
@@ -329,22 +342,17 @@ func (a *App) renderSettingsView(devices audio.DeviceLists) {
 			a.setStatus("El buffer del celular debe estar entre 40 y 1000 ms.")
 			return false
 		}
-		a.cfg.PhoneMicBufferMS = bufferMS
+		a.updateConfig(func(c *config.Config) { c.PhoneMicBufferMS = bufferMS })
 		return true
 	}
 	bufferSave.OnTapped = func() {
 		if !applyBuffer() {
 			return
 		}
-		if err := config.Save(a.cfgPath, a.cfg); err != nil {
-			logging.Errorf("guardar buffer de celular: %s", logging.FormatError(err))
-			a.setStatus("No se pudo guardar el buffer del celular.")
-			return
-		}
-		a.setStatus("Buffer guardado. Reiniciá el servidor del celular para aplicarlo.")
+		a.setStatus("Buffer aplicado. Reiniciá el servidor del celular para usarlo.")
 	}
 	testInput.OnTapped = func() {
-		if a.transport != nil {
+		if a.connected() {
 			a.setStatus("No se puede grabar prueba mientras estás en una sala.")
 			return
 		}
@@ -352,6 +360,7 @@ func (a *App) renderSettingsView(devices audio.DeviceLists) {
 			return
 		}
 		testInput.Disable()
+		lastPhoneState = "" // el Disable manual desincroniza el caché: forzar el próximo repintado
 		a.testInput(input.Selected)
 		duration := 2200 * time.Millisecond
 		if input.Selected == phoneMicInput {
@@ -363,13 +372,21 @@ func (a *App) renderSettingsView(devices audio.DeviceLists) {
 		})
 	}
 	refreshPhoneStatus = func() {
-		phoneSelected := input.Selected == phoneMicInput
 		a.phoneMicMu.RLock()
 		server := a.phoneMic
 		a.phoneMicMu.RUnlock()
 		listening := server != nil
 		connected := listening && server.Connected()
+		recording := recordingTest.Load()
 		fyne.Do(func() {
+			// input.Selected es estado del widget: se lee en el hilo de UI. El ticker llama cada
+			// 500 ms; si nada cambió no se tocan widgets (cada Refresh/Enable fuerza un repintado).
+			phoneSelected := input.Selected == phoneMicInput
+			state := fmt.Sprint(phoneSelected, listening, connected, recording)
+			if state == lastPhoneState {
+				return
+			}
+			lastPhoneState = state
 			serverLED.FillColor = color.NRGBA{R: 210, G: 85, B: 85, A: 255}
 			serverLabel.SetText("Servidor detenido")
 			connectionLED.FillColor = color.NRGBA{R: 210, G: 85, B: 85, A: 255}
@@ -394,7 +411,7 @@ func (a *App) renderSettingsView(devices audio.DeviceLists) {
 				} else {
 					stopPhone.Disable()
 				}
-				if !connected || recordingTest.Load() {
+				if !connected || recording {
 					testInput.Disable()
 				} else {
 					testInput.Enable()
@@ -405,7 +422,7 @@ func (a *App) renderSettingsView(devices audio.DeviceLists) {
 				bufferSave.Disable()
 				showQR.Disable()
 				stopPhone.Disable()
-				if recordingTest.Load() {
+				if recording {
 					testInput.Disable()
 				} else {
 					testInput.Enable()
@@ -428,101 +445,171 @@ func (a *App) renderSettingsView(devices audio.DeviceLists) {
 	}()
 	closeSettings := func() {
 		closeOnce.Do(func() {
+			settingsClosed = true
 			close(phoneStatusStop)
-			go func() {
-				stopPreview()
-				if monitor != nil {
-					monitor.Stop()
-				}
-			}()
+			// Antes stopPreview corría en una goroutine: tocaba previewButton fuera del hilo de UI
+			// y volvía a abrir el medidor de nivel justo al salir de ajustes.
+			monitor.Stop()
+			previewActive = false
+			stop := a.detachPreviewAudio()
+			go stop()
+			a.cfgBaseline.Store(nil)
 			a.settingsStatus = nil
 			a.window.SetContent(a.mainView)
 		})
 	}
 	roomPortEntry := widget.NewEntry()
-	cleanPort := strings.TrimPrefix(a.cfg.ListenAddress, ":")
+	cleanPort := strings.TrimPrefix(cfg.ListenAddress, ":")
 	if cleanPort == "" || cleanPort == "0" {
 		cleanPort = "47830"
 	}
 	roomPortEntry.SetText(cleanPort)
 
 	phonePortEntry := widget.NewEntry()
-	phonePortVal := a.cfg.PhoneMicPort
+	phonePortVal := cfg.PhoneMicPort
 	if phonePortVal <= 0 {
 		phonePortVal = 47831
 	}
 	phonePortEntry.SetText(strconv.Itoa(phonePortVal))
+	openedTexts := []string{username.Text, roomPortEntry.Text, phonePortEntry.Text, phoneBufferMS.Text}
+	isDirty := func() bool {
+		if a.conf().LiveSettings != baseline {
+			return true
+		}
+		for i, entry := range []*widget.Entry{username, roomPortEntry, phonePortEntry, phoneBufferMS} {
+			if strings.TrimSpace(entry.Text) != strings.TrimSpace(openedTexts[i]) {
+				return true
+			}
+		}
+		return false
+	}
 
 	saveSettings := func() {
 		if !applyBuffer() {
 			return
 		}
-		oldInput := a.cfg.InputDevice
-		oldOutput := a.cfg.OutputDevice
-		a.cfg.Username = strings.TrimSpace(username.Text)
-		if a.cfg.Username == "" {
-			a.cfg.Username = "Usuario"
+		name := strings.TrimSpace(username.Text)
+		if name == "" {
+			name = "Usuario"
 		}
+		listenAddress := ":47830"
+		if portStr := strings.TrimSpace(roomPortEntry.Text); portStr != "" {
+			if !strings.Contains(portStr, ":") {
+				listenAddress = ":" + portStr
+			} else {
+				listenAddress = portStr
+			}
+		}
+		phonePort, phonePortErr := strconv.Atoi(strings.TrimSpace(phonePortEntry.Text))
+		cfg := a.updateConfig(func(c *config.Config) {
+			c.Username = name
+			c.ListenAddress = listenAddress
+			if phonePortErr == nil && phonePort > 0 && phonePort < 65536 {
+				c.PhoneMicPort = phonePort
+			}
+		})
 		if a.selfNameLabel != nil {
-			a.selfNameLabel.SetText(a.cfg.Username)
+			a.selfNameLabel.SetText(cfg.Username)
 		}
 		for i := range a.roomState.Participants {
 			if a.roomState.Participants[i].ID == a.participantID {
-				a.roomState.Participants[i].CanBeHost = a.cfg.AllowHostMigration
+				a.roomState.Participants[i].CanBeHost = cfg.AllowHostMigration
 				break
 			}
 		}
-		portStr := strings.TrimSpace(roomPortEntry.Text)
-		if portStr != "" {
-			if !strings.HasPrefix(portStr, ":") && !strings.Contains(portStr, ":") {
-				a.cfg.ListenAddress = ":" + portStr
-			} else {
-				a.cfg.ListenAddress = portStr
-			}
-		} else {
-			a.cfg.ListenAddress = ":47830"
-		}
-		if p, err := strconv.Atoi(strings.TrimSpace(phonePortEntry.Text)); err == nil && p > 0 && p < 65536 {
-			a.cfg.PhoneMicPort = p
-		}
 		if a.bottomBar != nil {
-			if a.cfg.ShowStatusBar {
+			if cfg.ShowStatusBar {
 				a.bottomBar.Show()
 			} else {
 				a.bottomBar.Hide()
 			}
 		}
-		if a.audioEngine != nil {
-			a.audioEngine.SetJitterBufferMS(a.cfg.JitterBufferMS)
+		if engine := a.engine(); engine != nil {
+			engine.SetJitterBufferMS(cfg.JitterBufferMS)
 		}
 		a.setStatus("Configuración guardada.")
 		closeSettings()
-
-		go func() {
-			if err := config.Save(a.cfgPath, a.cfg); err != nil {
-				logging.Errorf("guardar configuración: %s", logging.FormatError(err))
-				fyne.Do(func() {
-					a.setStatus("No se pudo guardar la configuración.")
-				})
-				return
-			}
-			if a.transport != nil && (oldInput != a.cfg.InputDevice || oldOutput != a.cfg.OutputDevice) {
-				a.restartAudioInRoom()
-			}
-		}()
+		a.saveConfig()
+		// Los selects publican el dispositivo en vivo: se compara contra el que había al abrir
+		// ajustes (antes se comparaba contra a.cfg ya modificado y nunca reiniciaba).
+		if a.connected() && (openedInput != cfg.InputDevice || openedOutput != cfg.OutputDevice) {
+			go a.restartAudioInRoom()
+		}
 	}
-	outputFilterCheck := widget.NewCheck("Aplicar filtro de salida", func(enabled bool) { a.cfg.OutputFilterEnabled = enabled })
-	outputFilterCheck.SetChecked(a.cfg.OutputFilterEnabled)
-	outputHighPassCheck := widget.NewCheck("Pasa-altos", func(enabled bool) { a.cfg.OutputHighPassEnabled = enabled })
-	outputHighPassCheck.SetChecked(a.cfg.OutputHighPassEnabled)
-	outputLowPassCheck := widget.NewCheck("Pasa-bajos", func(enabled bool) { a.cfg.OutputLowPassEnabled = enabled })
-	outputLowPassCheck.SetChecked(a.cfg.OutputLowPassEnabled)
-	outputLimiterCheck := widget.NewCheck("Limitador", func(enabled bool) { a.cfg.OutputLimiterEnabled = enabled })
-	outputLimiterCheck.SetChecked(a.cfg.OutputLimiterEnabled)
-	outputGain, outputGainLabel := newSlider("Ganancia salida (dB)", -24, 24, float64(a.cfg.OutputGainDB), func(value float64) { a.cfg.OutputGainDB = float32(value) })
-	outputHighPass, outputHighPassLabel := newSlider("Frecuencia pasa-altos (Hz)", 20, 500, float64(a.cfg.OutputHighPassHz), func(value float64) { a.cfg.OutputHighPassHz = float32(value) })
-	outputLowPass, outputLowPassLabel := newSlider("Frecuencia pasa-bajos (Hz)", 1000, 18000, float64(a.cfg.OutputLowPassHz), func(value float64) { a.cfg.OutputLowPassHz = float32(value) })
-	outputLimiter, outputLimiterLabel := newSlider("Techo limitador (dB)", -12, 0, float64(a.cfg.OutputLimiterDB), func(value float64) { a.cfg.OutputLimiterDB = float32(value) })
+	// discardSettings vuelve LiveSettings a la base (CAS: no pisa LastPeer, token, etc. que hayan
+	// cambiado en el medio) y deshace los efectos que los callbacks aplicaron fuera de la config.
+	// El dispositivo de la sala no se toca en vivo (solo Guardar reinicia el audio), así que no hay
+	// nada que reabrir.
+	discardSettings := func() {
+		a.updateConfig(func(c *config.Config) { c.LiveSettings = baseline })
+		logging.SetLevel(baseline.LogLevel)
+		if engine := a.engine(); engine != nil {
+			engine.SetJitterBufferMS(baseline.JitterBufferMS)
+		}
+		a.phoneMicMu.RLock()
+		phoneRunning := a.phoneMic != nil
+		a.phoneMicMu.RUnlock()
+		switch {
+		case phoneRunning && !phoneWasRunning:
+			go a.stopPhoneMic()
+		case !phoneRunning && phoneWasRunning:
+			go func() {
+				if _, err := a.ensurePhoneMicServer(); err != nil {
+					a.setStatus("No se pudo reiniciar el servidor del celular: " + err.Error())
+				}
+			}()
+		}
+		a.setStatus("Cambios descartados.")
+		closeSettings()
+	}
+	askBack := func() {
+		if !isDirty() {
+			closeSettings()
+			return
+		}
+		var ask *dialog.CustomDialog
+		saveButton := widget.NewButton("Guardar", func() {
+			ask.Hide()
+			saveSettings()
+		})
+		saveButton.Importance = widget.HighImportance
+		ask = dialog.NewCustomWithoutButtons("Cambios sin guardar", widget.NewLabel("¿Querés guardar los cambios antes de salir?"), a.window)
+		ask.SetButtons([]fyne.CanvasObject{
+			widget.NewButton("Seguir editando", func() { ask.Hide() }),
+			widget.NewButton("Descartar", func() {
+				ask.Hide()
+				discardSettings()
+			}),
+			saveButton,
+		})
+		ask.Show()
+	}
+	askCancel := func() {
+		if !isDirty() {
+			closeSettings()
+			return
+		}
+		ask := dialog.NewConfirm("Descartar cambios", "Se van a revertir los cambios que hiciste en la configuración. ¿Continuar?", func(confirmed bool) {
+			if confirmed {
+				discardSettings()
+			}
+		}, a.window)
+		ask.SetConfirmText("Descartar")
+		ask.SetDismissText("Seguir editando")
+		ask.Show()
+	}
+	outputFilterCheck := widget.NewCheck("Aplicar filtro de salida", func(enabled bool) { a.updateConfig(func(c *config.Config) { c.OutputFilterEnabled = enabled }) })
+	outputFilterCheck.SetChecked(cfg.OutputFilterEnabled)
+	outputHighPassCheck := widget.NewCheck("Pasa-altos", func(enabled bool) { a.updateConfig(func(c *config.Config) { c.OutputHighPassEnabled = enabled }) })
+	outputHighPassCheck.SetChecked(cfg.OutputHighPassEnabled)
+	outputLowPassCheck := widget.NewCheck("Pasa-bajos", func(enabled bool) { a.updateConfig(func(c *config.Config) { c.OutputLowPassEnabled = enabled }) })
+	outputLowPassCheck.SetChecked(cfg.OutputLowPassEnabled)
+	outputLimiterCheck := widget.NewCheck("Limitador", func(enabled bool) { a.updateConfig(func(c *config.Config) { c.OutputLimiterEnabled = enabled }) })
+	outputLimiterCheck.SetChecked(cfg.OutputLimiterEnabled)
+	outputGain, outputGainLabel := newSlider("Ganancia salida (dB)", -24, 24, float64(cfg.OutputGainDB), func(value float64) { a.updateConfig(func(c *config.Config) { c.OutputGainDB = float32(value) }) })
+	outputHighPass, outputHighPassLabel := newSlider("Frecuencia pasa-altos (Hz)", 20, 500, float64(cfg.OutputHighPassHz), func(value float64) { a.updateConfig(func(c *config.Config) { c.OutputHighPassHz = float32(value) }) })
+	outputLowPass, outputLowPassLabel := newSlider("Frecuencia pasa-bajos (Hz)", 1000, 18000, float64(cfg.OutputLowPassHz), func(value float64) { a.updateConfig(func(c *config.Config) { c.OutputLowPassHz = float32(value) }) })
+	outputLimiter, outputLimiterLabel := newSlider("Techo limitador (dB)", -12, 0, float64(cfg.OutputLimiterDB), func(value float64) { a.updateConfig(func(c *config.Config) { c.OutputLimiterDB = float32(value) }) })
 	outputAdvanced := container.NewVBox(
 		filterCard("Ganancia", "Ajusta el volumen de las voces recibidas.", outputGainLabel, outputGain),
 		filterCard("Pasa-altos", "Reduce graves, golpes y vibración en las voces recibidas.", outputHighPassCheck, outputHighPassLabel, outputHighPass),
@@ -539,22 +626,24 @@ func (a *App) renderSettingsView(devices audio.DeviceLists) {
 	})
 	resetOutputFilters := widget.NewButton("↺", func() {
 		defaults := config.Default()
-		a.cfg.OutputFilterEnabled, a.cfg.OutputGainDB = defaults.OutputFilterEnabled, defaults.OutputGainDB
-		a.cfg.OutputHighPassEnabled, a.cfg.OutputHighPassHz = defaults.OutputHighPassEnabled, defaults.OutputHighPassHz
-		a.cfg.OutputLowPassEnabled, a.cfg.OutputLowPassHz = defaults.OutputLowPassEnabled, defaults.OutputLowPassHz
-		a.cfg.OutputLimiterEnabled, a.cfg.OutputLimiterDB = defaults.OutputLimiterEnabled, defaults.OutputLimiterDB
-		outputFilterCheck.SetChecked(a.cfg.OutputFilterEnabled)
-		outputHighPassCheck.SetChecked(a.cfg.OutputHighPassEnabled)
-		outputLowPassCheck.SetChecked(a.cfg.OutputLowPassEnabled)
-		outputLimiterCheck.SetChecked(a.cfg.OutputLimiterEnabled)
-		outputGain.SetValue(float64(a.cfg.OutputGainDB))
-		outputHighPass.SetValue(float64(a.cfg.OutputHighPassHz))
-		outputLowPass.SetValue(float64(a.cfg.OutputLowPassHz))
-		outputLimiter.SetValue(float64(a.cfg.OutputLimiterDB))
+		cfg := a.updateConfig(func(c *config.Config) {
+			c.OutputFilterEnabled, c.OutputGainDB = defaults.OutputFilterEnabled, defaults.OutputGainDB
+			c.OutputHighPassEnabled, c.OutputHighPassHz = defaults.OutputHighPassEnabled, defaults.OutputHighPassHz
+			c.OutputLowPassEnabled, c.OutputLowPassHz = defaults.OutputLowPassEnabled, defaults.OutputLowPassHz
+			c.OutputLimiterEnabled, c.OutputLimiterDB = defaults.OutputLimiterEnabled, defaults.OutputLimiterDB
+		})
+		outputFilterCheck.SetChecked(cfg.OutputFilterEnabled)
+		outputHighPassCheck.SetChecked(cfg.OutputHighPassEnabled)
+		outputLowPassCheck.SetChecked(cfg.OutputLowPassEnabled)
+		outputLimiterCheck.SetChecked(cfg.OutputLimiterEnabled)
+		outputGain.SetValue(float64(cfg.OutputGainDB))
+		outputHighPass.SetValue(float64(cfg.OutputHighPassHz))
+		outputLowPass.SetValue(float64(cfg.OutputLowPassHz))
+		outputLimiter.SetValue(float64(cfg.OutputLimiterDB))
 		a.setStatus("Filtros de salida restaurados a valores de fábrica.")
 	})
-	showStatusBarCheck := widget.NewCheck("Mostrar barra de estado inferior", func(checked bool) { a.cfg.ShowStatusBar = checked })
-	showStatusBarCheck.SetChecked(a.cfg.ShowStatusBar)
+	showStatusBarCheck := widget.NewCheck("Mostrar barra de estado inferior", func(checked bool) { a.updateConfig(func(c *config.Config) { c.ShowStatusBar = checked }) })
+	showStatusBarCheck.SetChecked(cfg.ShowStatusBar)
 	profileCard := uiCard(container.NewVBox(
 		widget.NewLabelWithStyle("👤 Perfil de Usuario", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		widget.NewLabel("Nombre de usuario"),
@@ -588,20 +677,22 @@ func (a *App) renderSettingsView(devices audio.DeviceLists) {
 		container.NewHBox(phoneBufferCheck, container.NewGridWrap(fyne.NewSize(76, 36), phoneBufferMS), container.NewGridWrap(fyne.NewSize(36, 36), bufferSave)),
 		container.NewGridWithColumns(2, showQR, stopPhone),
 	))
-	eventSoundsCheck := widget.NewCheck("Sonidos de eventos (conexión, desconexión, chat)", func(checked bool) { a.cfg.EventSoundsEnabled = checked })
-	eventSoundsCheck.SetChecked(a.cfg.EventSoundsEnabled)
-	allowHostCheck := widget.NewCheck("Permitir ser Host de respaldo si el Host se desconecta", func(checked bool) { a.cfg.AllowHostMigration = checked })
-	allowHostCheck.SetChecked(a.cfg.AllowHostMigration)
+	eventSoundsCheck := widget.NewCheck("Sonidos de eventos (conexión, desconexión, chat)", func(checked bool) { a.updateConfig(func(c *config.Config) { c.EventSoundsEnabled = checked }) })
+	eventSoundsCheck.SetChecked(cfg.EventSoundsEnabled)
+	allowHostCheck := widget.NewCheck("Permitir ser Host de respaldo si el Host se desconecta", func(checked bool) { a.updateConfig(func(c *config.Config) { c.AllowHostMigration = checked }) })
+	allowHostCheck.SetChecked(cfg.AllowHostMigration)
 
-	jitterLabel := widget.NewLabel(fmt.Sprintf("Buffer de recepción (Jitter buffer): %d ms", a.cfg.JitterBufferMS))
+	jitterLabel := widget.NewLabel(fmt.Sprintf(jitterLabelFormat, cfg.JitterBufferMS))
+	jitterHint := widget.NewLabel("El colchón real se ajusta solo según el jitter medido de cada participante; esto es el máximo.")
+	jitterHint.Wrapping = fyne.TextWrapWord
 	jitterSlider := widget.NewSlider(40, 500)
 	jitterSlider.Step = 10
-	jitterSlider.Value = float64(a.cfg.JitterBufferMS)
+	jitterSlider.Value = float64(cfg.JitterBufferMS)
 	jitterSlider.OnChanged = func(val float64) {
-		a.cfg.JitterBufferMS = int(val)
-		jitterLabel.SetText(fmt.Sprintf("Buffer de recepción (Jitter buffer): %d ms", int(val)))
-		if a.audioEngine != nil {
-			a.audioEngine.SetJitterBufferMS(int(val))
+		a.updateConfig(func(c *config.Config) { c.JitterBufferMS = int(val) })
+		jitterLabel.SetText(fmt.Sprintf(jitterLabelFormat, int(val)))
+		if engine := a.engine(); engine != nil {
+			engine.SetJitterBufferMS(int(val))
 		}
 	}
 
@@ -614,6 +705,7 @@ func (a *App) renderSettingsView(devices audio.DeviceLists) {
 		allowHostCheck,
 		jitterLabel,
 		jitterSlider,
+		jitterHint,
 	))
 	openDataDirButton := widget.NewButtonWithIcon("Abrir carpeta de datos y grabaciones", theme.FolderOpenIcon(), func() {
 		if err := openDataDirectory(); err != nil {
@@ -635,17 +727,17 @@ func (a *App) renderSettingsView(devices audio.DeviceLists) {
 		"2 - Debug Avanzado",
 	}
 	logLevelSelect := widget.NewSelect(logLevelOptions, func(selected string) {
+		level := logging.LevelError
 		switch selected {
 		case "1 - Debug Normal":
-			a.cfg.LogLevel = logging.LevelControl
+			level = logging.LevelControl
 		case "2 - Debug Avanzado":
-			a.cfg.LogLevel = logging.LevelTrace
-		default:
-			a.cfg.LogLevel = logging.LevelError
+			level = logging.LevelTrace
 		}
-		logging.SetLevel(a.cfg.LogLevel)
+		a.updateConfig(func(c *config.Config) { c.LogLevel = level })
+		logging.SetLevel(level)
 	})
-	switch a.cfg.LogLevel {
+	switch cfg.LogLevel {
 	case logging.LevelControl:
 		logLevelSelect.SetSelected("1 - Debug Normal")
 	case logging.LevelTrace:
@@ -668,36 +760,93 @@ func (a *App) renderSettingsView(devices audio.DeviceLists) {
 		networkCard,
 		interfaceCard,
 	))
-	back := widget.NewButtonWithIcon("Volver", theme.NavigateBackIcon(), closeSettings)
+	back := widget.NewButtonWithIcon("Volver", theme.NavigateBackIcon(), askBack)
 	header := container.NewBorder(nil, nil, back, nil, widget.NewLabelWithStyle("Configuración", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}))
-	footer := container.NewBorder(nil, nil, a.settingsStatus, container.NewHBox(widget.NewButton("Cancelar", closeSettings), widget.NewButton("Guardar", saveSettings)), nil)
+	footer := container.NewBorder(nil, nil, a.settingsStatus, container.NewHBox(widget.NewButton("Cancelar", askCancel), widget.NewButton("Guardar", saveSettings)), nil)
 	a.window.SetContent(container.NewBorder(header, footer, nil, nil, settingsBody))
 }
 
+// showPhoneMic arranca el servidor del celular (si hace falta) y muestra el QR. Arrancar el
+// servidor abre sockets, puede generar el certificado TLS y guarda la config: va en segundo plano
+// y solo el diálogo se arma en el hilo de UI.
 func (a *App) showPhoneMic() {
-	a.cfg.InputDevice = phoneMicInput
-	server, err := a.ensurePhoneMicServer()
-	if err != nil {
-		a.setStatus("No se pudo iniciar el micrófono de celular: " + err.Error())
-		return
+	a.updateConfig(func(c *config.Config) { c.InputDevice = phoneMicInput })
+	go func() {
+		server, err := a.ensurePhoneMicServer()
+		if err != nil {
+			a.setStatus("No se pudo iniciar el micrófono de celular: " + err.Error())
+			return
+		}
+		png, err := server.QRCode()
+		if err != nil {
+			a.setStatus("No se pudo crear el QR: " + err.Error())
+			return
+		}
+		serverURL := server.URL()
+		fyne.Do(func() {
+			qr := canvas.NewImageFromResource(fyne.NewStaticResource("voxmesh-phone-mic.png", png))
+			qr.FillMode = canvas.ImageFillContain
+			qr.Resize(fyne.NewSize(280, 280))
+			address := widget.NewMultiLineEntry()
+			address.SetText(serverURL)
+			address.Disable()
+			content := container.NewVBox(
+				widget.NewLabel("Escaneá el código QR desde la app VoxMesh Mic (misma Wi-Fi):"),
+				container.NewCenter(container.NewGridWrap(fyne.NewSize(280, 280), qr)),
+				address,
+			)
+			dialog.ShowCustom("Usar celular como micrófono", "Cerrar", content, a.window)
+		})
+	}()
+}
+
+// levelPaintInterval limita los repintados del medidor de nivel (~15 fps).
+const levelPaintInterval = 66 * time.Millisecond
+
+// levelMonitor abre y cierra el medidor de nivel de ajustes fuera del hilo de UI:
+// malgo.InitContext/InitDevice (WASAPI) tarda cientos de ms, o segundos con dispositivos
+// Bluetooth. gen descarta un arranque viejo (se cambió de dispositivo o se cerró la vista
+// mientras el anterior todavía inicializaba).
+type levelMonitor struct {
+	mu      sync.Mutex
+	gen     uint64
+	current *audio.Monitor
+}
+
+func (m *levelMonitor) detach() (*audio.Monitor, uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.gen++
+	old := m.current
+	m.current = nil
+	return old, m.gen
+}
+
+func (m *levelMonitor) Start(name string, onLevel func(float32)) {
+	old, gen := m.detach()
+	go func() {
+		old.Stop()
+		started, err := audio.StartMonitor(name, onLevel)
+		if err != nil {
+			logging.Errorf("medidor de nivel %q: %s", name, logging.FormatError(err))
+			return
+		}
+		m.mu.Lock()
+		stale := m.gen != gen
+		if !stale {
+			m.current = started
+		}
+		m.mu.Unlock()
+		if stale {
+			started.Stop()
+		}
+	}()
+}
+
+func (m *levelMonitor) Stop() {
+	if old, _ := m.detach(); old != nil {
+		go old.Stop()
 	}
-	png, err := server.QRCode()
-	if err != nil {
-		a.setStatus("No se pudo crear el QR: " + err.Error())
-		return
-	}
-	qr := canvas.NewImageFromResource(fyne.NewStaticResource("voxmesh-phone-mic.png", png))
-	qr.FillMode = canvas.ImageFillContain
-	qr.Resize(fyne.NewSize(280, 280))
-	address := widget.NewMultiLineEntry()
-	address.SetText(server.URL())
-	address.Disable()
-	content := container.NewVBox(
-		widget.NewLabel("Escaneá el código QR desde la app VoxMesh Mic (misma Wi-Fi):"),
-		container.NewCenter(container.NewGridWrap(fyne.NewSize(280, 280), qr)),
-		address,
-	)
-	dialog.ShowCustom("Usar celular como micrófono", "Cerrar", content, a.window)
 }
 
 func (a *App) testPhoneMic() {
@@ -728,14 +877,19 @@ func (a *App) testPhoneMic() {
 	}()
 }
 
+// jitterLabelFormat es el texto del slider de JitterBufferMS: desde que el colchón es
+// adaptativo, el slider fija su máximo.
+const jitterLabelFormat = "Buffer de recepción máximo (adaptativo): %d ms"
+
 func (a *App) testInput(name string) {
 	if name == phoneMicInput {
 		a.testPhoneMic()
 		return
 	}
 	a.setStatus("Grabando desde " + name + "...")
-	filterEnabled := a.cfg.AudioFilterEnabled
-	thresholdDB := a.cfg.ThresholdDB
+	cfg := a.conf()
+	filterEnabled := cfg.AudioFilterEnabled
+	thresholdDB := cfg.ThresholdDB
 	go func() {
 		data, err := audio.RecordInput(name, 2*time.Second)
 		if err != nil {
@@ -743,7 +897,7 @@ func (a *App) testInput(name string) {
 			return
 		}
 		if filterEnabled {
-			data, _, err = audio.PrepareOutgoingPCM(data, a.voiceProcessor, audio.NoiseGate{ThresholdDB: thresholdDB}, true, a.cfg.VADThreshold)
+			data, _, err = audio.PrepareOutgoingPCM(data, a.voiceProcessor, audio.NoiseGate{ThresholdDB: thresholdDB}, true, cfg.VADThreshold)
 		} else {
 			data, err = audio.PreparePCM(data, audio.NoiseGate{ThresholdDB: thresholdDB}, false)
 		}

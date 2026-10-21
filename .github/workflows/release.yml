@@ -31,7 +31,10 @@ jobs:
         with:
           msystem: UCRT64
           update: false
-          install: mingw-w64-ucrt-x86_64-gcc
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-opus
+            mingw-w64-ucrt-x86_64-pkgconf
 
       - name: Compile voxmesh.exe with CGO
         shell: powershell
@@ -49,7 +52,7 @@ jobs:
           }
           New-Item -ItemType Directory -Path "dist" -Force | Out-Null
           $tag = "${{ github.ref_name }}"
-          go build -trimpath -ldflags "-s -w -H windowsgui -linkmode external -extldflags -static -X voxmesh/internal/version.Value=$tag" -o dist/voxmesh.exe ./cmd/voxmesh
+          go build -trimpath -tags nolibopusfile -ldflags "-s -w -H windowsgui -linkmode external -extldflags -static -X voxmesh/internal/version.Value=$tag" -o dist/voxmesh.exe ./cmd/voxmesh
           Compress-Archive -Path dist/voxmesh.exe -DestinationPath dist/voxmesh-windows-x64.zip -Force
 
       - name: Upload Windows Artifact

@@ -63,3 +63,26 @@ func TestValidateRequiresUniqueOrderAndKnownHost(t *testing.T) {
 		t.Fatal("expected unknown host to be rejected")
 	}
 }
+
+func TestSetMutedRequiresMatchingAddressAndCopiesSlice(t *testing.T) {
+	address := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1000}
+	state := New("gaming", "Daniel", address)
+	state.Upsert(Participant{ID: "juan", Username: "Juan", Address: "127.0.0.1:1001", Connected: true})
+	previous := state.Participants
+
+	if state.SetMuted("juan", "127.0.0.1:9999", true) {
+		t.Fatal("mute from a different address must be rejected")
+	}
+	if !state.SetMuted("juan", "127.0.0.1:1001", true) {
+		t.Fatal("expected mute to change the state")
+	}
+	if state.SetMuted("juan", "", true) {
+		t.Fatal("setting the same mute again must report no change")
+	}
+	if !state.Participants[1].Muted {
+		t.Fatalf("participant not muted: %#v", state.Participants[1])
+	}
+	if previous[1].Muted {
+		t.Fatal("SetMuted wrote into the previous participants slice")
+	}
+}

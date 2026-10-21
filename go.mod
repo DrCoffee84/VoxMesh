@@ -8,7 +8,12 @@ require (
 	github.com/VoiceBlender/rnnoise-go/model v0.1.0
 	github.com/atotto/clipboard v0.1.4
 	github.com/gen2brain/malgo v0.11.26
+	github.com/hajimehoshi/go-mp3 v0.3.4
 	github.com/huin/goupnp v1.3.0
+	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
+	golang.org/x/image v0.24.0
+	gopkg.in/hraban/opus.v2 v2.0.0-20230925203106-0188a62cb302
+	nhooyr.io/websocket v1.8.17
 )
 
 require (
@@ -28,7 +33,6 @@ require (
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/hack-pad/go-indexeddb v0.3.2 // indirect
 	github.com/hack-pad/safejs v0.1.0 // indirect
-	github.com/hajimehoshi/go-mp3 v0.3.4 // indirect
 	github.com/jeandeaual/go-locale v0.0.0-20250612000132-0ef82f21eade // indirect
 	github.com/jsummers/gobmp v0.0.0-20230614200233-a9de23ed2e25 // indirect
 	github.com/kr/text v0.2.0 // indirect
@@ -36,16 +40,13 @@ require (
 	github.com/nicksnyder/go-i18n/v2 v2.5.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/rymdport/portal v0.4.1 // indirect
-	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e // indirect
 	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c // indirect
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef // indirect
 	github.com/stretchr/testify v1.10.0 // indirect
 	github.com/yuin/goldmark v1.7.8 // indirect
-	golang.org/x/image v0.24.0 // indirect
 	golang.org/x/net v0.35.0 // indirect
 	golang.org/x/sync v0.11.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.22.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	nhooyr.io/websocket v1.8.17 // indirect
 )
