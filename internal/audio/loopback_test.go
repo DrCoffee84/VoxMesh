@@ -33,8 +33,8 @@ func TestLoopbackRoom(t *testing.T) {
 	defer sender.Close()
 
 	engine := newEngineState()
-	engine.SetJitterBufferMS(200)
-	encoder, err := NewOpusEncoder()
+	setPlayback(engine, 200, nil)
+	encoder, err := NewOpusEncoder(defaultOpus)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestLoopbackRoom(t *testing.T) {
 			drop := rng.Float64() < 0.03
 			delay := time.Duration(rng.Intn(25)) * time.Millisecond
 			packetSeq, talkspurt := seq, uint8(phrase)
-			if err := encoder.Encode(frame, func(opusPacket []byte) {
+			if err := encoder.Encode(frame, defaultOpus, func(opusPacket []byte) {
 				if drop {
 					lost++
 					return

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"voxmesh/internal/audio"
-	"voxmesh/internal/config"
 	"voxmesh/internal/logging"
 	"voxmesh/internal/transport"
 )
@@ -86,6 +85,7 @@ func (a *App) sendOutgoingPCM(frame []byte, udp *transport.UDP, peer *net.UDPAdd
 	if encoder == nil {
 		return
 	}
+	opusSettings := audio.EncoderSettings(a.conf())
 
 	// sendMu ordena el envío si micrófono y celular coinciden un instante (al cambiar de
 	// entrada): talkspurt, sendBuf y el encoder son de a uno.
@@ -97,7 +97,7 @@ func (a *App) sendOutgoingPCM(frame []byte, udp *transport.UDP, peer *net.UDPAdd
 	}
 	a.lastAudioSent = now
 	for _, samples := range frames {
-		err := encoder.Encode(samples, func(opusPacket []byte) {
+		err := encoder.Encode(samples, opusSettings, func(opusPacket []byte) {
 			a.sendBuf = append(a.sendBuf[:0], participantIDBytes)
 			a.sendBuf = append(a.sendBuf, senderID[:]...)
 			a.sendBuf = append(a.sendBuf, opusPacket...)
@@ -129,7 +129,7 @@ func (a *App) outgoingEncoder() *audio.OpusEncoder {
 	if encoder := a.encoder.Load(); encoder != nil {
 		return encoder
 	}
-	encoder, err := audio.NewOpusEncoder()
+	encoder, err := audio.NewOpusEncoder(audio.EncoderSettings(a.conf()))
 	if err != nil {
 		logging.Errorf("%s", logging.FormatError(err))
 		return nil
@@ -142,7 +142,7 @@ func (a *App) outgoingEncoder() *audio.OpusEncoder {
 
 // resetEncoder crea un encoder nuevo al conectar (estado limpio para la sala nueva).
 func (a *App) resetEncoder() {
-	encoder, err := audio.NewOpusEncoder()
+	encoder, err := audio.NewOpusEncoder(audio.EncoderSettings(a.conf()))
 	if err != nil {
 		logging.Errorf("%s", logging.FormatError(err))
 		a.encoder.Store(nil)
@@ -151,46 +151,11 @@ func (a *App) resetEncoder() {
 	a.encoder.Store(encoder)
 }
 
-// outputFilter es la configuración de la cadena de salida (Ajustes → Salida) que el Engine
-// aplica por emisor. La llama el callback de playback: una carga atómica, sin locks.
-func (a *App) outputFilter() (audio.FilterSettings, bool) {
-	cfg := a.conf()
-	return audio.FilterSettings{
-		GainDB:           cfg.OutputGainDB,
-		HighPassEnabled:  cfg.OutputHighPassEnabled,
-		HighPassHz:       cfg.OutputHighPassHz,
-		LowPassEnabled:   cfg.OutputLowPassEnabled,
-		LowPassHz:        cfg.OutputLowPassHz,
-		LimiterEnabled:   cfg.OutputLimiterEnabled,
-		LimiterThreshold: cfg.OutputLimiterDB,
-	}, cfg.OutputFilterEnabled
-}
-
-// outgoingSettings arma la configuración de la cadena de envío. Corre por frame (callback de
-// captura): lee la configuración con una sola carga atómica, nunca espera a la UI.
-func outgoingSettings(cfg *config.Config) (audio.NoiseGate, audio.FilterSettings) {
-	return audio.NoiseGate{ThresholdDB: cfg.ThresholdDB}, audio.FilterSettings{
-		RNNoiseEnabled:      cfg.RNNoiseEnabled,
-		VADEnabled:          cfg.VADEnabled,
-		NoiseGateEnabled:    cfg.NoiseGateEnabled,
-		GainDB:              cfg.InputGainDB,
-		HighPassEnabled:     cfg.HighPassEnabled,
-		HighPassHz:          cfg.HighPassHz,
-		LowPassEnabled:      cfg.LowPassEnabled,
-		LowPassHz:           cfg.LowPassHz,
-		NotchEnabled:        cfg.NotchEnabled,
-		NotchHz:             cfg.NotchHz,
-		CompressorEnabled:   cfg.CompressorEnabled,
-		CompressorThreshold: cfg.CompressorThresholdDB,
-		CompressorRatio:     cfg.CompressorRatio,
-		ExpanderEnabled:     cfg.ExpanderEnabled,
-		ExpanderThreshold:   cfg.ExpanderThresholdDB,
-		ExpanderRatio:       cfg.ExpanderRatio,
-		LimiterEnabled:      cfg.LimiterEnabled,
-		LimiterThreshold:    cfg.LimiterThresholdDB,
-		VADHoldMS:           cfg.VADHoldMS,
-		GateHoldMS:          cfg.GateHoldMS,
-	}
+// playbackSettings es la configuración de salida (Ajustes → Salida: filtro por emisor, jitter
+// buffer, limitador de la mezcla) que lee el Engine. La llama el callback de playback: una carga
+// atómica, sin locks.
+func (a *App) playbackSettings() audio.PlaybackSettings {
+	return audio.OutputSettings(a.conf())
 }
 
 // prepareOutgoingFrames devuelve los frames a mandar (ver audio.PrepareOutgoingFrames). Valen
@@ -202,7 +167,7 @@ func (a *App) prepareOutgoingFrames(frame []byte) ([][]int16, bool) {
 		return nil, false
 	}
 	cfg := a.conf()
-	gate, settings := outgoingSettings(cfg)
+	gate, settings := audio.InputSettings(cfg)
 	frames, _, err := audio.PrepareOutgoingFrames(samples, a.voiceProcessor, gate, cfg.AudioFilterEnabled, cfg.VADThreshold, settings, a.effects)
 	if err != nil {
 		logging.Errorf("procesar audio saliente: %s", logging.FormatError(err))
@@ -215,7 +180,7 @@ func (a *App) prepareOutgoingFrames(frame []byte) ([][]int16, bool) {
 // prueba de ajustes.
 func (a *App) prepareOutgoingPCM(frame []byte) ([]byte, bool) {
 	cfg := a.conf()
-	gate, settings := outgoingSettings(cfg)
+	gate, settings := audio.InputSettings(cfg)
 	payload, shouldSend, err := audio.PrepareOutgoingPCMWithFilters(frame, a.voiceProcessor, gate, cfg.AudioFilterEnabled, cfg.VADThreshold, settings, a.effects)
 	if err != nil || !shouldSend {
 		if err != nil {

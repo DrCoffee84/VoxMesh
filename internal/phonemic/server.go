@@ -37,9 +37,16 @@ const (
 	frameBytes     = frameSamples * 2
 	maxSampleBytes = sampleRate * 2 * 5
 	frameDuration  = 20 * time.Millisecond
-	minBufferMS    = 40
-	maxBufferMS    = 1000
 )
+
+// Buffer es la configuración de la cola del celular (perfil de entrada). Se lee al iniciar el
+// servidor: un cambio necesita reiniciarlo.
+type Buffer struct {
+	Enabled          bool
+	MS               int // prebuffer (phone_mic_buffer_ms)
+	DriftSlackFrames int // frames de más tolerados antes de descartar uno silencioso
+	DriftForceFrames int // por encima de slack + esto se descarta aunque tenga voz
+}
 
 type Server struct {
 	mu              logging.TracedRWMutex
@@ -55,12 +62,14 @@ type Server struct {
 	frames          chan []byte
 	bufferEnabled   bool
 	prebufferFrames int
+	driftSlack      int
+	driftForce      int
 	udpConn         *net.UDPConn
 	done            chan struct{}
 	stopOnce        sync.Once
 }
 
-func Start(token string, port int, bufferEnabled bool, bufferMS int, username string, onPCM func([]byte), onStatus func(string)) (*Server, error) {
+func Start(token string, port int, buffer Buffer, username string, onPCM func([]byte), onStatus func(string)) (*Server, error) {
 	localIP, err := localIPv4()
 	if err != nil {
 		return nil, err
@@ -70,7 +79,7 @@ func Start(token string, port int, bufferEnabled bool, bufferMS int, username st
 		return nil, err
 	}
 	if port <= 0 {
-		port = 47831
+		port = config.DefaultPhoneMicPort
 	}
 	listener, err := tls.Listen("tcp4", net.JoinHostPort("", strconv.Itoa(port)), &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12})
 	if err != nil {
@@ -84,9 +93,9 @@ func Start(token string, port int, bufferEnabled bool, bufferMS int, username st
 		}
 	}
 	if username == "" {
-		username = "Usuario"
+		username = config.DefaultUsername
 	}
-	bufferMS = normalizeBufferMS(bufferMS)
+	bufferMS := normalizeBufferMS(buffer.MS)
 	prebufferFrames := (bufferMS + int(frameDuration/time.Millisecond) - 1) / int(frameDuration/time.Millisecond)
 	server := &Server{
 		mu:              logging.NewTracedRWMutex("phonemic.ServerMu"),
@@ -96,8 +105,10 @@ func Start(token string, port int, bufferEnabled bool, bufferMS int, username st
 		onPCM:           onPCM,
 		onStatus:        onStatus,
 		frames:          make(chan []byte, prebufferFrames+12),
-		bufferEnabled:   bufferEnabled,
+		bufferEnabled:   buffer.Enabled,
 		prebufferFrames: prebufferFrames,
+		driftSlack:      buffer.DriftSlackFrames,
+		driftForce:      buffer.DriftForceFrames,
 		done:            make(chan struct{}),
 	}
 	actualPort := listener.Addr().(*net.TCPAddr).Port
@@ -117,7 +128,7 @@ func Start(token string, port int, bufferEnabled bool, bufferMS int, username st
 			server.status("Servidor de micrófono detenido: " + err.Error())
 		}
 	}()
-	if bufferEnabled {
+	if buffer.Enabled {
 		go server.forwardPCM()
 	}
 	return server, nil
@@ -324,7 +335,7 @@ func (s *Server) forwardPCM() {
 				// Deriva: si el reloj del celular corre más rápido que el de la PC, la cola crece
 				// despacio hasta el tope y la latencia queda fija cientos de ms arriba. Si sobran
 				// frames se tira uno, preferentemente silencioso.
-				if shouldDropForDrift(len(s.frames)+1, s.prebufferFrames, frame) {
+				if shouldDropForDrift(len(s.frames)+1, s.prebufferFrames, s.driftSlack, s.driftForce, frame) {
 					select {
 					case next := <-s.frames:
 						frame = next
@@ -342,12 +353,12 @@ func (s *Server) forwardPCM() {
 // shouldDropForDrift decide si el frame que está por salir se descarta: con más de
 // prebuffer + slack frames en cola, si el frame es silencioso; con prebuffer + slack + force,
 // aunque tenga voz. queued incluye al frame.
-func shouldDropForDrift(queued, prebufferFrames int, frame []byte) bool {
+func shouldDropForDrift(queued, prebufferFrames, slack, force int, frame []byte) bool {
 	excess := queued - prebufferFrames
-	if excess <= config.PhoneMicDriftSlackFrames {
+	if excess <= slack {
 		return false
 	}
-	return excess > config.PhoneMicDriftSlackFrames+config.PhoneMicDriftForceFrames || frameRMS(frame) < config.JitterDriftQuietRMS
+	return excess > slack+force || frameRMS(frame) < config.JitterDriftQuietRMS
 }
 
 // frameRMS es el nivel RMS de un frame S16LE.
@@ -365,13 +376,7 @@ func frameRMS(frame []byte) float64 {
 }
 
 func normalizeBufferMS(bufferMS int) int {
-	if bufferMS < minBufferMS {
-		return minBufferMS
-	}
-	if bufferMS > maxBufferMS {
-		return maxBufferMS
-	}
-	return bufferMS
+	return int(config.ParamByKey("phone_mic_buffer_ms").Clamp(float64(bufferMS)))
 }
 
 func (s *Server) setConnected(connected bool) {
@@ -419,11 +424,10 @@ func localIPv4() (net.IP, error) {
 }
 
 func persistentCertificate(ip net.IP) (tls.Certificate, error) {
-	root, err := os.UserConfigDir()
+	root, err := config.AppDir()
 	if err != nil {
 		return tls.Certificate{}, err
 	}
-	root = filepath.Join(root, "VoxMesh")
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return tls.Certificate{}, err
 	}

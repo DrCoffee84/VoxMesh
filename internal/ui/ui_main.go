@@ -5,6 +5,7 @@ package ui
 import (
 	_ "embed"
 	"fmt"
+	"net"
 	"os"
 	"runtime/debug"
 	"sync"
@@ -40,6 +41,7 @@ type App struct {
 	cfgSave         chan struct{}
 	cfgSaveMu       sync.Mutex
 	cfgBaseline     atomic.Pointer[config.LiveSettings] // != nil con ajustes abiertos: se persiste esto, no el borrador
+	profiles        config.Profiles                     // perfiles de audio de entrada/salida (%AppData%\VoxMesh\perfiles)
 	transport       atomic.Pointer[transport.UDP]       // nil = sin sala, ver connection_state.go
 	sequence        atomic.Uint32
 	audioSequence   atomic.Uint32                     // secuencia propia del audio saliente (contigua, ver transport.FlagAudioSequence)
@@ -119,19 +121,37 @@ type App struct {
 	stopBindBtn     *widget.Button
 	soundMu         logging.TracedRWMutex
 	sounds          []room.Sound
-	pendingPlays    map[string]struct{}
+	pendingPlays    map[string]time.Time // sonidos tocados sin audio en disco → cuándo se pidieron (sound_sync.go)
+	soundHolders    map[string][]*net.UDPAddr
+	soundFetchAt    map[string]time.Time
+	// Sync de la botonera con el host, una vez por conexión (sound_sync.go).
+	soundSyncPending atomic.Bool
+	soundSyncSentAt  atomic.Int64
 }
 
 const phoneMicInput = "Micrófono del celular"
 
 func New(executable string) *App {
 	cfgPath := config.Path(executable)
+	_, statErr := os.Stat(cfgPath)
 	cfg, _ := config.Load(cfgPath)
 	logging.SetLevel(cfg.LogLevel)
+	// Primera vez con perfiles: la configuración que había queda guardada como "Mi configuración".
+	var profiles config.Profiles
+	migrated := false
+	profilesDir, err := config.ProfilesDir()
+	if err == nil {
+		profiles.Dir = profilesDir
+		migrated, err = profiles.MigrateToProfiles(&cfg.LiveSettings, statErr == nil)
+	}
+	if err != nil {
+		logging.Errorf("perfiles de audio: %s", logging.FormatError(err))
+	}
 	voiceProcessor, _ := audio.NewRNNoise()
 	a := &App{
 		cfgPath:        cfgPath,
 		cfgSave:        make(chan struct{}, 1),
+		profiles:       profiles,
 		voiceProcessor: voiceProcessor,
 		effects:        &audio.Effects{},
 		assetAssembler: assets.NewAssembler(),
@@ -145,6 +165,9 @@ func New(executable string) *App {
 	}
 	a.cfg.Store(&cfg)
 	go a.configSaver()
+	if migrated {
+		a.saveConfig()
+	}
 	return a
 }
 

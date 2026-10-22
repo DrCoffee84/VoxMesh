@@ -7,6 +7,8 @@ import (
 	"voxmesh/internal/config"
 )
 
+// FilterSettings es la configuración de una cadena de efectos (envío o salida por emisor). Se arma
+// con InputSettings / OutputSettings (settings.go); el valor cero de cada campo es "apagado".
 type FilterSettings struct {
 	RNNoiseEnabled      bool
 	VADEnabled          bool
@@ -18,36 +20,36 @@ type FilterSettings struct {
 	LowPassHz           float32
 	NotchEnabled        bool
 	NotchHz             float32
+	NotchQ              float32 // 0 = defaultNotchQ
 	CompressorEnabled   bool
 	CompressorThreshold float32
 	CompressorRatio     float32
+	CompressorAttackMS  float32
+	CompressorReleaseMS float32
 	ExpanderEnabled     bool
 	ExpanderThreshold   float32
 	ExpanderRatio       float32
+	ExpanderAttackMS    float32
+	ExpanderReleaseMS   float32
 	LimiterEnabled      bool
 	LimiterThreshold    float32
 	VADHoldMS           int
 	GateHoldMS          int
+	// RNNoiseDryMix es la parte de señal original que se suma a la salida de RNNoise (0 = solo
+	// filtrada). Es 1 − la intensidad de la UI, así el valor cero es el comportamiento normal.
+	RNNoiseDryMix    float32
+	ShoutEnabled     bool
+	ShoutThresholdDB float32 // RMS de entrada (dBFS) que activa el modo grito
+	ShoutDryMix      float32 // parte de señal original mientras dura el modo grito
+	ShoutHoldMS      int
+	// Final de la cadena de envío.
+	SendCeilingDB float32 // techo del limitador de envío (0 = full scale)
+	SendReleaseMS float32
+	PreRollFrames int // frames que se mandan antes del que abre la compuerta
+	FadeInSamples int // fade-in del primero de ellos
 }
 
-func DefaultFilterSettings() FilterSettings {
-	return FilterSettings{
-		RNNoiseEnabled:      true,
-		VADEnabled:          true,
-		NoiseGateEnabled:    true,
-		HighPassHz:          80,
-		LowPassHz:           12000,
-		NotchHz:             50,
-		CompressorThreshold: -18,
-		CompressorRatio:     3,
-		ExpanderThreshold:   -50,
-		ExpanderRatio:       2,
-		LimiterEnabled:      true,
-		LimiterThreshold:    -1,
-		VADHoldMS:           250,
-		GateHoldMS:          250,
-	}
-}
+const defaultNotchQ = 10
 
 type Effects struct {
 	mu                    sync.Mutex
@@ -55,6 +57,7 @@ type Effects struct {
 	lowOutput             float64
 	notchX1, notchX2      float64
 	notchY1, notchY2      float64
+	compEnv, expEnv       float64 // envolventes del compresor y el expansor (lineal, 0–1)
 	vadHoldFrames         int
 	gateHoldFrames        int
 	wasOpen               bool
@@ -62,9 +65,17 @@ type Effects struct {
 	// Estado del envío (solo lo usa la cadena saliente, ver PrepareOutgoingFrames).
 	sendLimiter      peakLimiter
 	sendLimiterReady bool
-	preRoll          [config.AudioPreRollFrames][]int16 // frames procesados que no salieron (compuerta cerrada)
+	sendReleaseMS    float32
+	preRoll          [config.AudioMaxPreRollFrames][]int16 // frames procesados que no salieron (compuerta cerrada)
 	preRollCount     int
 	out              [][]int16
+
+	// Mezcla seca y modo grito (shout.go).
+	dryDelay    []int16 // línea de retardo de la entrada de RNNoise (Delay() muestras)
+	dryPos      int
+	dry         []int16 // entrada alineada con la salida de RNNoise del bloque actual
+	dryMix      float64 // proporción de original aplicada al final del bloque anterior
+	shoutFrames int     // frames que le quedan al modo grito
 }
 
 func (e *Effects) KeepVoiceOpen(vadOpen, gateOpen bool, settings FilterSettings) bool {
@@ -93,27 +104,38 @@ func holdFrames(milliseconds int) int {
 // limitSend pasa el frame por el limitador con envolvente del final de la cadena de envío.
 // Corre sobre TODOS los frames, también los que no salen, para que la envolvente siga el
 // tiempo real y el pre-roll ya salga limitado.
-func (e *Effects) limitSend(samples []int16, ceiling int16) {
+func (e *Effects) limitSend(samples []int16, ceiling int16, releaseMS float32) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if !e.sendLimiterReady {
-		e.sendLimiter = newPeakLimiter(float64(ceiling), config.AudioSendLimiterAttackMS, config.AudioSendLimiterReleaseMS)
+		e.sendLimiter = newPeakLimiter(float64(ceiling), config.AudioSendLimiterAttackMS, float64(releaseMS))
 		e.sendLimiterReady = true
+		e.sendReleaseMS = releaseMS
+	}
+	if releaseMS != e.sendReleaseMS {
+		e.sendLimiter.releaseCoeff = smoothingCoeff(float64(releaseMS))
+		e.sendReleaseMS = releaseMS
 	}
 	e.sendLimiter.threshold = float64(ceiling)
 	e.sendLimiter.ProcessInt16(samples)
 }
 
 // gateFrames decide qué sale con la compuerta en este frame. Cerrada: nada, y el frame se
-// guarda como pre-roll. Al abrirse: primero el pre-roll (los últimos frames que no salieron,
-// en orden) y después el actual, con fade-in en el primero de todos. Los slices devueltos son
+// guarda como pre-roll (los últimos settings.PreRollFrames). Al abrirse: primero el pre-roll
+// (en orden) y después el actual, con fade-in en el primero de todos. Los slices devueltos son
 // del Effects y valen hasta la próxima llamada. started indica que arrancó una frase nueva.
-func (e *Effects) gateFrames(samples []int16, open bool) (frames [][]int16, started bool) {
+func (e *Effects) gateFrames(samples []int16, open bool, settings FilterSettings) (frames [][]int16, started bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	keep := min(max(settings.PreRollFrames, 0), len(e.preRoll))
 	if !open {
 		// El frame que cierra no sale (como antes); el receptor hace su propio fade a silencio.
-		if e.preRollCount == len(e.preRoll) {
+		e.wasOpen = false
+		if keep == 0 {
+			e.preRollCount = 0
+			return nil, false
+		}
+		for e.preRollCount >= keep {
 			oldest := e.preRoll[0]
 			copy(e.preRoll[:], e.preRoll[1:])
 			e.preRoll[len(e.preRoll)-1] = oldest
@@ -122,18 +144,19 @@ func (e *Effects) gateFrames(samples []int16, open bool) (frames [][]int16, star
 		slot := &e.preRoll[e.preRollCount]
 		*slot = append((*slot)[:0], samples...)
 		e.preRollCount++
-		e.wasOpen = false
 		return nil, false
 	}
 	e.out = e.out[:0]
 	if !e.wasOpen {
-		e.out = append(e.out, e.preRoll[:e.preRollCount]...)
+		// Si el pre-roll se achicó mientras la compuerta estaba cerrada, salen los más nuevos.
+		skip := max(e.preRollCount-keep, 0)
+		e.out = append(e.out, e.preRoll[skip:e.preRollCount]...)
 		e.preRollCount = 0
 		started = true
 	}
 	e.out = append(e.out, samples)
 	if started {
-		applyFadeInInt16(e.out[0], config.AudioFadeInSamples)
+		applyFadeInInt16(e.out[0], settings.FadeInSamples)
 	}
 	e.wasOpen = true
 	return e.out, started
@@ -180,6 +203,12 @@ func peakAbs(samples []int16) int {
 	return peak
 }
 
+// dynamicsCoeffs son los coeficientes por muestra del compresor y el expansor de un bloque.
+type dynamicsCoeffs struct {
+	compAttack, compRelease float64
+	expAttack, expRelease   float64
+}
+
 // ApplySamples aplica la cadena de efectos directamente sobre un slice de muestras int16 sin allocations intermedias.
 func (e *Effects) ApplySamples(samples []int16, settings FilterSettings) {
 	if len(samples) == 0 {
@@ -200,8 +229,12 @@ func (e *Effects) ApplySamples(samples []int16, settings FilterSettings) {
 	var nB0A0, nB1A0, nB2A0, nA1A0, nA2A0 float64
 	if settings.NotchEnabled {
 		frequency := clampFrequency(settings.NotchHz)
+		q := float64(settings.NotchQ)
+		if q <= 0 {
+			q = defaultNotchQ
+		}
 		omega := 2 * math.Pi * frequency / SampleRate
-		alpha := math.Sin(omega) / (2 * 10)
+		alpha := math.Sin(omega) / (2 * q)
 		b0, b1, b2 := 1.0, -2*math.Cos(omega), 1.0
 		a0, a1, a2 := 1+alpha, -2*math.Cos(omega), 1-alpha
 		nB0A0 = b0 / a0
@@ -209,6 +242,12 @@ func (e *Effects) ApplySamples(samples []int16, settings FilterSettings) {
 		nB2A0 = b2 / a0
 		nA1A0 = a1 / a0
 		nA2A0 = a2 / a0
+	}
+	coeffs := dynamicsCoeffs{
+		compAttack:  smoothingCoeff(float64(settings.CompressorAttackMS)),
+		compRelease: smoothingCoeff(float64(settings.CompressorReleaseMS)),
+		expAttack:   smoothingCoeff(float64(settings.ExpanderAttackMS)),
+		expRelease:  smoothingCoeff(float64(settings.ExpanderReleaseMS)),
 	}
 	limiterLimit := 0.0
 	if settings.LimiterEnabled {
@@ -219,20 +258,27 @@ func (e *Effects) ApplySamples(samples []int16, settings FilterSettings) {
 	defer e.mu.Unlock()
 	for index, sample := range samples {
 		value := (float64(sample) / math.MaxInt16) * gainFactor
+		// Cada filtro guarda su propia entrada como x[n-1] (no la muestra cruda: con ganancia o
+		// filtros encadenados eso daba una ganancia enorme en graves).
 		if settings.HighPassEnabled {
-			value = hpAlpha * (e.highOutput + value - e.highInput)
-			e.highInput, e.highOutput = float64(sample)/math.MaxInt16, value
+			input := value
+			value = hpAlpha * (e.highOutput + input - e.highInput)
+			e.highInput, e.highOutput = input, value
 		}
 		if settings.LowPassEnabled {
 			e.lowOutput += lpAlpha * (value - e.lowOutput)
 			value = e.lowOutput
 		}
 		if settings.NotchEnabled {
-			value = nB0A0*value + nB1A0*e.notchX1 + nB2A0*e.notchX2 - nA1A0*e.notchY1 - nA2A0*e.notchY2
-			e.notchX2, e.notchX1 = e.notchX1, float64(sample)/math.MaxInt16
+			input := value
+			value = nB0A0*input + nB1A0*e.notchX1 + nB2A0*e.notchX2 - nA1A0*e.notchY1 - nA2A0*e.notchY2
+			e.notchX2, e.notchX1 = e.notchX1, input
 			e.notchY2, e.notchY1 = e.notchY1, value
 		}
-		value = applyDynamicsFast(value, settings, limiterLimit)
+		if settings.CompressorEnabled || settings.ExpanderEnabled {
+			value *= e.dynamicsGain(math.Abs(value), settings, coeffs)
+		}
+		value = applyLimiter(value, settings, limiterLimit)
 		samples[index] = clampSample(value)
 	}
 }
@@ -247,35 +293,60 @@ func clampFrequency(frequency float32) float64 {
 	return float64(frequency)
 }
 
-func applyDynamicsFast(value float64, settings FilterSettings, limit float64) float64 {
-	if value == 0 {
-		return 0
-	}
-	// Log10 por muestra solo si algo lo usa: con compresor y expansor apagados (default) el
-	// limiter no necesita el nivel en dB.
-	if settings.CompressorEnabled || settings.ExpanderEnabled {
-		db := 20 * math.Log10(math.Abs(value))
-		if settings.CompressorEnabled && db > float64(settings.CompressorThreshold) {
-			ratio := math.Max(float64(settings.CompressorRatio), 1)
-			value *= math.Pow(10, (float64(settings.CompressorThreshold)+(db-float64(settings.CompressorThreshold))/ratio-db)/20)
-		}
-		if settings.ExpanderEnabled && db < float64(settings.ExpanderThreshold) {
-			ratio := math.Max(float64(settings.ExpanderRatio), 1)
-			value *= math.Pow(10, (float64(settings.ExpanderThreshold)+(db-float64(settings.ExpanderThreshold))*ratio-db)/20)
+// dynamicsGain avanza las envolventes con el nivel de una muestra y devuelve la ganancia del
+// compresor/expansor. La envolvente (detector de pico con attack/release) hace que la ganancia
+// cambie despacio: sin ella se calculaba por muestra y deformaba la onda (waveshaping).
+func (e *Effects) dynamicsGain(level float64, settings FilterSettings, coeffs dynamicsCoeffs) float64 {
+	gainDB := 0.0
+	if settings.CompressorEnabled {
+		e.compEnv = followEnvelope(e.compEnv, level, coeffs.compAttack, coeffs.compRelease)
+		db := levelDB(e.compEnv)
+		threshold := float64(settings.CompressorThreshold)
+		if ratio := math.Max(float64(settings.CompressorRatio), 1); db > threshold {
+			gainDB += (threshold - db) * (1 - 1/ratio)
 		}
 	}
-	if settings.LimiterEnabled && limit > 0 {
-		absVal := math.Abs(value)
-		if absVal > limit {
-			sign := 1.0
-			if value < 0 {
-				sign = -1.0
-			}
-			excess := absVal - limit
-			value = sign * (limit + math.Tanh(excess*1.5)*0.1*limit)
+	if settings.ExpanderEnabled {
+		e.expEnv = followEnvelope(e.expEnv, level, coeffs.expAttack, coeffs.expRelease)
+		db := levelDB(e.expEnv)
+		threshold := float64(settings.ExpanderThreshold)
+		if ratio := math.Max(float64(settings.ExpanderRatio), 1); db < threshold {
+			gainDB += (db - threshold) * (ratio - 1)
 		}
 	}
-	return value
+	if gainDB == 0 {
+		return 1
+	}
+	return math.Pow(10, gainDB/20)
+}
+
+func followEnvelope(envelope, level, attack, release float64) float64 {
+	if level > envelope {
+		return envelope + (level-envelope)*attack
+	}
+	return envelope + (level-envelope)*release
+}
+
+// levelDB pasa un nivel lineal (0–1) a dB, con piso en -120 dB.
+func levelDB(level float64) float64 {
+	return 20 * math.Log10(math.Max(level, 1e-6))
+}
+
+// applyLimiter es el limitador tanh por muestra (entrada con ganancia > 0, y salida).
+func applyLimiter(value float64, settings FilterSettings, limit float64) float64 {
+	if !settings.LimiterEnabled || limit <= 0 {
+		return value
+	}
+	absVal := math.Abs(value)
+	if absVal <= limit {
+		return value
+	}
+	sign := 1.0
+	if value < 0 {
+		sign = -1.0
+	}
+	excess := absVal - limit
+	return sign * (limit + math.Tanh(excess*1.5)*0.1*limit)
 }
 
 func clampSample(value float64) int16 {

@@ -22,6 +22,7 @@ import (
 
 	"voxmesh/internal/assets"
 	"voxmesh/internal/audio"
+	"voxmesh/internal/config"
 	"voxmesh/internal/history"
 	"voxmesh/internal/logging"
 	"voxmesh/internal/room"
@@ -371,11 +372,11 @@ func (a *App) refreshChat() {
 }
 
 func (a *App) initHistory(roomName string) {
-	root, err := os.UserConfigDir()
+	root, err := config.AppDir()
 	if err != nil {
 		return
 	}
-	store, err := history.New(filepath.Join(root, "VoxMesh"), roomName)
+	store, err := history.New(root, roomName)
 	if err != nil {
 		return
 	}
@@ -473,11 +474,11 @@ func (a *App) viewRoom(roomName string) {
 		return
 	}
 	a.viewingRoomName = roomName
-	root, err := os.UserConfigDir()
+	root, err := config.AppDir()
 	if err != nil {
 		return
 	}
-	store, err := history.New(filepath.Join(root, "VoxMesh"), roomName)
+	store, err := history.New(root, roomName)
 	if err != nil {
 		a.setStatus("No se pudo abrir el historial de " + roomName)
 		return
@@ -497,11 +498,11 @@ func (a *App) viewRoom(roomName string) {
 }
 
 func (a *App) refreshRoomList(selected string) {
-	root, err := os.UserConfigDir()
+	root, err := config.AppDir()
 	if err != nil {
 		return
 	}
-	rooms, err := history.ListRooms(filepath.Join(root, "VoxMesh"))
+	rooms, err := history.ListRooms(root)
 	if err != nil {
 		return
 	}

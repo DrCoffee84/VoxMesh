@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/gen2brain/malgo"
+
+	"voxmesh/internal/config"
 )
 
 type DeviceLists struct {
@@ -183,7 +185,7 @@ func PlayPCM(name string, data []byte) error {
 }
 
 func findDeviceID(context *malgo.AllocatedContext, kind malgo.DeviceType, name string) (*malgo.DeviceID, error) {
-	if strings.TrimSpace(name) == "" || name == "Sistema predeterminado" {
+	if strings.TrimSpace(name) == "" || name == config.DefaultDevice {
 		return nil, nil
 	}
 	devices, err := context.Devices(kind)

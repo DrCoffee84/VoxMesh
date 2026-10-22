@@ -14,7 +14,7 @@ func TestPhoneMicUDPSecurity(t *testing.T) {
 	token := hex.EncodeToString(tokenBytes)
 
 	pcmReceived := make(chan []byte, 10)
-	server, err := Start(token, 0, false, 40, "Tester", func(pcm []byte) {
+	server, err := Start(token, 0, Buffer{MS: 40, DriftSlackFrames: 2, DriftForceFrames: 4}, "Tester", func(pcm []byte) {
 		pcmReceived <- pcm
 	}, nil)
 	if err != nil {
@@ -106,7 +106,7 @@ func TestShouldDropForDrift(t *testing.T) {
 		{queued: 2 + 2 + 4 + 1, frame: loud, want: true}, // sobra mucho: se tira igual
 	}
 	for _, c := range cases {
-		if got := shouldDropForDrift(c.queued, 2, c.frame); got != c.want {
+		if got := shouldDropForDrift(c.queued, 2, 2, 4, c.frame); got != c.want {
 			t.Fatalf("queued=%d loud=%v: got %v, want %v", c.queued, c.frame[1] != 0, got, c.want)
 		}
 	}

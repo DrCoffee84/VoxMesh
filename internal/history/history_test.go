@@ -1,6 +1,7 @@
 package history
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -77,6 +78,47 @@ func TestStoreSavesAndDeletesSound(t *testing.T) {
 	}
 	if len(soundsAfter) != 0 {
 		t.Fatalf("expected 0 sounds after delete, got: %#v", soundsAfter)
+	}
+}
+
+func TestStoreKeepsSoundTombstones(t *testing.T) {
+	store, err := New(t.TempDir(), "gaming")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveSound(SoundMeta{ID: "snd-1", Ext: ".pcm", Name: "Aplauso"}, []byte("pcmdata")); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteSound("snd-1", ".pcm"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AddSoundTombstones([]string{"snd-2", "snd-1", ""}); err != nil {
+		t.Fatal(err)
+	}
+	got := store.DeletedSounds()
+	if len(got) != 2 || got[0] != "snd-1" || got[1] != "snd-2" {
+		t.Fatalf("unexpected tombstones: %#v", got)
+	}
+}
+
+func TestStoreTrimsSoundTombstones(t *testing.T) {
+	store, err := New(t.TempDir(), "gaming")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, MaxSoundTombstones+10)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("snd-%d", i)
+	}
+	if err := store.AddSoundTombstones(ids); err != nil {
+		t.Fatal(err)
+	}
+	got := store.DeletedSounds()
+	if len(got) != MaxSoundTombstones || got[0] != "snd-10" || got[len(got)-1] != ids[len(ids)-1] {
+		t.Fatalf("expected the newest %d tombstones, got %d starting at %q", MaxSoundTombstones, len(got), got[0])
+	}
+	if again := store.DeletedSounds(); len(again) != MaxSoundTombstones {
+		t.Fatalf("trimmed file read back %d tombstones", len(again))
 	}
 }
 

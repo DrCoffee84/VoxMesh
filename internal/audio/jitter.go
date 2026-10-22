@@ -77,8 +77,10 @@ type jitterBuffer struct {
 	playing      bool   // false = esperando colchón (arranque de frase o underrun)
 	playSeq      uint32 // próximo seq a reproducir
 	highestSeq   uint32 // seq más alto recibido
-	maxFrames    int    // tope del colchón (JitterBufferMS)
-	targetFrames int    // colchón vigente: solo cambia con !playing para que no haya saltos
+	tuning       JitterTuning
+	maxFrames    int // tope del colchón (tuning.MaxMS)
+	minFrames    int // piso del colchón (tuning.MinMS)
+	targetFrames int // colchón vigente: solo cambia con !playing para que no haya saltos
 
 	firstArrival time.Time // llegada del primer frame mientras se espera colchón
 	lastRealAt   time.Time // cuándo arrancó el último frame real reproducido
@@ -99,29 +101,34 @@ type jitterBuffer struct {
 	stats   JitterStats
 }
 
-func newJitterBuffer(targetMS int, dec frameDecoder) *jitterBuffer {
+// newJitterBuffer crea el buffer de un emisor con los parámetros de fábrica y tope maxMS.
+func newJitterBuffer(maxMS int, dec frameDecoder) *jitterBuffer {
+	tuning := DefaultJitterTuning()
+	tuning.MaxMS = maxMS
+	return newJitterBufferTuned(tuning, dec)
+}
+
+func newJitterBufferTuned(tuning JitterTuning, dec frameDecoder) *jitterBuffer {
 	j := &jitterBuffer{
 		dec:     dec,
 		tail:    make([]int16, 0, config.JitterSpliceSamples),
 		pending: make([]int16, 0, FrameSamples+config.JitterSpliceSamples),
 	}
-	j.setTargetMS(targetMS)
+	j.setTuning(tuning)
 	return j
 }
 
-// setTargetMS fija el tope del colchón. El objetivo real lo elige adaptiveTarget al arrancar
-// cada frase según el jitter medido.
-func (j *jitterBuffer) setTargetMS(ms int) {
-	frames := ms / 20
-	if frames < 2 {
-		frames = 2
+// setTuning aplica los parámetros (el Engine lo llama en cada callback; sin cambios no hace
+// nada). El colchón real lo elige adaptiveTarget al arrancar cada frase, entre el piso y el tope.
+func (j *jitterBuffer) setTuning(tuning JitterTuning) {
+	if tuning == j.tuning {
+		return
 	}
-	if frames > jitterRingFrames/2 {
-		frames = jitterRingFrames / 2
-	}
-	j.maxFrames = frames
-	if j.targetFrames == 0 || j.targetFrames > frames {
-		j.targetFrames = frames
+	j.tuning = tuning
+	j.maxFrames = min(max(tuning.MaxMS/20, 1), jitterRingFrames/2)
+	j.minFrames = min(max(tuning.MinMS/20, 1), j.maxFrames)
+	if j.targetFrames == 0 || j.targetFrames > j.maxFrames {
+		j.targetFrames = j.maxFrames
 	}
 }
 
@@ -205,26 +212,20 @@ func (j *jitterBuffer) Stats() JitterStats {
 	}
 	stats.TargetMS = j.targetFrames * 20
 	stats.JitterMS = j.arrival.jitter / float64(time.Millisecond)
-	stats.DelayP95MS = j.arrival.percentileMS(config.JitterAdaptivePercentile)
+	stats.DelayP95MS = j.arrival.percentileMS(j.tuning.Percentile)
 	return stats
 }
 
 // adaptiveTarget elige el colchón para la próxima frase: lo justo para cubrir el percentil de
-// variación de retardo medido, más un margen, entre 2 frames y el tope. Sin datos suficientes,
+// variación de retardo medido, más un margen, entre el piso y el tope. Sin datos suficientes,
 // el tope (conservador).
 func (j *jitterBuffer) adaptiveTarget() int {
 	if j.arrival.windowCount < config.JitterAdaptiveMinSamples {
 		return j.maxFrames
 	}
-	p := j.arrival.percentileMS(config.JitterAdaptivePercentile)
-	frames := (p+19)/20 + config.JitterAdaptiveMarginFrames
-	if frames < 2 {
-		frames = 2
-	}
-	if frames > j.maxFrames {
-		frames = j.maxFrames
-	}
-	return frames
+	p := j.arrival.percentileMS(j.tuning.Percentile)
+	frames := (p+19)/20 + j.tuning.MarginFrames
+	return min(max(frames, j.minFrames), j.maxFrames)
 }
 
 // advance arma el próximo frame y lo pasa a pending, empalmándolo con la cola del anterior.
@@ -293,8 +294,8 @@ func (j *jitterBuffer) playFrame(now time.Time, allowDrop bool) jitterFrameKind 
 	// Deriva: si el buffer quedó por encima del objetivo (ráfaga, o el objetivo bajó), hay que
 	// descartar un frame. Se posterga hasta uno de baja energía, salvo que el exceso sea grande.
 	span := int(int32(j.highestSeq-j.playSeq)) + 1
-	over := allowDrop && j.dropCooldown == 0 && span > j.targetFrames+config.JitterDriftSlackFrames
-	force := span > j.targetFrames+config.JitterDriftSlackFrames+config.JitterDriftForceFrames
+	over := allowDrop && j.dropCooldown == 0 && span > j.targetFrames+j.tuning.DriftSlackFrames
+	force := span > j.targetFrames+j.tuning.DriftSlackFrames+j.tuning.DriftForceFrames
 
 	slot := &j.slots[j.playSeq%jitterRingFrames]
 	if slot.present && slot.seq == j.playSeq {
@@ -332,7 +333,7 @@ func (j *jitterBuffer) playFrame(now time.Time, allowDrop bool) jitterFrameKind 
 		}
 		j.playSeq++
 		j.lossRun++
-		if j.lossRun <= config.JitterPLCMaxFrames {
+		if j.lossRun <= j.tuning.PLCMaxFrames {
 			pcm := j.decodeBuf[:]
 			if next := &j.slots[j.playSeq%jitterRingFrames]; next.present && next.seq == j.playSeq {
 				if j.dec.DecodeFEC(next.data, pcm) == nil {
@@ -373,7 +374,7 @@ func (j *jitterBuffer) decode(packet []byte) bool {
 func (j *jitterBuffer) readyToPlay(first uint32, now time.Time) bool {
 	// Underrun en medio de una frase: reanudamos apenas llega el frame demorado.
 	// La latencia crece lo que duró el pico y la deriva la recorta después.
-	if !j.lastRealAt.IsZero() && now.Sub(j.lastRealAt) < config.JitterTalkspurtGapMS*time.Millisecond {
+	if !j.lastRealAt.IsZero() && now.Sub(j.lastRealAt) < j.tuning.TalkspurtGap {
 		return true
 	}
 	// Frase nueva: esperamos el colchón completo, o su duración si la frase es más corta.

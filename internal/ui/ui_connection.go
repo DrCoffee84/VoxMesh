@@ -6,8 +6,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -117,8 +115,8 @@ func (a *App) stopConnectionAsync() <-chan struct{} {
 }
 
 func (a *App) createHost() {
-	root, _ := os.UserConfigDir()
-	existingRooms, _ := history.ListRooms(filepath.Join(root, "VoxMesh"))
+	root, _ := config.AppDir()
+	existingRooms, _ := history.ListRooms(root)
 
 	var d dialog.Dialog
 
@@ -135,7 +133,7 @@ func (a *App) createHost() {
 		d.Hide()
 		username := strings.TrimSpace(a.conf().Username)
 		if username == "" {
-			username = "Usuario"
+			username = config.DefaultUsername
 		}
 		go a.openHost(roomName, username)
 	})
@@ -166,7 +164,7 @@ func (a *App) createHost() {
 			d.Hide()
 			username := strings.TrimSpace(a.conf().Username)
 			if username == "" {
-				username = "Usuario"
+				username = config.DefaultUsername
 			}
 			go a.openHost(roomName, username)
 		})
@@ -202,7 +200,7 @@ func (a *App) openHost(roomName, username string) {
 		start := time.Now()
 		listenAddr := a.conf().ListenAddress
 		if listenAddr == "" {
-			listenAddr = ":47830"
+			listenAddr = config.DefaultListenAddress
 		}
 		var udp *transport.UDP
 		var err error
@@ -374,7 +372,7 @@ func (a *App) connectClient(raw string) {
 		return
 	}
 	if !strings.Contains(raw, ":") {
-		raw = net.JoinHostPort(raw, "47830")
+		raw = net.JoinHostPort(raw, strconv.Itoa(config.DefaultListenPort))
 	}
 
 	a.setStatus("Conectando con " + raw + "...")
@@ -411,7 +409,7 @@ func (a *App) connectClient(raw string) {
 
 		listenAddr := a.conf().ListenAddress
 		if listenAddr == "" {
-			listenAddr = ":47830"
+			listenAddr = config.DefaultListenAddress
 		}
 		udp, err := transport.Listen(listenAddr)
 		if err != nil {
@@ -463,6 +461,7 @@ func (a *App) connectClient(raw string) {
 		a.refreshPeersFromRoom()
 
 		a.setEndpoint(addr.String())
+		a.requestSoundSync()
 		participant := room.Participant{
 			ID:          a.participantID,
 			Username:    cfg.Username,

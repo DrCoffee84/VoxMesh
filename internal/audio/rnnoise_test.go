@@ -3,8 +3,6 @@ package audio
 import (
 	"math"
 	"testing"
-
-	"voxmesh/internal/config"
 )
 
 func TestPrepareOutgoingPCMDropsSilentFrameWithRNNoise(t *testing.T) {
@@ -50,6 +48,7 @@ func TestPrepareOutgoingPCMWithFilters_ShoutGoesThroughRNNoise(t *testing.T) {
 	settings.RNNoiseEnabled = true
 	settings.VADEnabled = false
 	settings.NoiseGateEnabled = false
+	ceiling := sendCeiling(settings, true)
 
 	// Varios frames seguidos de grito a full scale: ya no hay bypass, todo pasa por
 	// RNNoise y la salida nunca debe dar la vuelta (wrap-around) ni pasar el techo.
@@ -74,8 +73,8 @@ func TestPrepareOutgoingPCMWithFilters_ShoutGoesThroughRNNoise(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, s := range outSamples {
-			if s > config.AudioSendPeakCeiling || s < -config.AudioSendPeakCeiling {
-				t.Fatalf("expected shout peak under %d, got %d", config.AudioSendPeakCeiling, s)
+			if s > ceiling || s < -ceiling {
+				t.Fatalf("expected shout peak under %d, got %d", ceiling, s)
 			}
 		}
 	}
@@ -187,8 +186,8 @@ func TestPrepareOutgoingFrames_PreRollSendsPreviousFramesWithFadeIn(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !started || len(frames) != 1+config.AudioPreRollFrames {
-		t.Fatalf("expected pre-roll + current (%d frames), got %d (started %v)", 1+config.AudioPreRollFrames, len(frames), started)
+	if !started || len(frames) != 1+settings.PreRollFrames {
+		t.Fatalf("expected pre-roll + current (%d frames), got %d (started %v)", 1+settings.PreRollFrames, len(frames), started)
 	}
 	if frames[0][FrameSamples-1] != 200 || frames[1][FrameSamples-1] != 300 || frames[2][0] != 10000 {
 		t.Fatalf("pre-roll out of order: %d %d %d", frames[0][FrameSamples-1], frames[1][FrameSamples-1], frames[2][0])
@@ -205,47 +204,53 @@ func TestPrepareOutgoingFrames_PreRollSendsPreviousFramesWithFadeIn(t *testing.T
 	}
 }
 
-// applyDynamicsReference es applyDynamicsFast antes de calcular Log10 solo cuando hace falta.
-func applyDynamicsReference(value float64, settings FilterSettings, limit float64) float64 {
-	level := math.Abs(value)
-	if level == 0 {
-		return 0
+func TestCompressorUsesEnvelopeNotWaveshaping(t *testing.T) {
+	settings := FilterSettings{
+		CompressorEnabled:   true,
+		CompressorThreshold: -18,
+		CompressorRatio:     3,
+		CompressorAttackMS:  5,
+		CompressorReleaseMS: 100,
 	}
-	db := 20 * math.Log10(level)
-	if settings.CompressorEnabled && db > float64(settings.CompressorThreshold) {
-		ratio := math.Max(float64(settings.CompressorRatio), 1)
-		value *= math.Pow(10, (float64(settings.CompressorThreshold)+(db-float64(settings.CompressorThreshold))/ratio-db)/20)
+	effects := &Effects{}
+	var input, output []int16
+	for frame := 0; frame < 10; frame++ {
+		in := sineFrame(frame, 16400) // ~ -6 dBFS de pico
+		out := append([]int16(nil), in...)
+		effects.ApplySamples(out, settings)
+		input, output = in, out
 	}
-	if settings.ExpanderEnabled && db < float64(settings.ExpanderThreshold) {
-		ratio := math.Max(float64(settings.ExpanderRatio), 1)
-		value *= math.Pow(10, (float64(settings.ExpanderThreshold)+(db-float64(settings.ExpanderThreshold))*ratio-db)/20)
-	}
-	if settings.LimiterEnabled && limit > 0 {
-		absVal := math.Abs(value)
-		if absVal > limit {
-			sign := 1.0
-			if value < 0 {
-				sign = -1.0
+	// Con la envolvente estable la ganancia es la misma en toda la onda: la salida es la misma
+	// senoidal escalada (el compresor por muestra la deformaba).
+	gain := float64(peakOf(output)) / float64(peakOf(input))
+	for i := range input {
+		if abs := math.Abs(float64(input[i])); abs > 2000 {
+			if g := float64(output[i]) / float64(input[i]); math.Abs(g-gain) > 0.01 {
+				t.Fatalf("sample %d: gain %.3f, steady gain %.3f (waveshaping)", i, g, gain)
 			}
-			value = sign * (limit + math.Tanh((absVal-limit)*1.5)*0.1*limit)
 		}
 	}
-	return value
+	// -6 dBFS con umbral -18 y ratio 3: sale en -14 dBFS → ganancia ≈ -8 dB.
+	if want := math.Pow(10, -8.0/20); math.Abs(gain-want) > 0.03 {
+		t.Fatalf("steady gain %.3f, want %.3f", gain, want)
+	}
 }
 
-func TestApplyDynamicsFast_BitExactWithoutLog10(t *testing.T) {
-	limiterOnly := DefaultFilterSettings()
-	withCompressor := DefaultFilterSettings()
-	withCompressor.CompressorEnabled = true
-	withCompressor.ExpanderEnabled = true
-	limit := math.Pow(10, -1.0/20)
-	for _, settings := range []FilterSettings{limiterOnly, withCompressor} {
-		for i := -40000; i <= 40000; i += 37 {
-			value := float64(i) / math.MaxInt16
-			if got, want := applyDynamicsFast(value, settings, limit), applyDynamicsReference(value, settings, limit); got != want {
-				t.Fatalf("value %v: got %v, want %v", value, got, want)
-			}
-		}
+func TestHighPassKeepsUnityGainWithInputGain(t *testing.T) {
+	// Con ganancia de entrada el pasa-altos guardaba la muestra cruda como x[n-1]: un tono en la
+	// banda de paso salía con mucha más ganancia de la pedida.
+	settings := FilterSettings{GainDB: 6, HighPassEnabled: true, HighPassHz: 80}
+	effects := &Effects{}
+	var input, output []int16
+	for frame := 0; frame < 5; frame++ {
+		in := sineFrame(frame, 4000) // 437 Hz: banda de paso
+		out := append([]int16(nil), in...)
+		effects.ApplySamples(out, settings)
+		input, output = in, out
+	}
+	ratio := frameRMS(output) / frameRMS(input)
+	if want := math.Pow(10, 6.0/20); math.Abs(ratio-want) > 0.1 {
+		t.Fatalf("pass-band gain %.2f, want %.2f", ratio, want)
 	}
 }
 

@@ -5,6 +5,7 @@ package ui
 import (
 	"encoding/binary"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,7 +55,7 @@ func (a *App) receiveLoop(udp *transport.UDP) {
 				// Asegurar nombre único: si ya existe otro participante conectado con el mismo nombre, añadir _PUTO
 				candidateName := strings.TrimSpace(envelope.Participant.Username)
 				if candidateName == "" {
-					candidateName = "Usuario"
+					candidateName = config.DefaultUsername
 				}
 				for {
 					taken := false
@@ -92,7 +93,7 @@ func (a *App) receiveLoop(udp *transport.UDP) {
 				a.refreshPeersFromRoom()
 				if candidate, ok := a.roomState.NextHost(); ok {
 					if hostIP, _, err := net.SplitHostPort(candidate.Address); err == nil && hostIP != "" {
-						candidateTarget := net.JoinHostPort(hostIP, "47830")
+						candidateTarget := net.JoinHostPort(hostIP, strconv.Itoa(config.DefaultListenPort))
 						a.updateConfig(func(c *config.Config) { c.LastPeer = candidateTarget })
 						a.saveConfig()
 						fyne.Do(func() {
@@ -124,7 +125,7 @@ func (a *App) receiveLoop(udp *transport.UDP) {
 			} else if packet.Kind == transport.PacketHello {
 				username := strings.TrimSpace(string(packet.Payload))
 				if username == "" {
-					username = "Usuario"
+					username = config.DefaultUsername
 				}
 				candidate := username
 				selfName := a.conf().Username
@@ -242,7 +243,7 @@ func (a *App) handleParticipantLeave(participantID, username string, addr *net.U
 		if addr != nil {
 			username = addr.String()
 		} else {
-			username = "Usuario"
+			username = config.DefaultUsername
 		}
 	}
 	addrStr := ""
@@ -325,6 +326,7 @@ func (a *App) handleRoomState(state room.State, udp *transport.UDP) {
 					// que tiene que seguir entregando el audio de los demás.
 					a.stopEngine()
 					go a.startAudio(udp, address, false)
+					a.requestSoundSync()
 					a.sendRoomHello(udp, address)
 					a.sendHistorySync(udp, address)
 				}
@@ -332,6 +334,7 @@ func (a *App) handleRoomState(state room.State, udp *transport.UDP) {
 			}
 		}
 	}
+	go a.maybeSendSoundSync(udp)
 }
 
 func (a *App) sendRoomHello(udp *transport.UDP, address *net.UDPAddr) {
@@ -440,6 +443,7 @@ func (a *App) monitorHost(udp *transport.UDP, stop <-chan struct{}) {
 				if !a.selfMuteSynced() {
 					a.sendMuteState(udp)
 				}
+				a.maybeSendSoundSync(udp)
 			}
 			if a.hostMode.Load() || time.Since(time.Unix(0, a.lastHostSeen.Load())) < 6*time.Second {
 				continue

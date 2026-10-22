@@ -190,11 +190,16 @@ func (s *Store) UpdateSoundMeta(meta SoundMeta) error {
 	return s.appendSoundMeta(meta)
 }
 
+// DeleteSound removes the clip and leaves a tombstone, so a peer that was offline when it was
+// deleted does not bring it back on its next soundboard sync.
 func (s *Store) DeleteSound(id, extension string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	_ = os.Remove(s.SoundPath(id, extension))
+	if err := s.appendTombstonesLocked([]string{id}); err != nil {
+		return err
+	}
 
 	manifestPath := filepath.Join(s.root, "sounds", "manifest")
 	file, err := os.Open(manifestPath)
@@ -263,6 +268,90 @@ func (s *Store) appendSoundMeta(meta SoundMeta) error {
 	}
 	defer file.Close()
 	return json.NewEncoder(file).Encode(meta)
+}
+
+// MaxSoundTombstones bounds the tombstone list (it travels in one UDP packet on every sync).
+// A peer offline for longer than the last MaxSoundTombstones deletions may resurrect a clip.
+const MaxSoundTombstones = 500
+
+// AddSoundTombstones records deletions learned from the room (e.g. the host's sync), skipping
+// the ones already known.
+func (s *Store) AddSoundTombstones(ids []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	known := make(map[string]struct{})
+	for _, id := range s.readTombstonesLocked() {
+		known[id] = struct{}{}
+	}
+	fresh := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if _, exists := known[id]; exists || strings.TrimSpace(id) == "" {
+			continue
+		}
+		known[id] = struct{}{}
+		fresh = append(fresh, id)
+	}
+	return s.appendTombstonesLocked(fresh)
+}
+
+// DeletedSounds returns the IDs of deleted clips, oldest first, at most MaxSoundTombstones.
+func (s *Store) DeletedSounds() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.readTombstonesLocked()
+}
+
+func (s *Store) tombstonesPath() string {
+	return filepath.Join(s.root, "sounds", "tombstones")
+}
+
+// readTombstonesLocked deduplicates and trims the file to the newest MaxSoundTombstones.
+func (s *Store) readTombstonesLocked() []string {
+	file, err := os.Open(s.tombstonesPath())
+	if err != nil {
+		return nil
+	}
+	var ids []string
+	seen := make(map[string]struct{})
+	lines := 0
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		lines++
+		id := strings.TrimSpace(scanner.Text())
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	file.Close()
+	if len(ids) > MaxSoundTombstones {
+		ids = ids[len(ids)-MaxSoundTombstones:]
+	}
+	if lines > len(ids) {
+		tmpPath := s.tombstonesPath() + ".tmp"
+		if err := os.WriteFile(tmpPath, []byte(strings.Join(ids, "\n")+"\n"), 0600); err == nil {
+			_ = os.Remove(s.tombstonesPath())
+			_ = os.Rename(tmpPath, s.tombstonesPath())
+		}
+	}
+	return ids
+}
+
+func (s *Store) appendTombstonesLocked(ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	file, err := os.OpenFile(s.tombstonesPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	_, err = file.WriteString(strings.Join(ids, "\n") + "\n")
+	return err
 }
 
 // ListSounds returns the soundboard clips known for this room, deduplicated by ID.

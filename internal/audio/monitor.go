@@ -9,6 +9,8 @@ import (
 	"sync"
 
 	"github.com/gen2brain/malgo"
+
+	"voxmesh/internal/config"
 )
 
 type Monitor struct {
@@ -81,5 +83,5 @@ func (m *Monitor) Stop() {
 }
 
 func IsDefaultDevice(name string) bool {
-	return strings.TrimSpace(name) == "" || name == "Sistema predeterminado"
+	return strings.TrimSpace(name) == "" || name == config.DefaultDevice
 }

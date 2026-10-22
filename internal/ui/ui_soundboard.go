@@ -237,7 +237,8 @@ func (a *App) renameSound(soundID, name string) {
 	}
 	a.rebuildSoundboard()
 	if a.historyStore != nil {
-		if err := a.historyStore.UpdateSoundMeta(history.SoundMeta{ID: renamed.ID, Ext: renamed.Ext, Name: renamed.Name}); err != nil {
+		// Sin el audio en disco (todavía no se tocó) no hay manifest que actualizar.
+		if err := a.historyStore.UpdateSoundMeta(history.SoundMeta{ID: renamed.ID, Ext: renamed.Ext, Name: renamed.Name}); err != nil && !os.IsNotExist(err) {
 			logging.Errorf("renombrar sonido %q: %s", renamed.ID, logging.FormatError(err))
 		}
 	}
@@ -357,45 +358,15 @@ func (a *App) addSound(sound room.Sound) {
 	a.rebuildSoundboard()
 }
 
+// removeSound borra un sonido por pedido del usuario y avisa a la sala. Sin conexión queda la
+// lápida (DeleteSound) y el próximo sync de la botonera lo borra en el resto.
 func (a *App) removeSound(soundID string) {
-	a.soundMu.Lock()
-	soundIndex := -1
-	var deletedSound room.Sound
-	for index, existing := range a.sounds {
-		if existing.ID == soundID {
-			soundIndex = index
-			deletedSound = existing
-			break
-		}
-	}
-
-	if soundIndex == -1 {
-		a.soundMu.Unlock()
+	removed := a.dropSounds([]string{soundID})
+	if len(removed) == 0 {
 		return
 	}
-
-	a.sounds = append(a.sounds[:soundIndex], a.sounds[soundIndex+1:]...)
-	a.soundMu.Unlock()
-
-	if _, bound := a.conf().SoundBinds[soundID]; bound {
-		a.updateSoundBinds(func(binds map[string]string) { delete(binds, soundID) })
-	}
-
-	a.rebuildSoundboard()
-
-	if a.historyStore != nil {
-		if err := a.historyStore.DeleteSound(deletedSound.ID, deletedSound.Ext); err != nil && !os.IsNotExist(err) {
-			logging.Errorf("no se pudo eliminar el archivo del sonido local: %s", logging.FormatError(err))
-		}
-	}
-
-	a.sendSoundEnvelope(room.SoundRemoveMessage, deletedSound)
-
-	a.setStatus("Sonido eliminado: " + deletedSound.Name)
-	go func() {
-		runtime.GC()
-		debug.FreeOSMemory()
-	}()
+	a.sendSoundEnvelope(room.SoundRemoveMessage, removed[0])
+	a.setStatus("Sonido eliminado: " + removed[0].Name)
 }
 
 // pickAndAddSound corre en el hilo de UI (callback de "Agregar sonido").
@@ -890,10 +861,8 @@ func (a *App) saveAndBroadcastSound(name string, pcm []byte) {
 
 func (a *App) triggerSound(sound room.Sound) {
 	go func() {
-		if a.historyStore != nil {
-			if data, readErr := a.historyStore.ReadSound(sound.ID, sound.Ext); readErr == nil {
-				a.playSoundPCM(data)
-			}
+		if a.playOrFetchSound(sound) {
+			a.setStatus("Descargando sonido: " + sound.Name + "...")
 		}
 		payload, err := room.Encode(room.Envelope{Kind: room.SoundPlayMessage, Sound: &sound})
 		if err == nil {

@@ -87,7 +87,7 @@ func (a *App) content() fyne.CanvasObject {
 		}
 	})
 	endpoint := newScrollableEntry()
-	endpoint.SetPlaceHolder("IP del host (puerto por defecto 47830)")
+	endpoint.SetPlaceHolder(fmt.Sprintf("IP del host (puerto por defecto %d)", config.DefaultListenPort))
 	if lastPeer := a.conf().LastPeer; lastPeer != "" {
 		endpoint.SetText(lastPeer)
 	}
@@ -521,7 +521,7 @@ func (a *App) newPeerVolumeSlider(chip *peerChip) fyne.CanvasObject {
 	volume := a.peerVolume(chip.id, chip.name)
 	chip.volumeTxt = canvas.NewText(formatPeerVolume(volume), color.NRGBA{R: 160, G: 170, B: 185, A: 255})
 	chip.volumeTxt.TextSize = 9
-	slider := widget.NewSlider(0, config.PeerVolumeMax)
+	slider := widget.NewSlider(0, float64(a.conf().PeerVolumeMax))
 	slider.Step = 0.05
 	slider.Value = volume
 	slider.OnChanged = func(value float64) {

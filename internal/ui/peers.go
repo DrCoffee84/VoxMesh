@@ -3,6 +3,7 @@
 package ui
 
 import (
+	"math"
 	"strings"
 	"time"
 
@@ -32,7 +33,7 @@ type peerNetStats struct {
 func (a *App) refreshPeersFromRoom() {
 	selfName := a.conf().Username
 	if selfName == "" {
-		selfName = "Usuario"
+		selfName = config.DefaultUsername
 	}
 	connected := a.connected()
 	a.peerMu.Lock()
@@ -205,11 +206,7 @@ func (a *App) peerVolume(id, name string) float64 {
 // setPeerVolume fija el volumen de un participante en el mapa y en el Engine (al instante). Con
 // persist también lo guarda por nombre (al soltar el slider, no en cada paso del arrastre).
 func (a *App) setPeerVolume(id, name string, volume float64, persist bool) {
-	if volume < 0 {
-		volume = 0
-	} else if volume > config.PeerVolumeMax {
-		volume = config.PeerVolumeMax
-	}
+	volume = math.Min(math.Max(volume, 0), float64(a.conf().PeerVolumeMax))
 	a.peerVolumeMu.Lock()
 	a.peerVolumes[id] = volume
 	a.peerVolumeMu.Unlock()

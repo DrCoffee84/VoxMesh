@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"voxmesh/internal/config"
 	"voxmesh/internal/version"
 )
 
@@ -87,11 +88,7 @@ func Start() error {
 }
 
 func Directory() (string, error) {
-	root, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(root, "VoxMesh"), nil
+	return config.AppDir()
 }
 
 // Errorf registra errores (siempre activo, Nivel 0+).

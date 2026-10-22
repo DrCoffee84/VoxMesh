@@ -5,6 +5,7 @@ package audio
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -45,9 +46,10 @@ type streamWorkItem struct {
 	fx          *Effects // nil = sin cadena de salida (SFX, monitor local)
 }
 
-// OutputFilter devuelve la configuración de la cadena de salida y si está activa. El callback
-// de playback la llama una vez por buffer: tiene que ser rápida y sin locks (a.conf()).
-type OutputFilter func() (FilterSettings, bool)
+// PlaybackProvider devuelve la configuración de salida (filtro por emisor, jitter buffer, limitador
+// de la mezcla). El callback de playback la llama una vez por buffer: tiene que ser rápida y sin
+// locks (a.conf()).
+type PlaybackProvider func() PlaybackSettings
 
 type Engine struct {
 	context       *malgo.AllocatedContext
@@ -58,19 +60,22 @@ type Engine struct {
 	captureMu     sync.Mutex
 	stopOnce      sync.Once
 
-	streams        map[string]*audioStream
-	volumes        map[string]float64 // volumen por emisor; sobrevive a la purga del stream
-	mixBuffer      []int32
-	playbackMu     sync.Mutex
-	jitterBufferMS int
+	streams    map[string]*audioStream
+	volumes    map[string]float64 // volumen por emisor; sobrevive a la purga del stream
+	mixBuffer  []int32
+	playbackMu sync.Mutex
+	// jitter son los parámetros vigentes del jitter buffer (los copia mix bajo playbackMu); los
+	// usan PlayStreamSeq al crear un stream y el FIFO de PlayStream.
+	jitter JitterTuning
 
 	workItems     []streamWorkItem
 	scratchBuffer []int16
 
-	outputFilter atomic.Pointer[OutputFilter]
+	playbackSettings atomic.Pointer[PlaybackProvider]
 
 	// Limitador con envolvente del bus de mezcla; solo lo toca el callback de playback.
-	mixLimiter peakLimiter
+	mixLimiter        peakLimiter
+	mixLimiterRelease float64
 }
 
 func softClip(sample int32) int16 {
@@ -94,37 +99,21 @@ func softClip(sample int32) int16 {
 	return int16(sample)
 }
 
-// SetJitterBufferMS fija el tope del colchón de recepción; el colchón real es adaptativo.
-func (e *Engine) SetJitterBufferMS(ms int) {
-	if ms < 40 {
-		ms = 40
-	} else if ms > 500 {
-		ms = 500
-	}
-	e.playbackMu.Lock()
-	e.jitterBufferMS = ms
-	for _, stream := range e.streams {
-		if stream.jitter != nil {
-			stream.jitter.setTargetMS(ms)
-		}
-	}
-	e.playbackMu.Unlock()
-}
-
 func newEngineState() *Engine {
 	return &Engine{
-		captureFrames:  make(chan []byte, 8),
-		streams:        make(map[string]*audioStream),
-		volumes:        make(map[string]float64),
-		jitterBufferMS: 120,
-		mixBuffer:      make([]int32, 4096),
-		workItems:      make([]streamWorkItem, 0, 16),
-		scratchBuffer:  make([]int16, 4096),
+		captureFrames: make(chan []byte, 8),
+		streams:       make(map[string]*audioStream),
+		volumes:       make(map[string]float64),
+		jitter:        defaultPlayback.Jitter,
+		mixBuffer:     make([]int32, 4096),
+		workItems:     make([]streamWorkItem, 0, 16),
+		scratchBuffer: make([]int16, 4096),
 		mixLimiter: newPeakLimiter(
-			config.AudioBusLimiterThreshold,
+			defaultPlayback.BusLimiterThreshold,
 			config.AudioBusLimiterAttackMS,
-			config.AudioBusLimiterReleaseMS,
+			defaultPlayback.BusLimiterReleaseMS,
 		),
+		mixLimiterRelease: defaultPlayback.BusLimiterReleaseMS,
 	}
 }
 
@@ -220,6 +209,8 @@ func (e *Engine) mix(output []byte) {
 		return
 	}
 
+	settings := e.currentPlaybackSettings()
+
 	// --- Lock corto: inspección de streams y extracción de chunks ---
 	e.playbackMu.Lock()
 	if e.streams == nil {
@@ -228,10 +219,8 @@ func (e *Engine) mix(output []byte) {
 	}
 
 	now := time.Now()
-	targetBytes := (e.jitterBufferMS / 20) * streamFrameBytes
-	if targetBytes < streamFrameBytes {
-		targetBytes = streamFrameBytes
-	}
+	e.jitter = settings.Jitter
+	targetBytes := e.fifoTargetBytes()
 
 	neededScratch := len(e.streams) * samples
 	if len(e.scratchBuffer) < neededScratch {
@@ -246,6 +235,7 @@ func (e *Engine) mix(output []byte) {
 		// fades y deriva, así que solo copiamos su salida al bus.
 		if stream.jitter != nil {
 			chunk := e.scratchBuffer[scratchOffset : scratchOffset+samples]
+			stream.jitter.setTuning(settings.Jitter)
 			if !stream.jitter.Read(chunk, now) {
 				// Purgar streams inactivos tras 2 segundos sin paquetes de audio
 				if now.Sub(stream.lastActive) > 2*time.Second {
@@ -346,11 +336,7 @@ func (e *Engine) mix(output []byte) {
 
 	// Cadena de salida por emisor y mezclado fuera del lock (DSP / suma algebraica). Cada fx
 	// solo lo toca este callback.
-	var filterSettings FilterSettings
-	filterOn := false
-	if filter := e.outputFilter.Load(); filter != nil {
-		filterSettings, filterOn = (*filter)()
-	}
+	filterSettings, filterOn := settings.Filter, settings.FilterEnabled
 	if len(e.mixBuffer) < samples {
 		e.mixBuffer = make([]int32, samples)
 	} else {
@@ -389,6 +375,11 @@ func (e *Engine) mix(output []byte) {
 
 	// Limitador con envolvente sobre el bus int32: absorbe la suma de varios
 	// streams fuertes con ganancia continua, sin escalones entre buffers.
+	e.mixLimiter.threshold = settings.BusLimiterThreshold
+	if settings.BusLimiterReleaseMS != e.mixLimiterRelease {
+		e.mixLimiter.releaseCoeff = smoothingCoeff(settings.BusLimiterReleaseMS)
+		e.mixLimiterRelease = settings.BusLimiterReleaseMS
+	}
 	e.mixLimiter.Process(e.mixBuffer[:samples])
 
 	// Renderizar a output con limitador soft-knee anti-clipping
@@ -431,10 +422,7 @@ func (e *Engine) PlayStream(senderID string, data []byte) {
 	stream.lastActive = now
 
 	// Control de latencia (delay drift)
-	targetBytes := (e.jitterBufferMS / 20) * streamFrameBytes
-	if targetBytes < streamFrameBytes {
-		targetBytes = streamFrameBytes
-	}
+	targetBytes := e.fifoTargetBytes()
 	maxBytes := targetBytes * 2
 
 	if len(stream.buffer) > maxBytes {
@@ -478,7 +466,7 @@ func (e *Engine) PlayStreamSeq(senderID string, seq uint32, talkspurt uint8, pac
 		if err != nil {
 			return
 		}
-		stream.jitter = newJitterBuffer(e.jitterBufferMS, decoder)
+		stream.jitter = newJitterBufferTuned(e.jitter, decoder)
 		stream.fx = &Effects{}
 		stream.buffer = nil
 	}
@@ -486,16 +474,30 @@ func (e *Engine) PlayStreamSeq(senderID string, seq uint32, talkspurt uint8, pac
 	stream.lastActive = now
 }
 
-// SetOutputFilter registra de dónde sale la configuración de la cadena de salida por emisor.
-func (e *Engine) SetOutputFilter(filter OutputFilter) {
+// SetPlaybackSettings registra de dónde sale la configuración de salida. Sin proveedor se usan
+// los valores de fábrica.
+func (e *Engine) SetPlaybackSettings(provider PlaybackProvider) {
 	if e == nil {
 		return
 	}
-	if filter == nil {
-		e.outputFilter.Store(nil)
+	if provider == nil {
+		e.playbackSettings.Store(nil)
 		return
 	}
-	e.outputFilter.Store(&filter)
+	e.playbackSettings.Store(&provider)
+}
+
+func (e *Engine) currentPlaybackSettings() PlaybackSettings {
+	if provider := e.playbackSettings.Load(); provider != nil {
+		return (*provider)()
+	}
+	return defaultPlayback
+}
+
+// fifoTargetBytes es el colchón del FIFO de PlayStream (SFX / monitor local): el tope del jitter
+// buffer, como mínimo un frame. Se llama con playbackMu tomado.
+func (e *Engine) fifoTargetBytes() int {
+	return max(e.jitter.MaxMS/20, 1) * streamFrameBytes
 }
 
 // JitterReport devuelve una copia de las estadísticas del jitter buffer de cada emisor de red.
@@ -568,11 +570,7 @@ func (e *Engine) SetStreamVolume(senderID string, volume float64) {
 	if e == nil {
 		return
 	}
-	if volume < 0 {
-		volume = 0
-	} else if volume > config.PeerVolumeMax {
-		volume = config.PeerVolumeMax
-	}
+	volume = math.Min(math.Max(volume, 0), config.ParamByKey("peer_volume_max").Max)
 	e.playbackMu.Lock()
 	defer e.playbackMu.Unlock()
 

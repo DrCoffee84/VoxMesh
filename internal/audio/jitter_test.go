@@ -418,3 +418,28 @@ func TestJitterBuffer_TalkspurtGapIsNotMeasuredAsDelay(t *testing.T) {
 		t.Fatalf("DTX silence measured as delay: %+v", s)
 	}
 }
+
+func TestJitterBuffer_TuningBoundsAdaptiveTarget(t *testing.T) {
+	tuning := DefaultJitterTuning()
+	tuning.MinMS, tuning.MaxMS = 100, 300
+	j := newJitterBufferTuned(tuning, &fakeDecoder{})
+	if j.adaptiveTarget() != 15 {
+		t.Fatalf("without measurements the target is the max: %d", j.adaptiveTarget())
+	}
+	for i := 0; i < 60; i++ {
+		j.arrival.record(0) // red perfecta
+	}
+	if got := j.adaptiveTarget(); got != 5 {
+		t.Fatalf("perfect network should sit on the 100 ms floor (5 frames), got %d", got)
+	}
+	tuning.MinMS = 40
+	j.setTuning(tuning)
+	if got := j.adaptiveTarget(); got != 2 {
+		t.Fatalf("lower floor: want 2 frames (margin 1 + bucket), got %d", got)
+	}
+	tuning.MaxMS = 40
+	j.setTuning(tuning)
+	if j.maxFrames != 2 || j.targetFrames > 2 {
+		t.Fatalf("max not applied: max %d target %d", j.maxFrames, j.targetFrames)
+	}
+}

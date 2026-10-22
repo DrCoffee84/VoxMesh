@@ -41,8 +41,11 @@ func (a *App) handleChatPacket(payload []byte) {
 			a.addSound(*envelope.Sound)
 		}
 	case room.SoundRemoveMessage:
+		// Sin reenviarlo: el host ya lo difunde en receiveLoop.
 		if envelope.Sound != nil {
-			a.removeSound(envelope.Sound.ID)
+			if removed := a.dropSounds([]string{envelope.Sound.ID}); len(removed) > 0 {
+				a.setStatus("Sonido eliminado: " + removed[0].Name)
+			}
 		}
 	case room.SoundPlayMessage:
 		if envelope.Sound != nil {
@@ -62,24 +65,33 @@ func (a *App) handleAssetChunk(payload []byte, origin string) {
 	}
 	go func() {
 		if chunk.Kind == assets.KindSound {
-			a.soundMu.RLock()
+			a.soundMu.Lock()
 			name := ""
+			known := false
 			for _, sound := range a.sounds {
 				if sound.ID == chunk.ID {
 					name = sound.Name
+					known = true
 					break
 				}
 			}
-			_, pending := a.pendingPlays[chunk.ID]
-			a.soundMu.RUnlock()
-			if _, saveErr := a.historyStore.SaveSound(history.SoundMeta{ID: chunk.ID, Ext: chunk.Ext, Name: name}, data); saveErr != nil {
-				logging.Errorf("guardar sonido recibido %q: %s", chunk.ID, logging.FormatError(saveErr))
-				return
+			requested, pending := a.pendingPlays[chunk.ID]
+			delete(a.pendingPlays, chunk.ID)
+			delete(a.soundFetchAt, chunk.ID)
+			if known && a.hostMode.Load() {
+				if from, resolveErr := net.ResolveUDPAddr("udp", origin); resolveErr == nil {
+					a.addSoundHolderLocked(chunk.ID, from)
+				}
 			}
-			if pending {
-				a.soundMu.Lock()
-				delete(a.pendingPlays, chunk.ID)
-				a.soundMu.Unlock()
+			a.soundMu.Unlock()
+			// Un sonido que no está en la botonera (borrado, o el sound_add se perdió) no se guarda:
+			// quedaría en el manifest sin nombre o resucitaría uno borrado. Si estaba pendiente suena igual.
+			if known {
+				if _, saveErr := a.historyStore.SaveSound(history.SoundMeta{ID: chunk.ID, Ext: chunk.Ext, Name: name}, data); saveErr != nil {
+					logging.Errorf("guardar sonido recibido %q: %s", chunk.ID, logging.FormatError(saveErr))
+				}
+			}
+			if pending && time.Since(requested) < pendingPlayTTL {
 				a.playSoundPCM(data)
 			}
 			return
@@ -106,6 +118,10 @@ func (a *App) handleAssetMissing(udp *transport.UDP, addr *net.UDPAddr, payload 
 			data, readErr = a.historyStore.ReadImage(request.ID, request.Ext)
 		}
 		if readErr != nil || len(data) == 0 {
+			// Descarga a pedido: el host puede no tener el audio; se lo pide a quien sí.
+			if request.Kind == assets.KindSound && a.hostMode.Load() {
+				a.fetchSound(request.ID, request.Ext, addr)
+			}
 			return
 		}
 		chunks, splitErr := assets.Split(request.Kind, request.ID, request.Ext, data)
@@ -208,6 +224,19 @@ func (a *App) respondHistorySync(udp *transport.UDP, address *net.UDPAddr, known
 func (a *App) handleSyncPacket(udp *transport.UDP, addr *net.UDPAddr, payload []byte, host bool) {
 	envelope, err := room.Decode(payload)
 	if err != nil {
+		return
+	}
+	// Botonera (sound_sync.go): toca disco, fuera de receiveLoop.
+	switch envelope.Kind {
+	case room.SoundSyncRequestMessage:
+		if host {
+			go a.handleSoundSyncRequest(udp, addr, envelope)
+		}
+		return
+	case room.SoundSyncResponseMessage:
+		if !host {
+			go a.handleSoundSyncResponse(envelope)
+		}
 		return
 	}
 	if envelope.Kind == room.SyncRequestMessage {

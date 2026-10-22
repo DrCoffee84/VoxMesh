@@ -5,8 +5,8 @@ package ui
 import (
 	"os"
 	"os/exec"
-	"path/filepath"
 
+	"voxmesh/internal/config"
 	"voxmesh/internal/logging"
 )
 
@@ -22,11 +22,10 @@ func openLogsDirectory() error {
 }
 
 func openDataDirectory() error {
-	configDir, err := os.UserConfigDir()
+	directory, err := config.AppDir()
 	if err != nil {
 		return err
 	}
-	directory := filepath.Join(configDir, "VoxMesh")
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		return err
 	}

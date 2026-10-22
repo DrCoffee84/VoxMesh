@@ -18,8 +18,13 @@ const (
 	SoundAddMessage     = "sound_add"
 	SoundRemoveMessage  = "sound_remove"
 	SoundPlayMessage    = "sound_play"
-	LeaveMessage        = "leave"
-	MuteMessage         = "mute"
+	// SoundSyncRequestMessage (cliente → host, PacketChatSync): sonidos que el cliente tiene en
+	// disco + sus lápidas. SoundSyncResponseMessage (host → cliente): lista completa de la sala +
+	// lápidas. Solo metadata: el audio se pide con AssetMissing cuando alguien lo toca.
+	SoundSyncRequestMessage  = "sound_sync_request"
+	SoundSyncResponseMessage = "sound_sync_response"
+	LeaveMessage             = "leave"
+	MuteMessage              = "mute"
 )
 
 type Envelope struct {
@@ -36,6 +41,8 @@ type Envelope struct {
 	ImageData   []byte            `json:"image_data,omitempty"`
 	Images      []Image           `json:"images,omitempty"`
 	Sound       *Sound            `json:"sound,omitempty"`
+	Sounds      []Sound           `json:"sounds,omitempty"`
+	DeletedIDs  []string          `json:"deleted_ids,omitempty"`
 }
 
 type Image struct {

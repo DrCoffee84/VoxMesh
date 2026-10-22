@@ -29,6 +29,12 @@ func NewRNNoise() (*RNNoise, error) {
 	return &RNNoise{denoiser: denoiser}, nil
 }
 
+// Delay es el retardo de RNNoise en muestras: la salida de la muestra i corresponde a la
+// entrada i − Delay() (960 a 48 kHz, un frame).
+func (r *RNNoise) Delay() int {
+	return r.denoiser.Delay()
+}
+
 // ProcessSamplesWithOptions pasa las muestras por RNNoise in-place (cada bloque de 480 se copia
 // a float antes de escribir la salida en el mismo lugar), sin allocations.
 func (r *RNNoise) ProcessSamplesWithOptions(samples []int16, gate NoiseGate, vadThreshold float32, vadEnabled, gateEnabled bool) (bool, float32, error) {
@@ -135,7 +141,8 @@ func PrepareOutgoingPCMWithFilters(data []byte, denoiser *RNNoise, gate NoiseGat
 // indica que arrancó una frase. Los slices son del Effects (o el propio samples) y valen hasta la
 // próxima llamada. Sin effects no hay estado entre frames: ni hold, ni pre-roll, ni envolvente.
 //
-// Orden: ganancia/filtros → RNNoise (siempre, sin bypass) → VAD/compuerta con hold → limitador
+// Orden: ganancia/filtros → RNNoise (siempre, sin bypass; mezcla con la señal original alineada
+// por intensidad o modo grito, ver shout.go) → VAD/compuerta con hold → limitador
 // con envolvente (un solo limitador real; el tanh de entrada solo actúa si InputGainDB > 0) →
 // pre-roll / fade-in.
 func PrepareOutgoingFrames(samples []int16, denoiser *RNNoise, gate NoiseGate, filterEnabled bool, vadThreshold float32, settings FilterSettings, effects *Effects) ([][]int16, bool, error) {
@@ -145,7 +152,7 @@ func PrepareOutgoingFrames(samples []int16, denoiser *RNNoise, gate NoiseGate, f
 	ceiling := sendCeiling(settings, filterEnabled)
 
 	if !filterEnabled {
-		limitSend(samples, ceiling, effects)
+		limitSend(samples, ceiling, settings.SendReleaseMS, effects)
 		return [][]int16{samples}, false, nil
 	}
 
@@ -164,13 +171,22 @@ func PrepareOutgoingFrames(samples []int16, denoiser *RNNoise, gate NoiseGate, f
 	// Ya no hay bypass por grito: RNNoise tiene 20 ms de retardo interno (Delay() = 2*480)
 	// y saltearlo frame a frame desordenaba y duplicaba audio. El "cirkci" original venía
 	// del wrap-around de int16 en ProcessInt16, que ahora evita el clamp de floatToInt16.
+	// Modo grito / intensidad: RNNoise corre igual; con Effects se guarda la entrada alineada
+	// para mezclarla después, y un grito cuenta como voz aunque el VAD diga que no.
 	hasSpeech := true
 	if settings.RNNoiseEnabled && denoiser != nil {
+		shout := false
+		if effects != nil {
+			shout = effects.shoutBegin(samples, denoiser.Delay(), settings)
+		}
 		speech, _, err := denoiser.ProcessSamplesWithOptions(samples, gate, vadThreshold, settings.VADEnabled, false)
 		if err != nil {
 			return nil, false, err
 		}
-		hasSpeech = speech
+		hasSpeech = speech || shout
+		if effects != nil {
+			effects.shoutMix(samples, shout, settings)
+		}
 	}
 
 	gateOpen := !settings.NoiseGateEnabled || gate.Open(samples)
@@ -179,36 +195,34 @@ func PrepareOutgoingFrames(samples []int16, denoiser *RNNoise, gate NoiseGate, f
 		keepOpen = effects.KeepVoiceOpen(hasSpeech, gateOpen, settings)
 	}
 
-	limitSend(samples, ceiling, effects)
+	limitSend(samples, ceiling, settings.SendReleaseMS, effects)
 	if effects == nil {
 		if !keepOpen {
 			return nil, false, nil
 		}
 		return [][]int16{samples}, false, nil
 	}
-	frames, started := effects.gateFrames(samples, keepOpen)
+	frames, started := effects.gateFrames(samples, keepOpen, settings)
 	return frames, started, nil
 }
 
-// sendCeiling es el techo del limitador de envío: AudioSendPeakCeiling, o el umbral del limiter
-// del usuario si está activo y es más bajo.
+// sendCeiling es el techo del limitador de envío: SendCeilingDB, o el umbral del limiter del
+// usuario si está activo y es más bajo.
 func sendCeiling(settings FilterSettings, filterEnabled bool) int16 {
-	ceiling := config.AudioSendPeakCeiling
+	ceiling := math.Min(dbToS16(settings.SendCeilingDB), math.MaxInt16)
 	if filterEnabled && settings.LimiterEnabled {
-		if user := math.Pow(10, float64(settings.LimiterThreshold)/20) * math.MaxInt16; user < float64(ceiling) {
-			ceiling = int16(user)
-		}
+		ceiling = math.Min(ceiling, dbToS16(settings.LimiterThreshold))
 	}
-	return ceiling
+	return int16(ceiling)
 }
 
 // limitSend usa la envolvente del Effects; sin Effects, un limitador nuevo (attack instantáneo:
 // el techo se respeta igual, solo que la ganancia no se arrastra entre llamadas).
-func limitSend(samples []int16, ceiling int16, effects *Effects) {
+func limitSend(samples []int16, ceiling int16, releaseMS float32, effects *Effects) {
 	if effects != nil {
-		effects.limitSend(samples, ceiling)
+		effects.limitSend(samples, ceiling, releaseMS)
 		return
 	}
-	limiter := newPeakLimiter(float64(ceiling), config.AudioSendLimiterAttackMS, config.AudioSendLimiterReleaseMS)
+	limiter := newPeakLimiter(float64(ceiling), config.AudioSendLimiterAttackMS, float64(releaseMS))
 	limiter.ProcessInt16(samples)
 }

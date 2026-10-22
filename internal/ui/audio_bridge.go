@@ -9,7 +9,6 @@ import (
 	"runtime/debug"
 	"strconv"
 
-	"voxmesh/internal/assets"
 	"voxmesh/internal/audio"
 	"voxmesh/internal/config"
 	"voxmesh/internal/logging"
@@ -26,7 +25,13 @@ func (a *App) ensurePhoneMicServer() (*phonemic.Server, error) {
 		return server, nil
 	}
 	cfg := a.conf()
-	server, err := phonemic.Start(cfg.PhoneMicToken, cfg.PhoneMicPort, cfg.PhoneMicBufferEnabled, cfg.PhoneMicBufferMS, cfg.Username, a.receivePhonePCM, a.setStatus)
+	buffer := phonemic.Buffer{
+		Enabled:          cfg.PhoneMicBufferEnabled,
+		MS:               cfg.PhoneMicBufferMS,
+		DriftSlackFrames: cfg.PhoneDriftSlackMS / 20,
+		DriftForceFrames: cfg.PhoneDriftForceMS / 20,
+	}
+	server, err := phonemic.Start(cfg.PhoneMicToken, cfg.PhoneMicPort, buffer, cfg.Username, a.receivePhonePCM, a.setStatus)
 	if err != nil {
 		return nil, err
 	}
@@ -157,29 +162,7 @@ func (a *App) playIncomingSound(sound room.Sound) {
 	if a.conf().SoundboardMuted || a.historyStore == nil {
 		return
 	}
-	go func() {
-		data, readErr := a.historyStore.ReadSound(sound.ID, sound.Ext)
-		if readErr == nil {
-			a.playSoundPCM(data)
-			return
-		}
-		a.soundMu.Lock()
-		if a.pendingPlays == nil {
-			a.pendingPlays = make(map[string]struct{})
-		}
-		a.pendingPlays[sound.ID] = struct{}{}
-		a.soundMu.Unlock()
-		udp := a.transport.Load()
-		if udp == nil || a.roomState.HostID == a.participantID {
-			return
-		}
-		peer := a.endpointAddr()
-		if peer == nil {
-			return
-		}
-		request := assets.MissingRequest{Kind: assets.KindSound, ID: sound.ID, Ext: sound.Ext}
-		_ = udp.Send(peer, transport.Packet{Kind: transport.PacketAssetMissing, Sequence: a.sequence.Add(1), Payload: assets.EncodeMissing(request)})
-	}()
+	go a.playOrFetchSound(sound)
 }
 
 func (a *App) ensureSoundPlayer() *audio.Player {
@@ -262,7 +245,7 @@ func (a *App) startAudio(udp *transport.UDP, peer *net.UDPAddr, host bool) {
 	cfg := a.conf()
 	inputDevice := cfg.InputDevice
 	if inputDevice == phoneMicInput {
-		inputDevice = "Sistema predeterminado"
+		inputDevice = config.DefaultDevice
 	}
 	a.resetEncoder()
 	engine, err := audio.NewEngine(inputDevice, cfg.OutputDevice, func(frame []byte) {
@@ -275,10 +258,7 @@ func (a *App) startAudio(udp *transport.UDP, peer *net.UDPAddr, host bool) {
 		a.setStatus("Audio no disponible: " + err.Error())
 		return
 	}
-	if jitterMS := a.conf().JitterBufferMS; jitterMS >= 40 {
-		engine.SetJitterBufferMS(jitterMS)
-	}
-	engine.SetOutputFilter(a.outputFilter)
+	engine.SetPlaybackSettings(a.playbackSettings)
 	a.applyPeerVolumes(engine)
 	if !a.publishEngine(engine, udp) {
 		return

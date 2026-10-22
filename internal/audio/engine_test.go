@@ -7,6 +7,8 @@ import (
 	"math"
 	"testing"
 	"time"
+
+	"voxmesh/internal/config"
 )
 
 func TestSoftClip(t *testing.T) {
@@ -76,17 +78,36 @@ func TestEngine_PlayStreamConcurrency(t *testing.T) {
 	e.playbackMu.Unlock()
 }
 
+var defaultOpus = func() OpusSettings {
+	cfg := config.Default()
+	return EncoderSettings(&cfg)
+}()
+
+// setPlayback configura el engine con los valores de fábrica, el tope de jitter maxMS y una
+// cadena de salida opcional.
+func setPlayback(e *Engine, maxMS int, filter *FilterSettings) {
+	settings := defaultPlayback
+	settings.Jitter.MaxMS = maxMS
+	if filter != nil {
+		settings.Filter, settings.FilterEnabled = *filter, true
+	}
+	e.playbackMu.Lock()
+	e.jitter = settings.Jitter // los streams creados antes del primer mix ya usan este tope
+	e.playbackMu.Unlock()
+	e.SetPlaybackSettings(func() PlaybackSettings { return settings })
+}
+
 // encodeSine codifica count frames de una senoidal continua con Opus.
 func encodeSine(t *testing.T, count int, amplitude float64) [][]byte {
 	t.Helper()
-	encoder, err := NewOpusEncoder()
+	encoder, err := NewOpusEncoder(defaultOpus)
 	if err != nil {
 		t.Fatal(err)
 	}
 	packets := make([][]byte, 0, count)
 	for n := 0; n < count; n++ {
 		frame := sineFrame(n, amplitude)
-		if err := encoder.Encode(frame, func(packet []byte) {
+		if err := encoder.Encode(frame, defaultOpus, func(packet []byte) {
 			packets = append(packets, append([]byte(nil), packet...))
 		}); err != nil {
 			t.Fatal(err)
@@ -119,11 +140,11 @@ func TestOpus_RoundTripIsSmallAndKeepsLevel(t *testing.T) {
 }
 
 func TestOpus_EncodeRejectsWrongFrameSize(t *testing.T) {
-	encoder, err := NewOpusEncoder()
+	encoder, err := NewOpusEncoder(defaultOpus)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := encoder.Encode(make([]int16, 480), func([]byte) {}); err == nil {
+	if err := encoder.Encode(make([]int16, 480), defaultOpus, func([]byte) {}); err == nil {
 		t.Fatal("expected error for a 10 ms frame")
 	}
 }
@@ -145,9 +166,9 @@ func TestEngine_PlaysOpusStreamWithVolume(t *testing.T) {
 	packets := encodeSine(t, 20, 8000)
 
 	full := newEngineState()
-	full.SetJitterBufferMS(40)
+	setPlayback(full, 40, nil)
 	half := newEngineState()
-	half.SetJitterBufferMS(40)
+	setPlayback(half, 40, nil)
 	// El volumen se fija antes de que exista el stream (como al reabrir el Engine).
 	half.SetStreamVolume("peer", 0.5)
 	for n, packet := range packets {
@@ -178,12 +199,9 @@ func TestEngine_PlaysOpusStreamWithVolume(t *testing.T) {
 func TestEngine_OutputFilterRunsPerStream(t *testing.T) {
 	packets := encodeSine(t, 20, 8000)
 	e := newEngineState()
-	e.SetJitterBufferMS(40)
-	e.SetOutputFilter(func() (FilterSettings, bool) {
-		return FilterSettings{GainDB: -6}, true
-	})
+	setPlayback(e, 40, &FilterSettings{GainDB: -6})
 	plain := newEngineState()
-	plain.SetJitterBufferMS(40)
+	setPlayback(plain, 40, nil)
 	for n, packet := range packets {
 		e.PlayStreamSeq("peer", uint32(n), 0, packet)
 		plain.PlayStreamSeq("peer", uint32(n), 0, packet)
@@ -197,7 +215,7 @@ func TestEngine_OutputFilterRunsPerStream(t *testing.T) {
 func TestEngine_OpusFECRecoversLostPacket(t *testing.T) {
 	packets := encodeSine(t, 30, 8000)
 	e := newEngineState()
-	e.SetJitterBufferMS(60)
+	setPlayback(e, 60, nil)
 	// Llegan a ritmo real: 3 adelantados y después uno por cada buffer reproducido.
 	push := func(n int) {
 		if n < len(packets) && n != 12 { // el 12 se pierde: lo tiene que rearmar el FEC del 13
