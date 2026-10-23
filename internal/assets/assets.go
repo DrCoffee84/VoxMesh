@@ -141,6 +141,7 @@ func DecodeMissing(payload []byte) (MissingRequest, error) {
 }
 
 type pendingAsset struct {
+	kind      byte
 	ext       string
 	total     uint32
 	chunks    map[uint32][]byte
@@ -162,15 +163,22 @@ func NewAssembler() *Assembler {
 // Ingest records a chunk and returns the reassembled bytes once complete.
 // origin is the address the chunk arrived from, used to target retry requests.
 func (a *Assembler) Ingest(chunk Chunk, origin string) ([]byte, bool) {
+	// Un índice fuera de rango contaría como recibido y el archivo se armaría con un hueco.
+	if chunk.Total == 0 || chunk.Index >= chunk.Total || chunk.Total > MaxBytes/ChunkDataSize+1 {
+		return nil, false
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	entry, exists := a.pending[chunk.ID]
 	if !exists {
-		entry = &pendingAsset{ext: chunk.Ext, total: chunk.Total, chunks: make(map[uint32][]byte, chunk.Total), origin: origin}
+		entry = &pendingAsset{kind: chunk.Kind, ext: chunk.Ext, total: chunk.Total, chunks: make(map[uint32][]byte, chunk.Total), origin: origin}
 		a.pending[chunk.ID] = entry
 	}
 	entry.lastChunk = time.Now()
 	entry.origin = origin
+	if chunk.Total != entry.total {
+		return nil, false
+	}
 	if _, has := entry.chunks[chunk.Index]; !has {
 		entry.chunks[chunk.Index] = append([]byte(nil), chunk.Data...)
 	}
@@ -217,7 +225,7 @@ func (a *Assembler) Sweep(stallAfter time.Duration, maxAttempts int) []MissingNo
 		}
 		entry.attempts++
 		entry.lastChunk = now
-		notices = append(notices, MissingNotice{Origin: entry.origin, Request: MissingRequest{ID: id, Ext: entry.ext, Missing: missing}})
+		notices = append(notices, MissingNotice{Origin: entry.origin, Request: MissingRequest{Kind: entry.kind, ID: id, Ext: entry.ext, Missing: missing}})
 	}
 	return notices
 }

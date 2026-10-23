@@ -5,47 +5,41 @@ import (
 	"testing"
 )
 
-func TestElectNextHostUsesParticipantOrder(t *testing.T) {
+func TestCandidatesUseParticipantOrder(t *testing.T) {
 	address := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1000}
 	state := New("gaming", "Daniel", address)
 	state.Upsert(Participant{ID: "juan", Username: "Juan", Address: "127.0.0.1:1001", Connected: true, CanBeHost: true})
 	state.Upsert(Participant{ID: "pedro", Username: "Pedro", Address: "127.0.0.1:1002", Connected: true, CanBeHost: true})
-	state.MarkDisconnected(state.HostID)
 
-	previousEpoch := state.Epoch
-	candidate, ok := state.ElectNextHost()
-	if !ok || candidate.ID != "juan" {
-		t.Fatalf("expected Juan as next host, got %#v, ok=%v", candidate, ok)
+	candidates := state.Candidates()
+	if len(candidates) != 2 || candidates[0].ID != "juan" || candidates[1].ID != "pedro" {
+		t.Fatalf("expected Juan then Pedro (the host is never a candidate), got %#v", candidates)
 	}
-	if state.HostID != "juan" || state.Epoch != previousEpoch+1 {
-		t.Fatalf("host election did not update state: host=%q epoch=%d", state.HostID, state.Epoch)
+	if next, ok := state.NextHost(); !ok || next.ID != "juan" {
+		t.Fatalf("expected Juan as next host, got %#v, ok=%v", next, ok)
 	}
 }
 
-func TestElectNextHostSkipsDisconnectedCandidate(t *testing.T) {
+func TestCandidatesSkipDisconnectedParticipants(t *testing.T) {
 	address := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1000}
 	state := New("gaming", "Daniel", address)
 	state.Upsert(Participant{ID: "juan", Username: "Juan", Address: "127.0.0.1:1001", Connected: false, CanBeHost: true})
 	state.Upsert(Participant{ID: "pedro", Username: "Pedro", Address: "127.0.0.1:1002", Connected: true, CanBeHost: true})
-	state.MarkDisconnected(state.HostID)
 
-	candidate, ok := state.ElectNextHost()
-	if !ok || candidate.ID != "pedro" {
-		t.Fatalf("expected Pedro as fallback host, got %#v, ok=%v", candidate, ok)
+	if candidates := state.Candidates(); len(candidates) != 1 || candidates[0].ID != "pedro" {
+		t.Fatalf("expected only Pedro, got %#v", candidates)
 	}
 }
 
-func TestElectNextHostSkipsIneligibleCandidate(t *testing.T) {
+func TestCandidatesSkipIneligibleParticipants(t *testing.T) {
 	address := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1000}
 	state := New("gaming", "Daniel", address)
-	// Juan has CanBeHost: false, Pedro has CanBeHost: true
+	// Juan desactivó "Permitir ser host de respaldo".
 	state.Upsert(Participant{ID: "juan", Username: "Juan", Address: "127.0.0.1:1001", Connected: true, CanBeHost: false})
 	state.Upsert(Participant{ID: "pedro", Username: "Pedro", Address: "127.0.0.1:1002", Connected: true, CanBeHost: true})
-	state.MarkDisconnected(state.HostID)
 
-	candidate, ok := state.ElectNextHost()
-	if !ok || candidate.ID != "pedro" {
-		t.Fatalf("expected Pedro to be elected because Juan opted out of being host, got %#v, ok=%v", candidate, ok)
+	if candidates := state.Candidates(); len(candidates) != 1 || candidates[0].ID != "pedro" {
+		t.Fatalf("expected only Pedro because Juan opted out of being host, got %#v", candidates)
 	}
 }
 

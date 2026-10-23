@@ -13,6 +13,10 @@ const jitterRingFrames = 64
 // jitterHistogramBuckets cubre hasta 640 ms de variación de retardo (buckets de 5 ms).
 const jitterHistogramBuckets = 128
 
+// jitterPeakEvents es cuántos picos recientes recuerda arrivalStats (sobra para los que entran en
+// config.JitterPeakMemory en cualquier red usable).
+const jitterPeakEvents = 16
+
 const jitterFrameDuration = 20 * time.Millisecond
 
 // frameDecoder decodifica los paquetes de un emisor: Opus en producción (codec.go), un fake en
@@ -29,13 +33,14 @@ type jitterFrameKind int
 const (
 	jitterFrameSilence jitterFrameKind = iota
 	jitterFrameDecoded                 // salida del decoder (real, FEC o PLC): continua con la anterior
-	jitterFrameFade                    // PLC con fade a silencio porque el buffer se vació
+	jitterFrameFade                    // PLC que se va apagando porque el buffer se vació
 )
 
 type jitterSlot struct {
-	seq     uint32
-	present bool
-	data    []byte // paquete codificado tal como llegó
+	seq       uint32
+	talkspurt uint8 // frase del emisor (Packet.Talkspurt)
+	present   bool
+	data      []byte // paquete codificado tal como llegó
 }
 
 // JitterStats cuenta lo que hizo el jitter buffer de un emisor y lo que mide de la red.
@@ -46,6 +51,14 @@ type JitterStats struct {
 	Late      uint64 // paquetes que llegaron después de su turno y se descartaron
 	Dropped   uint64 // frames descartados para corregir deriva (buffer demasiado lleno)
 	Resets    uint64 // saltos de secuencia enormes (emisor reiniciado)
+
+	// Underruns son los cortes: el buffer se vació en medio de una frase (el siguiente frame que
+	// llegó es de la misma frase, o sea que el emisor seguía mandando) y el audio se interrumpió
+	// hasta que llegó. UnderrunTime suma lo que duraron. Phrases cuenta los arranques de frase
+	// nueva (pausas del emisor, no son cortes).
+	Underruns    uint64
+	UnderrunTime time.Duration
+	Phrases      uint64
 
 	BufferedFrames int     // frames esperando en el buffer
 	TargetMS       int     // colchón objetivo vigente (adaptativo, tope JitterBufferMS)
@@ -63,8 +76,9 @@ func (s JitterStats) Total() uint64 { return s.Played + s.Lost() }
 // momento de reproducirlos y los entrega a ritmo constante. Si falta un frame:
 //   - con frames posteriores ya recibidos es una pérdida: se recupera con el FEC del paquete
 //     siguiente, o con el PLC del decoder, y se avanza la secuencia;
-//   - con el buffer vacío es un pico de lag o el fin de una frase: PLC con fade a silencio y NO
-//     se avanza la secuencia, así el frame demorado se reproduce cuando llegue.
+//   - con el buffer vacío es un pico de lag o el fin de una frase: PLC que se apaga en ~60 ms y
+//     NO se avanza la secuencia, así el frame demorado se reproduce cuando llegue. Si es de la
+//     misma frase (corte) se reanuda enseguida; si es de una frase nueva se espera el colchón.
 //
 // Todo empalme no contiguo (arranque, descarte por deriva) se suaviza con un crossfade corto:
 // para eso la salida retiene las últimas JitterSpliceSamples muestras de cada frame.
@@ -82,13 +96,16 @@ type jitterBuffer struct {
 	minFrames    int // piso del colchón (tuning.MinMS)
 	targetFrames int // colchón vigente: solo cambia con !playing para que no haya saltos
 
-	firstArrival time.Time // llegada del primer frame mientras se espera colchón
-	lastRealAt   time.Time // cuándo arrancó el último frame real reproducido
+	firstArrival  time.Time // llegada del primer frame mientras se espera colchón
+	lastRealAt    time.Time // cuándo arrancó el último frame real reproducido
+	lastTalkspurt uint8     // frase del último frame real reproducido
+	emptyAt       time.Time // cuándo se vació el buffer (mide la duración del corte)
 
 	lossRun       int
 	dropCooldown  int
 	discontinuity bool // hubo descarte o reset: el próximo frame no empalma con el anterior
 	prevKind      jitterFrameKind
+	fadePos       int // muestras de PLC ya generadas desde que se vació el buffer
 
 	decodeBuf  [FrameSamples]int16
 	silence    [FrameSamples]int16
@@ -143,6 +160,7 @@ func (j *jitterBuffer) reset(seq uint32) {
 	j.playSeq = seq
 	j.highestSeq = seq - 1
 	j.firstArrival = time.Time{}
+	j.lastRealAt = time.Time{} // lo que venga después de un reinicio es una frase nueva
 	j.lossRun = 0
 	j.dropCooldown = 0
 	j.discontinuity = true
@@ -173,6 +191,7 @@ func (j *jitterBuffer) Push(seq uint32, talkspurt uint8, packet []byte, now time
 		return // duplicado
 	}
 	slot.seq = seq
+	slot.talkspurt = talkspurt
 	slot.present = true
 	slot.data = append(slot.data[:0], packet...)
 	if int32(seq-j.highestSeq) > 0 {
@@ -224,6 +243,11 @@ func (j *jitterBuffer) adaptiveTarget() int {
 		return j.maxFrames
 	}
 	p := j.arrival.percentileMS(j.tuning.Percentile)
+	// Picos repetidos (Wi-Fi): el percentil los deja afuera porque cada uno toca pocos paquetes,
+	// pero cada uno que el colchón no cubre es un corte. Si se repiten, se cubre el más alto.
+	if peak, ok := j.arrival.recentPeakMS(); ok {
+		p = max(p, peak)
+	}
 	frames := (p+19)/20 + j.tuning.MarginFrames
 	return min(max(frames, j.minFrames), j.maxFrames)
 }
@@ -233,12 +257,18 @@ func (j *jitterBuffer) adaptiveTarget() int {
 // retenida (y por eso sale JitterSpliceSamples más corto).
 func (j *jitterBuffer) advance(now time.Time) {
 	kind := j.nextFrame(now)
+	if kind == jitterFrameDecoded {
+		j.fadePos = 0
+	}
 	frame := j.frame
 	splice := config.JitterSpliceSamples
 	// Lo que sale del decoder (real, FEC, PLC y el PLC del fade) es continuo con lo anterior del
-	// decoder; el silencio es continuo con el fade (que termina en cero) y con otro silencio.
+	// decoder, y el fade es continuo consigo mismo (la ganancia baja de corrido entre frames). El
+	// silencio es continuo con el fade (que termina en cero) y con otro silencio. Un frame real
+	// después del fade lleva crossfade: el fade quedó atenuado y el decoder sale a nivel normal.
 	contiguous := !j.discontinuity &&
-		((kind != jitterFrameSilence && j.prevKind == jitterFrameDecoded) ||
+		((kind == jitterFrameDecoded && j.prevKind == jitterFrameDecoded) ||
+			(kind == jitterFrameFade && j.prevKind != jitterFrameSilence) ||
 			(kind == jitterFrameSilence && j.prevKind != jitterFrameDecoded))
 	j.discontinuity = false
 
@@ -278,6 +308,7 @@ func (j *jitterBuffer) nextFrame(now time.Time) jitterFrameKind {
 		if !ok || !j.readyToPlay(first, now) {
 			return j.silenceOrFade()
 		}
+		j.countRestart(first, now)
 		j.playSeq = first
 		j.playing = true
 		j.firstArrival = time.Time{}
@@ -313,6 +344,7 @@ func (j *jitterBuffer) playFrame(now time.Time, allowDrop bool) jitterFrameKind 
 			j.playSeq++
 			j.lossRun = 0
 			j.lastRealAt = now
+			j.lastTalkspurt = slot.talkspurt
 			j.stats.Played++
 			return jitterFrameDecoded
 		}
@@ -356,7 +388,27 @@ func (j *jitterBuffer) playFrame(now time.Time, allowDrop bool) jitterFrameKind 
 	// Buffer vacío: pico de lag o fin de frase. Esperamos sin avanzar playSeq.
 	j.playing = false
 	j.firstArrival = time.Time{}
+	j.emptyAt = now
 	return j.silenceOrFade()
+}
+
+// countRestart clasifica cada vuelta a reproducir: si el primer frame disponible es de la misma
+// frase que el último reproducido, el emisor nunca dejó de mandar y el buffer se vació porque el
+// audio no llegó a tiempo (un corte); si no, el emisor volvió a hablar después de una pausa.
+func (j *jitterBuffer) countRestart(first uint32, now time.Time) {
+	if j.samePhrase(first) {
+		j.stats.Underruns++
+		j.stats.UnderrunTime += now.Sub(j.emptyAt)
+		return
+	}
+	j.stats.Phrases++
+}
+
+// samePhrase indica si el frame first es de la frase que se venía reproduciendo. El emisor
+// cambia de frase cada vez que deja de mandar más de 60 ms (talkspurtGap en ui), así que misma
+// frase = no hubo pausa del emisor.
+func (j *jitterBuffer) samePhrase(first uint32) bool {
+	return !j.lastRealAt.IsZero() && j.slots[first%jitterRingFrames].talkspurt == j.lastTalkspurt
 }
 
 // decode decodifica un paquete en decodeBuf y lo deja en j.frame.
@@ -372,12 +424,15 @@ func (j *jitterBuffer) decode(packet []byte) bool {
 
 // readyToPlay decide si ya hay colchón suficiente para (re)arrancar.
 func (j *jitterBuffer) readyToPlay(first uint32, now time.Time) bool {
-	// Underrun en medio de una frase: reanudamos apenas llega el frame demorado.
-	// La latencia crece lo que duró el pico y la deriva la recorta después.
-	if !j.lastRealAt.IsZero() && now.Sub(j.lastRealAt) < j.tuning.TalkspurtGap {
+	// Corte en medio de una frase (el emisor siguió mandando): reanudamos apenas llega el frame
+	// demorado. Lo atrasado suele llegar todo junto y hace de colchón; la deriva recorta el
+	// exceso después. Un corte más largo que TalkspurtGap vuelve a esperar el colchón.
+	if j.samePhrase(first) && now.Sub(j.lastRealAt) < j.tuning.TalkspurtGap {
 		return true
 	}
-	// Frase nueva: esperamos el colchón completo, o su duración si la frase es más corta.
+	// Frase nueva (el emisor hizo una pausa, aunque sea corta): esperamos el colchón completo, o
+	// su duración si la frase es más corta. La espera cae en la pausa, donde no se nota. Sin
+	// esto cada frase arrancaba solo con el pre-roll (~40 ms) y el primer pico la cortaba.
 	span := int(int32(j.highestSeq-first)) + 1
 	return span >= j.targetFrames || now.Sub(j.firstArrival) >= time.Duration(j.targetFrames)*jitterFrameDuration
 }
@@ -393,27 +448,30 @@ func (j *jitterBuffer) firstPresent() (uint32, bool) {
 	return 0, false
 }
 
-// silenceOrFade: justo después de audio decodificado, un frame de PLC con fade a silencio
-// (continúa la voz en vez de cortarla); después, silencio.
+// silenceOrFade: después de audio decodificado, el PLC del decoder sigue la voz bajando de a poco
+// hasta silencio en JitterFadeOutSamples (puede abarcar varios frames); después, silencio. Si el
+// frame demorado llega en el medio, la voz vuelve con un crossfade y el pico casi no se nota.
 func (j *jitterBuffer) silenceOrFade() jitterFrameKind {
-	if j.prevKind == jitterFrameDecoded {
-		pcm := j.decodeBuf[:]
-		if j.dec.DecodePLC(pcm) != nil {
-			clear(pcm)
-		}
-		fade := config.JitterFadeOutSamples
-		for i := range pcm {
-			if i >= fade {
-				pcm[i] = 0
-				continue
-			}
-			pcm[i] = int16(float64(pcm[i]) * (1 - float64(i)/float64(fade)))
-		}
-		j.frame = pcm
-		return jitterFrameFade
+	fade := config.JitterFadeOutSamples
+	if j.prevKind == jitterFrameSilence || j.fadePos >= fade {
+		j.frame = j.silence[:]
+		return jitterFrameSilence
 	}
-	j.frame = j.silence[:]
-	return jitterFrameSilence
+	pcm := j.decodeBuf[:]
+	if j.dec.DecodePLC(pcm) != nil {
+		clear(pcm)
+	}
+	for i := range pcm {
+		pos := j.fadePos + i
+		if pos >= fade {
+			pcm[i] = 0
+			continue
+		}
+		pcm[i] = int16(float64(pcm[i]) * (1 - float64(pos)/float64(fade)))
+	}
+	j.fadePos += len(pcm)
+	j.frame = pcm
+	return jitterFrameFade
 }
 
 // frameRMS es el nivel RMS del frame en escala S16.
@@ -438,6 +496,9 @@ func frameRMS(samples []int16) float64 {
 // La frase se reinicia cuando cambia el talkspurt del paquete: el emisor no manda nada con la
 // compuerta cerrada pero la secuencia sigue contigua, y sin ese corte el silencio se mediría
 // como retardo.
+//
+// Además agrupa en picos las llegadas consecutivas con variación ≥ JitterPeakThresholdMS, para
+// que el colchón cubra los picos que se repiten aunque el percentil no los vea.
 type arrivalStats struct {
 	have      bool
 	talkspurt uint8
@@ -452,6 +513,17 @@ type arrivalStats struct {
 	window      [config.JitterAdaptiveWindow]uint8
 	windowPos   int
 	windowCount int
+
+	samples uint64 // llegadas registradas: fecha los picos (JitterPeakMemory)
+	inPeak  bool
+	peaks   [jitterPeakEvents]jitterPeak
+	peakPos int
+}
+
+// jitterPeak es un pico de retardo: cuándo empezó (número de llegada) y su altura.
+type jitterPeak struct {
+	sample uint64
+	height time.Duration
 }
 
 func (s *arrivalStats) observe(seq uint32, talkspurt uint8, now time.Time) {
@@ -493,6 +565,44 @@ func (s *arrivalStats) record(delay time.Duration) {
 	s.window[s.windowPos] = uint8(bucket)
 	s.hist[bucket]++
 	s.windowPos = (s.windowPos + 1) % len(s.window)
+	s.samples++
+	s.trackPeak(delay)
+}
+
+// trackPeak junta las llegadas consecutivas por encima del umbral en un solo pico y guarda su
+// altura máxima.
+func (s *arrivalStats) trackPeak(delay time.Duration) {
+	if delay < config.JitterPeakThresholdMS*time.Millisecond {
+		s.inPeak = false
+		return
+	}
+	if !s.inPeak {
+		s.inPeak = true
+		s.peakPos = (s.peakPos + 1) % len(s.peaks)
+		s.peaks[s.peakPos] = jitterPeak{sample: s.samples, height: delay}
+		return
+	}
+	if peak := &s.peaks[s.peakPos]; delay > peak.height {
+		peak.height = delay
+	}
+}
+
+// recentPeakMS devuelve la altura en ms del pico más alto de las últimas JitterPeakMemory
+// llegadas, si en ellas hubo al menos JitterPeakMinCount picos.
+func (s *arrivalStats) recentPeakMS() (int, bool) {
+	count := 0
+	var highest time.Duration
+	for _, peak := range s.peaks {
+		if peak.sample == 0 || s.samples-peak.sample >= config.JitterPeakMemory {
+			continue
+		}
+		count++
+		highest = max(highest, peak.height)
+	}
+	if count < config.JitterPeakMinCount {
+		return 0, false
+	}
+	return int(highest / time.Millisecond), true
 }
 
 // percentileMS devuelve el borde superior (ms) del bucket donde cae el percentil p, o -1 sin datos.

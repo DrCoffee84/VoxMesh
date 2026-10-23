@@ -4,10 +4,8 @@ package ui
 
 import (
 	"encoding/binary"
-	"net"
-	"runtime"
-	"runtime/debug"
 	"strconv"
+	"time"
 
 	"voxmesh/internal/audio"
 	"voxmesh/internal/config"
@@ -67,14 +65,15 @@ func (a *App) stopPhoneMic() {
 	}
 }
 
-func (a *App) receivePhonePCM(frame []byte) {
+// receivePhonePCM recibe cada frame del celular con su hora en el horario del servidor (at): un
+// atraso al repartir no parece una pausa.
+func (a *App) receivePhonePCM(frame []byte, at time.Time) {
 	a.playPhonePreview(frame)
 	udp := a.transport.Load()
 	if udp == nil || !a.phoneMicEnabled() {
 		return
 	}
-	// peer nil: sendOutgoingPCM usa la dirección del host ya resuelta (endpointAddr).
-	a.sendOutgoingPCM(frame, udp, nil, a.hostMode.Load())
+	a.sendOutgoingPCM(audio.CapturedFrame{PCM: frame, At: at}, udp)
 }
 
 func (a *App) phoneMicEnabled() bool {
@@ -130,8 +129,8 @@ func (a *App) startMicPreview(input, output string) error {
 	}
 	var engine *audio.Engine
 	var err error
-	engine, err = audio.NewEngine(input, output, func(frame []byte) {
-		payload, shouldPlay := a.prepareOutgoingPCM(frame)
+	engine, err = audio.NewEngine(input, output, func(frame audio.CapturedFrame) {
+		payload, shouldPlay := a.prepareOutgoingPCM(frame.PCM)
 		if shouldPlay && engine != nil {
 			engine.Play(payload)
 		}
@@ -233,26 +232,23 @@ func (a *App) stopSoundboard() {
 	if player != nil {
 		player.Clear()
 	}
-	go func() {
-		runtime.GC()
-		debug.FreeOSMemory()
-	}()
 }
 
 // startAudio abre los dispositivos de la sala (lento: correr fuera del hilo de UI y de
-// receiveLoop) y publica el Engine para la conexión udp.
-func (a *App) startAudio(udp *transport.UDP, peer *net.UDPAddr, host bool) {
+// receiveLoop) y publica el Engine para la conexión udp. Sirve para cualquier rol: el envío mira
+// si es host o cliente en cada frame.
+func (a *App) startAudio(udp *transport.UDP) {
 	cfg := a.conf()
 	inputDevice := cfg.InputDevice
 	if inputDevice == phoneMicInput {
 		inputDevice = config.DefaultDevice
 	}
 	a.resetEncoder()
-	engine, err := audio.NewEngine(inputDevice, cfg.OutputDevice, func(frame []byte) {
+	engine, err := audio.NewEngine(inputDevice, cfg.OutputDevice, func(frame audio.CapturedFrame) {
 		if a.phoneMicEnabled() {
 			return
 		}
-		a.sendOutgoingPCM(frame, udp, peer, host)
+		a.sendOutgoingPCM(frame, udp)
 	})
 	if err != nil {
 		a.setStatus("Audio no disponible: " + err.Error())
@@ -270,11 +266,7 @@ func (a *App) restartAudioInRoom() {
 	a.stopEngine()
 	if udp := a.transport.Load(); udp != nil {
 		a.setStatus("Reiniciando audio en la sala...")
-		var peer *net.UDPAddr
-		if !a.hostMode.Load() {
-			peer = a.endpointAddr()
-		}
-		go a.startAudio(udp, peer, a.hostMode.Load())
+		go a.startAudio(udp)
 	} else {
 		a.setStatus("No estas conectado a ningún servidor")
 	}

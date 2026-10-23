@@ -230,8 +230,107 @@ func TestJitterBuffer_UnderrunWaitsForDelayedPacket(t *testing.T) {
 	if indexOf(out, f3[config.JitterSpliceSamples:FrameSamples-config.JitterSpliceSamples]) < 0 {
 		t.Fatal("delayed frame 3 was not played after the underrun")
 	}
-	if s := j.Stats(); s.Late != 0 || s.Lost() != 0 {
+	s := j.Stats()
+	if s.Late != 0 || s.Lost() != 0 {
 		t.Fatalf("delayed frame must not count as lost or late: %+v", s)
+	}
+	// Misma frase: es un corte, desde que se vació (después del frame 2) hasta los 120 ms.
+	if s.Underruns != 1 || s.Phrases != 1 || s.UnderrunTime < 40*time.Millisecond || s.UnderrunTime > 80*time.Millisecond {
+		t.Fatalf("expected 1 cut of 40–80 ms in 1 phrase: %+v", s)
+	}
+}
+
+func TestJitterBuffer_NewPhraseWaitsForCushion(t *testing.T) {
+	tuning := DefaultJitterTuning()
+	tuning.MinMS, tuning.MaxMS = 100, 300 // colchón de 5 frames con la red perfecta de abajo
+	j := newJitterBufferTuned(tuning, &fakeDecoder{})
+	for i := 0; i < 60; i++ {
+		j.arrival.record(0)
+	}
+	buf := make([]int16, FrameSamples)
+	for n := 0; n < 10; n++ {
+		j.Push(uint32(n), 1, fakePacket(rampFrame(n), nil), jitterT0)
+	}
+	for k := 0; k < 12; k++ { // la frase entera y el buffer queda vacío
+		j.Read(buf, jitterT0.Add(time.Duration(k)*20*time.Millisecond))
+	}
+
+	// Pausa corta (100 ms) y frase nueva: el pre-roll llega junto (3 frames). Antes arrancaba
+	// enseguida con ese colchón de 40 ms; ahora espera los 5 frames del objetivo.
+	at := jitterT0.Add(320 * time.Millisecond)
+	for n := 10; n < 13; n++ {
+		j.Push(uint32(n), 2, fakePacket(rampFrame(n), nil), at)
+	}
+	j.Read(buf, at)
+	if j.playing {
+		t.Fatal("new phrase started with only the pre-roll as cushion")
+	}
+	for n := 13; n < 15; n++ {
+		at = at.Add(20 * time.Millisecond)
+		j.Push(uint32(n), 2, fakePacket(rampFrame(n), nil), at)
+		j.Read(buf, at)
+	}
+	if !j.playing {
+		t.Fatal("new phrase did not start once the cushion was ready")
+	}
+	if s := j.Stats(); s.Phrases != 2 || s.Underruns != 0 {
+		t.Fatalf("a pause between phrases is not a cut: %+v", s)
+	}
+}
+
+func TestJitterBuffer_RepeatedPeaksRaiseTarget(t *testing.T) {
+	j := newTestJitter(300)
+	quiet := func(n int) {
+		for i := 0; i < n; i++ {
+			j.arrival.record(0)
+		}
+	}
+	// Un pico de lag: el enlace se trabó 140 ms y entregó todo junto (cada paquete atrasado un
+	// frame menos que el anterior).
+	peak := func(heightMS int) {
+		for ms := heightMS; ms >= config.JitterPeakThresholdMS; ms -= 20 {
+			j.arrival.record(time.Duration(ms) * time.Millisecond)
+		}
+	}
+	quiet(200)
+	peak(140)
+	quiet(100)
+	// Un pico suelto no cambia nada: el percentil lo deja afuera (pocos paquetes).
+	if got := j.adaptiveTarget(); got != j.minFrames {
+		t.Fatalf("a single peak should not raise the target: %d frames", got)
+	}
+	peak(100)
+	quiet(100)
+	// Dos picos ya son un patrón: el colchón cubre el más alto (140 ms → 7 frames + 1 de margen).
+	if got := j.adaptiveTarget(); got != 8 {
+		t.Fatalf("repeated peaks should be covered: want 8 frames, got %d", got)
+	}
+	// Pasado JitterPeakMemory sin picos, se olvidan.
+	quiet(config.JitterPeakMemory)
+	if got := j.adaptiveTarget(); got != j.minFrames {
+		t.Fatalf("old peaks should be forgotten: %d frames", got)
+	}
+}
+
+func TestJitterBuffer_ShortLagSpikeIsConcealed(t *testing.T) {
+	j := newTestJitter(40)
+	for n := 0; n < 3; n++ {
+		push(j, uint32(n), sineFrame(n, 20000), jitterT0)
+	}
+	// 3 frames y un pico de lag de 40 ms: el hueco se rellena con el PLC que se va apagando, no
+	// con silencio (antes el fade duraba 10 ms y el resto del hueco era un corte).
+	out := readFrames(j, jitterT0, 5)
+	gap := out[3*FrameSamples:]
+	if peakOf(gap[FrameSamples/2:FrameSamples]) < 5000 {
+		t.Fatalf("the lag spike was left silent: peak %d", peakOf(gap[FrameSamples/2:FrameSamples]))
+	}
+	// Llega el frame demorado: sigue la voz, sin perderlo.
+	resumeAt := jitterT0.Add(100 * time.Millisecond)
+	push(j, 3, sineFrame(3, 20000), resumeAt)
+	after := readFrames(j, resumeAt, 2)
+	f3 := sineFrame(3, 20000)
+	if indexOf(after, f3[config.JitterSpliceSamples:FrameSamples-config.JitterSpliceSamples]) < 0 {
+		t.Fatal("delayed frame 3 was not played after the concealed spike")
 	}
 }
 
@@ -240,9 +339,13 @@ func TestJitterBuffer_FadesToSilenceWhenStreamStops(t *testing.T) {
 	for n := 0; n < 3; n++ {
 		push(j, uint32(n), sineFrame(n, 20000), jitterT0)
 	}
-	out := readFrames(j, jitterT0, 6)
-	// Después de los 3 frames y el fade (~10 ms), todo silencio: sin clic ni ruido colgado.
+	out := readFrames(j, jitterT0, 10)
+	// Después de los 3 frames y el fade (~60 ms de PLC que se apaga), todo silencio: sin clic ni
+	// ruido colgado.
 	silentFrom := 3*FrameSamples + config.JitterFadeOutSamples
+	if silentFrom+FrameSamples > len(out) {
+		t.Fatalf("leer más frames: el fade termina en la muestra %d de %d", silentFrom, len(out))
+	}
 	for i := silentFrom; i < len(out); i++ {
 		if out[i] != 0 {
 			t.Fatalf("expected silence after fade, sample %d = %d", i, out[i])

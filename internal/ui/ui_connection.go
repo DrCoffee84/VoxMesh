@@ -42,6 +42,10 @@ func (a *App) stopConnectionAsync() <-chan struct{} {
 		close(done)
 		return done
 	}
+	// Ya mismo: la migración de host y el resto de las goroutines de la conexión no pueden actuar
+	// sobre una sala que se cerró (antes el monitor del cliente seguía y a los segundos se nombraba
+	// host de una sala fantasma).
+	a.connLife.stop()
 	start := time.Now()
 	oldEndpoint := a.endpointText()
 	logging.Infof("stopConnection: cerrando sala/conexión en %s", oldEndpoint)
@@ -85,26 +89,24 @@ func (a *App) stopConnectionAsync() <-chan struct{} {
 			a.soundPlayer = nil
 		}
 		a.soundMu.Unlock()
-		if a.pingStop != nil {
-			close(a.pingStop)
-			a.pingStop = nil
-		}
+		a.hostRole.stop()
 		username := a.conf().Username
+		participant := room.Participant{ID: a.participantID, Username: username, Address: udp.Address().String()}
+		payload, _ := room.Encode(room.Envelope{Kind: room.LeaveMessage, Participant: &participant})
+		leave := transport.Packet{Kind: transport.PacketRoomLeave, Sequence: a.sequence.Add(1), Payload: payload}
 		if !a.hostMode.Load() && oldEndpoint != "" {
-			peer, err := net.ResolveUDPAddr("udp", oldEndpoint)
-			if err == nil {
-				participant := room.Participant{ID: a.participantID, Username: username, Address: udp.Address().String()}
-				payload, _ := room.Encode(room.Envelope{Kind: room.LeaveMessage, Participant: &participant})
-				_ = udp.Send(peer, transport.Packet{Kind: transport.PacketRoomLeave, Sequence: a.sequence.Add(1), Payload: payload})
+			if peer, err := net.ResolveUDPAddr("udp", oldEndpoint); err == nil {
+				sendRepeated(func() { _ = udp.Send(peer, leave) })
 			}
 		} else if a.hostMode.Load() {
-			localPort := uint16(udp.Address().Port)
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			_ = netinfo.UnmapUDP(ctx, localPort)
-			cancel()
-			participant := room.Participant{ID: a.participantID, Username: username, Address: udp.Address().String()}
-			payload, _ := room.Encode(room.Envelope{Kind: room.LeaveMessage, Participant: &participant})
-			udp.Broadcast(transport.Packet{Kind: transport.PacketRoomLeave, Sequence: a.sequence.Add(1), Payload: payload}, nil)
+			// El puerto externo que quedó mapeado (puede no ser el del socket).
+			if external := a.upnpPort.Swap(0); external != 0 {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				_ = netinfo.UnmapUDP(ctx, uint16(external))
+				cancel()
+			}
+			// Los clientes migran ya, sin esperar el período de gracia.
+			sendRepeated(func() { udp.Broadcast(leave, nil) })
 		}
 		if err := udp.Close(); err != nil {
 			logging.Errorf("cerrar UDP: %s", logging.FormatError(err))
@@ -112,6 +114,22 @@ func (a *App) stopConnectionAsync() <-chan struct{} {
 		logging.Infof("stopConnection: recursos liberados para %s (tiempo de ejecución: %v)", oldEndpoint, time.Since(start))
 	}()
 	return done
+}
+
+// El RoomLeave sale varias veces: es un solo paquete UDP y, si se pierde, los demás recién se
+// enteran al vencer el período de gracia.
+const (
+	leaveRepeats = 3
+	leaveSpacing = 50 * time.Millisecond
+)
+
+func sendRepeated(send func()) {
+	for i := range leaveRepeats {
+		if i > 0 {
+			time.Sleep(leaveSpacing)
+		}
+		send()
+	}
 }
 
 func (a *App) createHost() {
@@ -242,7 +260,9 @@ func (a *App) openHost(roomName, username string) {
 		a.initHistory(roomName)
 		a.refreshPeersFromRoom()
 
-		a.pingStop = make(chan struct{})
+		connStop := a.connLife.start()
+		hostStop := a.hostRole.start()
+		failover := room.NewFailover(a.participantID, room.DefaultFailoverTimings())
 
 		port := udp.Address().Port
 		localIP, err := netinfo.LocalIPv4()
@@ -260,13 +280,15 @@ func (a *App) openHost(roomName, username string) {
 
 		a.setStatus("Sala abierta en UDP " + strconv.Itoa(port) + "; buscando IP pública...")
 
-		go a.receiveLoop(udp)
-		go a.pingPeers(udp, a.pingStop)
-		go a.sweepAssetLoop(udp, a.pingStop)
+		failover.Hosting(a.roomState, time.Now())
+		go a.receiveLoop(udp, failover)
+		go a.failoverLoop(udp, failover, connStop)
+		go a.pingPeers(udp, hostStop)
+		go a.sweepAssetLoop(udp, connStop)
 
 		// Inicialización del hardware de audio (Suele ser lo que más traba)
-		go a.startAudio(udp, nil, true)
-		go a.configureHostNetwork(port)
+		go a.startAudio(udp)
+		go a.configureHostNetwork(port, hostStop)
 		a.playEventSound(audio.SFXConnect)
 		logging.Infof("openHost: sala %q iniciada en %s (tiempo de ejecución: %v)", roomName, a.endpointText(), time.Since(start))
 
@@ -289,71 +311,99 @@ func (a *App) openHost(roomName, username string) {
 	}()
 }
 
-func (a *App) configureHostNetwork(startPort int) {
-	maxRetries := 5
-	port := startPort
+// UPnP: el lease se renueva a la mitad, mientras la sala siga abierta.
+const (
+	upnpLeaseSeconds = 3600
+	upnpPortAttempts = 6 // puerto del socket y los 5 siguientes como puerto externo
+)
 
-	for retry := 0; retry <= maxRetries; retry++ {
-		start := time.Now()
-
-		// 1. Intentar UPnP
-		mapContext, cancelMap := context.WithTimeout(context.Background(), 8*time.Second)
-		mapErr := netinfo.TryMapUDP(mapContext, uint16(port), 3600)
-		cancelMap()
-
-		if mapErr != nil {
-			logging.Errorf("UPnP UDP puerto %d: %s", port, logging.FormatError(mapErr))
-		} else {
-			logging.Infof("UPnP UDP activo en el puerto %d (tiempo: %v)", port, time.Since(start))
-		}
-
-		// 2. Obtener IP Pública
-		ipContext, cancelIP := context.WithTimeout(context.Background(), 4*time.Second)
-		ip, ipErr := netinfo.PublicIP(ipContext)
-		cancelIP()
-
-		if ipErr != nil {
-			logging.Errorf("obtener IP pública: %s", logging.FormatError(ipErr))
-			if mapErr == nil {
-				a.setStatus("UPnP activo. IP pública no disponible; usa la dirección local de la sala.")
-				return
-			}
-			a.setStatus("UDP activo. No se pudo abrir UPnP ni obtener IP pública; revisa tu red.")
+// configureHostNetwork abre el puerto en el router (UPnP) y publica la dirección pública de la
+// sala. El socket escucha en listenPort: si el router no acepta ese puerto afuera (otra regla lo
+// ocupa), se prueba otro puerto externo que apunte igual a listenPort y se anuncia ese. Antes se
+// probaba listenPort+1 → listenPort+1, donde nadie escuchaba, y la sala anunciaba un puerto
+// muerto. El mapeo se renueva hasta que se cierre la sala (stop).
+func (a *App) configureHostNetwork(listenPort int, stop <-chan struct{}) {
+	start := time.Now()
+	candidates := make([]uint16, 0, upnpPortAttempts)
+	for offset := range upnpPortAttempts {
+		candidates = append(candidates, uint16(listenPort+offset))
+	}
+	mapContext, cancelMap := context.WithTimeout(context.Background(), 15*time.Second)
+	external, mapErr := netinfo.MapUDP(mapContext, candidates, uint16(listenPort), upnpLeaseSeconds)
+	cancelMap()
+	publicPort := listenPort
+	if mapErr != nil {
+		logging.Errorf("UPnP UDP puerto %d: %s", listenPort, logging.FormatError(mapErr))
+	} else {
+		select {
+		case <-stop:
+			// La sala se cerró mientras el router respondía: stopConnectionAsync no lo vio mapeado.
+			unmapContext, cancelUnmap := context.WithTimeout(context.Background(), 2*time.Second)
+			_ = netinfo.UnmapUDP(unmapContext, external)
+			cancelUnmap()
 			return
+		default:
 		}
+		publicPort = int(external)
+		a.upnpPort.Store(uint32(external))
+		logging.Infof("UPnP UDP activo: puerto externo %d → %d (tiempo: %v)", external, listenPort, time.Since(start))
+		go a.renewHostPort(external, uint16(listenPort), stop)
+	}
 
-		// 3. Guardar estado y actualizar la sala
-		endpoint := net.JoinHostPort(ip.String(), strconv.Itoa(port))
-		a.setEndpoint(endpoint)
-		for i := range a.roomState.Participants {
-			if a.roomState.Participants[i].ID == a.participantID {
-				a.roomState.Participants[i].Address = endpoint
-				break
-			}
-		}
-		if a.roomStore != nil {
-			a.roomStore.Replace(a.roomState)
-		}
-
-		logging.Infof("IP pública obtenida: %s en %s", ip.String(), endpoint)
-
-		// 4. Evaluar éxito o reintento
+	ipContext, cancelIP := context.WithTimeout(context.Background(), 4*time.Second)
+	ip, ipErr := netinfo.PublicIP(ipContext)
+	cancelIP()
+	if ipErr != nil {
+		logging.Errorf("obtener IP pública: %s", logging.FormatError(ipErr))
 		if mapErr == nil {
-			a.setStatus("Sala lista (UPnP): " + endpoint)
-			a.publishRoomCloudFlare()
+			a.setStatus("UPnP activo. IP pública no disponible; usa la dirección local de la sala.")
 			return
 		}
+		a.setStatus("UDP activo. No se pudo abrir UPnP ni obtener IP pública; revisa tu red.")
+		return
+	}
 
-		a.setStatus(fmt.Sprintf("Comparte: %s (UPnP falló en puerto %d)", endpoint, port))
-
-		if retry >= maxRetries {
-			a.setStatus("No se pudo configurar UPnP después de varios intentos.")
-			return
+	endpoint := net.JoinHostPort(ip.String(), strconv.Itoa(publicPort))
+	a.setEndpoint(endpoint)
+	for i := range a.roomState.Participants {
+		if a.roomState.Participants[i].ID == a.participantID {
+			a.roomState.Participants[i].Address = endpoint
+			break
 		}
+	}
+	// Que todos tengan la dirección alcanzable del host (la que usan si después hay que migrar).
+	if udp := a.transport.Load(); udp != nil && a.hostMode.Load() {
+		a.broadcastRoomState(udp, nil)
+	} else if a.roomStore != nil {
+		a.roomStore.Replace(a.roomState)
+	}
+	logging.Infof("IP pública obtenida: %s en %s", ip.String(), endpoint)
 
-		time.Sleep(1 * time.Second)
-		port++
-		a.setStatus(fmt.Sprintf("Reintentando red en puerto %d...", port))
+	if mapErr != nil {
+		a.setStatus(fmt.Sprintf("Comparte: %s (UPnP no funcionó: abrí a mano el puerto UDP %d del router hacia esta PC)", endpoint, listenPort))
+		return
+	}
+	a.setStatus("Sala lista (UPnP): " + endpoint)
+	a.publishRoomCloudFlare()
+}
+
+// renewHostPort renueva el mapeo UPnP a mitad del lease hasta que se cierre la sala. Sin esto el
+// puerto se cerraba a la hora y nadie nuevo podía entrar.
+func (a *App) renewHostPort(external, listenPort uint16, stop <-chan struct{}) {
+	ticker := time.NewTicker(upnpLeaseSeconds * time.Second / 2)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		_, err := netinfo.MapUDP(ctx, []uint16{external}, listenPort, upnpLeaseSeconds)
+		cancel()
+		if err != nil {
+			logging.Errorf("renovar UPnP del puerto %d: %s", external, logging.FormatError(err))
+		}
 	}
 }
 
@@ -478,13 +528,15 @@ func (a *App) connectClient(raw string) {
 		a.setStatus("Conectando con " + raw)
 
 		// Audio (lo más pesado)
-		go a.startAudio(udp, addr, false)
-		a.lastHostSeen.Store(time.Now().UnixNano())
+		go a.startAudio(udp)
 
-		go a.receiveLoop(udp)
-		a.monitorStop = make(chan struct{})
-		go a.monitorHost(udp, a.monitorStop)
-		go a.sweepAssetLoop(udp, a.monitorStop)
+		// Si el RoomHello se pierde, la migración lo reintenta (el host "se calla").
+		failover := room.NewFailover(a.participantID, room.DefaultFailoverTimings())
+		failover.JoinedAsClient(addr.String(), time.Now())
+		connStop := a.connLife.start()
+		go a.receiveLoop(udp, failover)
+		go a.failoverLoop(udp, failover, connStop)
+		go a.sweepAssetLoop(udp, connStop)
 
 		a.playEventSound(audio.SFXConnect)
 		logging.Infof("connectClient: conexión iniciada hacia %s (tiempo de ejecución: %v)", raw, time.Since(start))

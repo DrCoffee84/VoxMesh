@@ -196,6 +196,87 @@ func TestEngine_PlaysOpusStreamWithVolume(t *testing.T) {
 	}
 }
 
+func TestEngine_CaptureQueueReportsDrops(t *testing.T) {
+	e := newEngineState()
+	frame := func(value byte) []byte {
+		pcm := make([]byte, streamFrameBytes)
+		for i := range pcm {
+			pcm[i] = value
+		}
+		return pcm
+	}
+	at := time.Now()
+	// Nadie consume: entran justo los frames de la cola; el resto se tira y se cuenta.
+	const extra = 3
+	for n := 0; n < config.AudioCaptureQueueFrames+extra; n++ {
+		e.captureInput(frame(byte(n)), at.Add(time.Duration(n)*20*time.Millisecond))
+	}
+	if got := len(e.captureFrames); got != config.AudioCaptureQueueFrames {
+		t.Fatalf("queued %d frames, want %d", got, config.AudioCaptureQueueFrames)
+	}
+	if stats := e.TakeCaptureStats(); stats.Frames != config.AudioCaptureQueueFrames+extra || stats.Dropped != extra {
+		t.Fatalf("unexpected capture stats: %+v", stats)
+	}
+	// La goroutine de envío toma uno y devuelve su buffer: el frame siguiente avisa los tirados, así
+	// el que manda avanza la secuencia y los demás los ocultan como pérdida.
+	first := <-e.captureFrames
+	if first.PCM[0] != 0 || first.Dropped != 0 {
+		t.Fatalf("first frame: value %d dropped=%d", first.PCM[0], first.Dropped)
+	}
+	e.captureFree <- first.buf
+	e.captureInput(frame(99), at.Add(time.Second))
+	var last CapturedFrame
+	for len(e.captureFrames) > 0 {
+		last = <-e.captureFrames
+	}
+	if last.PCM[0] != 99 || last.Dropped != extra {
+		t.Fatalf("frame after the drops: value %d dropped=%d, want 99 and %d", last.PCM[0], last.Dropped, extra)
+	}
+}
+
+// El callback de captura corre en el hilo de tiempo real de malgo: no puede pedir memoria.
+func TestEngine_CaptureInputDoesNotAllocate(t *testing.T) {
+	e := newEngineState()
+	input := make([]byte, streamFrameBytes)
+	at := time.Now()
+	consume := func() {
+		e.captureInput(input, at)
+		frame := <-e.captureFrames
+		e.captureFree <- frame.buf
+	}
+	consume() // el buffer de armado crece una sola vez
+	if allocs := testing.AllocsPerRun(100, consume); allocs != 0 {
+		t.Fatalf("captureInput allocates %.1f times per frame", allocs)
+	}
+}
+
+func TestEngine_NetworkStreamSurvivesPauses(t *testing.T) {
+	packets := encodeSine(t, 10, 8000)
+	e := newEngineState()
+	setPlayback(e, 40, nil)
+	for n, packet := range packets {
+		e.PlayStreamSeq("peer", uint32(n), 0, packet)
+	}
+	mixFrames(e, 16) // suena la frase, el fade y queda en silencio
+	idleFor := func(d time.Duration) bool {
+		e.playbackMu.Lock()
+		e.streams["peer"].lastActive = time.Now().Add(-d)
+		e.playbackMu.Unlock()
+		mixFrames(e, 1)
+		e.playbackMu.Lock()
+		defer e.playbackMu.Unlock()
+		_, ok := e.streams["peer"]
+		return ok
+	}
+	// Una pausa de la charla no borra lo medido de la red (antes se purgaba a los 2 s).
+	if !idleFor(5 * time.Second) {
+		t.Fatal("network stream evicted during a pause")
+	}
+	if idleFor(config.JitterStreamIdleEvict + time.Second) {
+		t.Fatal("idle network stream never evicted")
+	}
+}
+
 func TestEngine_OutputFilterRunsPerStream(t *testing.T) {
 	packets := encodeSine(t, 20, 8000)
 	e := newEngineState()

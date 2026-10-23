@@ -21,32 +21,49 @@ import (
 	"voxmesh/internal/version"
 )
 
+// voiceHold es cuánto queda prendido el indicador de voz propia después del último frame mandado.
+const voiceHold = 350 * time.Millisecond
+
+// flashVoiceIndicator marca que se está mandando voz. Corre por cada frame enviado (50 por segundo,
+// en la goroutine de envío), así que solo anota la hora: el indicador se prende con el primer frame
+// y lo apaga sweepVoiceIndicator desde audioMonitorLoop. Antes creaba un timer por frame.
 func (a *App) flashVoiceIndicator() {
-	wasActive := a.voiceActive.Swap(true)
-	if !wasActive && a.voiceIndicator != nil {
-		fyne.Do(func() {
-			a.voiceIndicator.FillColor = color.NRGBA{R: 46, G: 204, B: 113, A: 255}
-			a.voiceIndicator.Refresh()
-		})
+	a.voiceLastAt.Store(time.Now().UnixNano())
+	if a.voiceActive.Swap(true) {
+		return
 	}
+	a.setVoiceIndicator(true)
 	a.markPeerSpeaking(a.participantID, "")
-	a.voiceTimerMu.Lock()
-	if a.voiceTimer != nil {
-		a.voiceTimer.Stop()
+}
+
+// sweepVoiceIndicator apaga el indicador de voz propia cuando pasó voiceHold sin mandar voz; mientras
+// sigue prendido, mantiene el avatar propio como "hablando".
+func (a *App) sweepVoiceIndicator(now time.Time) {
+	if !a.voiceActive.Load() {
+		return
 	}
-	a.voiceTimer = time.AfterFunc(350*time.Millisecond, func() {
-		a.voiceTimerMu.Lock()
-		a.voiceActive.Store(false)
-		a.voiceTimerMu.Unlock()
-		if a.voiceIndicator != nil {
-			fyne.Do(func() {
-				a.voiceIndicator.FillColor = color.NRGBA{R: 100, G: 110, B: 120, A: 255}
-				a.voiceIndicator.Refresh()
-			})
-		}
+	if now.Sub(time.Unix(0, a.voiceLastAt.Load())) < voiceHold {
+		a.markPeerSpeaking(a.participantID, "")
+		return
+	}
+	if a.voiceActive.CompareAndSwap(true, false) {
+		a.setVoiceIndicator(false)
 		a.sweepSpeakingPeers()
+	}
+}
+
+func (a *App) setVoiceIndicator(on bool) {
+	if a.voiceIndicator == nil {
+		return
+	}
+	fill := color.NRGBA{R: 100, G: 110, B: 120, A: 255}
+	if on {
+		fill = color.NRGBA{R: 46, G: 204, B: 113, A: 255}
+	}
+	fyne.Do(func() {
+		a.voiceIndicator.FillColor = fill
+		a.voiceIndicator.Refresh()
 	})
-	a.voiceTimerMu.Unlock()
 }
 
 func newScrollableEntry() *widget.Entry {

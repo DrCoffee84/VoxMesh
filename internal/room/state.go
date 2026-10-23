@@ -92,36 +92,26 @@ func (s *State) Sort() {
 	})
 }
 
-func (s State) NextHost() (Participant, bool) {
-	participants := append([]Participant(nil), s.Participants...)
-	sort.Slice(participants, func(left, right int) bool { return participants[left].Order < participants[right].Order })
-	for _, participant := range participants {
-		if participant.Connected && participant.ID != s.HostID && participant.CanBeHost {
-			return participant, true
+// Candidates devuelve, en el orden de la sala, los participantes que pueden reemplazar al host:
+// conectados, con CanBeHost y sin el host actual. Todos los que tienen el mismo estado calculan la
+// misma lista (Failover).
+func (s State) Candidates() []Participant {
+	var candidates []Participant
+	for _, participant := range s.Participants {
+		if participant.Connected && participant.CanBeHost && participant.ID != s.HostID {
+			candidates = append(candidates, participant)
 		}
 	}
-	return Participant{}, false
+	sort.SliceStable(candidates, func(left, right int) bool { return candidates[left].Order < candidates[right].Order })
+	return candidates
 }
 
-// ElectNextHost promotes exactly the first connected participant after a
-// disconnected host. Callers should broadcast the resulting state together
-// with its incremented epoch.
-func (s *State) ElectNextHost() (Participant, bool) {
-	if s == nil {
-		return Participant{}, false
+// NextHost es el primero de Candidates.
+func (s State) NextHost() (Participant, bool) {
+	if candidates := s.Candidates(); len(candidates) > 0 {
+		return candidates[0], true
 	}
-	for _, participant := range s.Participants {
-		if participant.ID == s.HostID && participant.Connected {
-			return Participant{}, false
-		}
-	}
-	candidate, ok := s.NextHost()
-	if !ok {
-		return Participant{}, false
-	}
-	s.HostID = candidate.ID
-	s.Epoch++
-	return candidate, true
+	return Participant{}, false
 }
 
 func (s State) Validate() error {

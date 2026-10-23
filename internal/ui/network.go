@@ -5,7 +5,6 @@ package ui
 import (
 	"encoding/binary"
 	"net"
-	"strconv"
 	"strings"
 	"time"
 
@@ -18,13 +17,22 @@ import (
 	"voxmesh/internal/transport"
 )
 
-func (a *App) receiveLoop(udp *transport.UDP) {
+// participantTimeout es cuánto puede estar callado un participante antes de que el host lo dé por
+// desconectado. Es el mismo período de gracia en el que el cliente le reintenta al host
+// (room.Failover): un corte breve no lo saca de la sala.
+const participantTimeout = 20 * time.Second
+
+// receiveLoop es el único lector del socket de la conexión. fo es la migración de host de esta
+// conexión: dice qué paquetes de un cliente vienen de su host y decide qué hacer con el estado de
+// otra sala o con el aviso de que el host se va.
+func (a *App) receiveLoop(udp *transport.UDP, fo *room.Failover) {
 	for {
 		packet, addr, err := udp.Receive()
 		if err != nil {
 			logging.Infof("bucle UDP detenido: %s", logging.FormatError(err))
 			return
 		}
+		now := time.Now()
 		// Audio: el host lo reenvía antes que nada, sin esperar a procesarlo.
 		if packet.Kind == transport.PacketAudio && a.hostMode.Load() {
 			udp.AddPeer(addr)
@@ -35,187 +43,236 @@ func (a *App) receiveLoop(udp *transport.UDP) {
 			logging.Tracef("Tráfico UDP recibido: tipo=%d, origen=%s, tamaño=%d bytes", packet.Kind, addrStr, len(packet.Payload))
 		}
 		if a.hostMode.Load() {
-			udp.AddPeer(addr)
-			for index := range a.roomState.Participants {
-				if a.roomState.Participants[index].Address == addrStr {
-					a.roomState.Participants[index].LastSeenUTC = time.Now().UTC()
-					break
-				}
-			}
-			if packet.Kind == transport.PacketRoomHello {
-				logging.Infof("Procesando PacketRoomHello de %s", addrStr)
-				envelope, err := room.Decode(packet.Payload)
-				if err != nil || envelope.Participant == nil {
-					continue
-				}
-				envelope.Participant.Address = addrStr
-				envelope.Participant.Connected = true
-				envelope.Participant.LastSeenUTC = time.Now().UTC()
+			a.handleHostPacket(udp, fo, packet, addr, addrStr, now)
+		} else {
+			a.handleClientPacket(udp, fo, packet, addr, addrStr, now)
+		}
+	}
+}
 
-				// Asegurar nombre único: si ya existe otro participante conectado con el mismo nombre, añadir _PUTO
-				candidateName := strings.TrimSpace(envelope.Participant.Username)
-				if candidateName == "" {
-					candidateName = config.DefaultUsername
-				}
-				for {
-					taken := false
-					for _, p := range a.roomState.Participants {
-						if p.Connected && p.ID != envelope.Participant.ID && strings.EqualFold(strings.TrimSpace(p.Username), candidateName) {
-							taken = true
-							break
-						}
-					}
-					if !taken {
-						break
-					}
-					candidateName += "_PUTO"
-				}
-				envelope.Participant.Username = candidateName
-
-				a.roomState.Participants = append([]room.Participant(nil), a.roomState.Participants...)
-				if a.roomStore != nil {
-					a.roomStore.Replace(a.roomState)
-				}
-				known := false
-				for index := range a.roomState.Participants {
-					if a.roomState.Participants[index].ID == envelope.Participant.ID {
-						a.roomState.Participants[index] = *envelope.Participant
-						known = true
-						break
-					}
-				}
-				if !known {
-					envelope.Participant.Order = len(a.roomState.Participants)
-					a.roomState.Participants = append(a.roomState.Participants, *envelope.Participant)
-				}
-				statePayload, _ := room.Encode(room.Envelope{Kind: room.StateMessage, Room: &a.roomState})
-				_ = udp.Send(addr, transport.Packet{Kind: transport.PacketRoomState, Sequence: a.sequence.Add(1), Payload: statePayload})
-				a.refreshPeersFromRoom()
-				if candidate, ok := a.roomState.NextHost(); ok {
-					if hostIP, _, err := net.SplitHostPort(candidate.Address); err == nil && hostIP != "" {
-						candidateTarget := net.JoinHostPort(hostIP, strconv.Itoa(config.DefaultListenPort))
-						a.updateConfig(func(c *config.Config) { c.LastPeer = candidateTarget })
-						a.saveConfig()
-						fyne.Do(func() {
-							if a.endpointEntry != nil {
-								a.endpointEntry.SetText(candidateTarget)
-							}
-						})
-					}
-				}
-				logging.Infof("Cliente conectado: %s (%s)", envelope.Participant.Username, addrStr)
-				joinedUser := envelope.Participant.Username
-				go func(uName string) {
-					if a.roomStore != nil {
-						a.roomStore.Replace(a.roomState)
-					}
-					a.addSystemMessage(uName + " se conectó.")
-				}(joinedUser)
-				a.playEventSound(audio.SFXConnect)
-				udp.Broadcast(transport.Packet{Kind: transport.PacketRoomState, Sequence: a.sequence.Add(1), Payload: statePayload}, addr)
-			} else if packet.Kind == transport.PacketRoomLeave {
-				envelope, err := room.Decode(packet.Payload)
-				username := ""
-				participantID := ""
-				if err == nil && envelope.Participant != nil {
-					username = envelope.Participant.Username
-					participantID = envelope.Participant.ID
-				}
-				a.handleParticipantLeave(participantID, username, addr, udp)
-			} else if packet.Kind == transport.PacketHello {
-				username := strings.TrimSpace(string(packet.Payload))
-				if username == "" {
-					username = config.DefaultUsername
-				}
-				candidate := username
-				selfName := a.conf().Username
-				a.peerMu.Lock()
-				for {
-					taken := false
-					for _, p := range a.peerNames {
-						if p.address != addrStr && strings.EqualFold(p.name, candidate) {
-							taken = true
-							break
-						}
-					}
-					if !taken && strings.EqualFold(selfName, candidate) {
-						taken = true
-					}
-					if !taken {
-						break
-					}
-					candidate += "_PUTO"
-				}
-				a.peerMu.Unlock()
-				if a.addPeer(candidate, addrStr) {
-					a.playEventSound(audio.SFXConnect)
-				}
-			}
-			if packet.Kind == transport.PacketPing && len(packet.Payload) == 8 {
-				_ = udp.Send(addr, transport.Packet{Kind: transport.PacketPong, Sequence: packet.Sequence, Payload: packet.Payload})
-			}
-			if packet.Kind == transport.PacketPong && len(packet.Payload) == 8 {
-				timestamp := int64(binary.BigEndian.Uint64(packet.Payload))
-				a.updatePeerLag(addrStr, time.Since(time.Unix(0, timestamp)))
-			}
-			if packet.Kind == transport.PacketAudio {
-				a.handleAudioPacket(packet)
-			}
-			if packet.Kind == transport.PacketChat {
-				a.handleChatPacket(packet.Payload)
-				udp.Broadcast(packet, addr)
-			}
-			if packet.Kind == transport.PacketChatSync {
-				a.handleSyncPacket(udp, addr, packet.Payload, true)
-			}
-			if packet.Kind == transport.PacketAssetChunk {
-				a.handleAssetChunk(packet.Payload, addrStr)
-				udp.Broadcast(packet, addr)
-			}
-			if packet.Kind == transport.PacketAssetMissing {
-				a.handleAssetMissing(udp, addr, packet.Payload)
-			}
-			if packet.Kind == transport.PacketRoomMute {
-				a.handleMutePacket(udp, addr, packet.Payload)
-			}
-		} else if packet.Kind == transport.PacketPing {
-			a.lastHostSeen.Store(time.Now().UnixNano())
+func (a *App) handleHostPacket(udp *transport.UDP, fo *room.Failover, packet transport.Packet, addr *net.UDPAddr, addrStr string, now time.Time) {
+	udp.AddPeer(addr)
+	for index := range a.roomState.Participants {
+		if a.roomState.Participants[index].Address == addrStr {
+			a.roomState.Participants[index].LastSeenUTC = now.UTC()
+			break
+		}
+	}
+	switch packet.Kind {
+	case transport.PacketRoomHello:
+		a.handleRoomHello(udp, fo, packet.Payload, addr, addrStr, now)
+	case transport.PacketRoomState:
+		// Estado de otro host (una migración mientras yo estaba cortado, o dos hosts que se
+		// encuentran): si tiene más autoridad, fo decide bajarse y failoverLoop lo hace.
+		if envelope, err := room.Decode(packet.Payload); err == nil && envelope.Room != nil {
+			fo.StateFrom(*envelope.Room, addrStr, now)
+		}
+	case transport.PacketRoomLeave:
+		envelope, err := room.Decode(packet.Payload)
+		username, participantID := "", ""
+		if err == nil && envelope.Participant != nil {
+			username = envelope.Participant.Username
+			participantID = envelope.Participant.ID
+		}
+		a.handleParticipantLeave(participantID, username, addr, udp)
+	case transport.PacketHello:
+		a.handleLegacyHello(packet.Payload, addrStr)
+	case transport.PacketPing:
+		if len(packet.Payload) == 8 {
 			_ = udp.Send(addr, transport.Packet{Kind: transport.PacketPong, Sequence: packet.Sequence, Payload: packet.Payload})
-		} else if packet.Kind == transport.PacketPong && len(packet.Payload) == 8 {
+		}
+	case transport.PacketPong:
+		if len(packet.Payload) == 8 {
 			timestamp := int64(binary.BigEndian.Uint64(packet.Payload))
 			a.updatePeerLag(addrStr, time.Since(time.Unix(0, timestamp)))
-		} else if packet.Kind == transport.PacketRoomState {
-			logging.Infof("Procesando PacketRoomState de %s", addrStr)
-			envelope, err := room.Decode(packet.Payload)
-			if err == nil && envelope.Room != nil {
-				a.handleRoomState(*envelope.Room, udp)
-			}
-		} else if packet.Kind == transport.PacketRoomLeave {
-			envelope, err := room.Decode(packet.Payload)
-			username := "El host"
-			if err == nil && envelope.Participant != nil && envelope.Participant.Username != "" {
-				username = envelope.Participant.Username
-			}
-			logging.Infof("Notificación de desconexión recibida: %s", username)
-			go a.addSystemMessage(username + " se desconectó.")
-			a.playEventSound(audio.SFXDisconnect)
-			if envelope.Participant != nil {
-				a.roomState.MarkDisconnected(envelope.Participant.ID)
-				a.refreshPeersFromRoom()
-			}
-		} else if packet.Kind == transport.PacketChat {
-			a.handleChatPacket(packet.Payload)
-		} else if packet.Kind == transport.PacketChatSync {
-			a.handleSyncPacket(udp, addr, packet.Payload, false)
-		} else if packet.Kind == transport.PacketAssetChunk {
-			a.handleAssetChunk(packet.Payload, addrStr)
-		} else if packet.Kind == transport.PacketAssetMissing {
-			a.handleAssetMissing(udp, addr, packet.Payload)
-		} else if packet.Kind == transport.PacketHello {
-			a.setStatus("Conectado a " + addrStr)
-		} else if packet.Kind == transport.PacketAudio {
+		}
+	case transport.PacketAudio:
+		a.handleAudioPacket(packet)
+	case transport.PacketChat:
+		a.handleChatPacket(packet.Payload)
+		udp.Broadcast(packet, addr)
+	case transport.PacketChatSync:
+		a.handleSyncPacket(udp, addr, packet.Payload, true)
+	case transport.PacketAssetChunk:
+		a.handleAssetChunk(packet.Payload, addrStr)
+		// Reenvío con ritmo y sin esperar: receiveLoop sigue entregando la voz. Si la cola
+		// está llena, a quien le falte el chunk lo pide de nuevo (AssetMissing).
+		udp.TryBroadcastBulk(packet, addr)
+	case transport.PacketAssetMissing:
+		a.handleAssetMissing(udp, addr, packet.Payload)
+	case transport.PacketRoomMute:
+		a.handleMutePacket(udp, addr, packet.Payload)
+	}
+}
+
+// handleClientPacket: del host cuenta todo; de otros solo lo que sirve para migrar (el estado de
+// un host nuevo, el RoomHello de alguien que me pide entrar, pings). Así nadie ajeno mete estado,
+// audio ni chat, y un ping de cualquiera no hace creer que el host sigue vivo.
+func (a *App) handleClientPacket(udp *transport.UDP, fo *room.Failover, packet transport.Packet, addr *net.UDPAddr, addrStr string, now time.Time) {
+	fromHost := fo.Seen(addrStr, now) == room.FromHost
+	switch packet.Kind {
+	case transport.PacketPing:
+		// A cualquiera: durante una migración el Pong abre el router de los dos lados.
+		_ = udp.Send(addr, transport.Packet{Kind: transport.PacketPong, Sequence: packet.Sequence, Payload: packet.Payload})
+	case transport.PacketPong:
+		if len(packet.Payload) == 8 {
+			timestamp := int64(binary.BigEndian.Uint64(packet.Payload))
+			a.updatePeerLag(addrStr, time.Since(time.Unix(0, timestamp)))
+		}
+	case transport.PacketRoomState:
+		envelope, err := room.Decode(packet.Payload)
+		if err != nil || envelope.Room == nil {
+			return
+		}
+		if !fromHost {
+			fo.StateFrom(*envelope.Room, addrStr, now)
+			return
+		}
+		logging.Infof("Procesando PacketRoomState de %s", addrStr)
+		a.handleRoomState(*envelope.Room, udp)
+		fo.HostState(*envelope.Room, now)
+	case transport.PacketRoomHello:
+		// Alguien que también perdió al host me pide entrar: si me toca, soy el host nuevo.
+		if envelope, err := room.Decode(packet.Payload); err == nil && envelope.Participant != nil {
+			fo.HelloFrom(envelope.Participant.ID, now)
+		}
+	case transport.PacketRoomLeave:
+		if fromHost {
+			a.handleHostLeave(packet.Payload, fo, now)
+		}
+	case transport.PacketHello:
+		a.setStatus("Conectado a " + addrStr)
+	case transport.PacketAudio:
+		if fromHost {
 			a.handleAudioPacket(packet)
 		}
+	case transport.PacketChat:
+		if fromHost {
+			a.handleChatPacket(packet.Payload)
+		}
+	case transport.PacketChatSync:
+		if fromHost {
+			a.handleSyncPacket(udp, addr, packet.Payload, false)
+		}
+	case transport.PacketAssetChunk:
+		if fromHost {
+			a.handleAssetChunk(packet.Payload, addrStr)
+		}
+	case transport.PacketAssetMissing:
+		if fromHost {
+			a.handleAssetMissing(udp, addr, packet.Payload)
+		}
+	}
+}
+
+// handleRoomHello (host): alguien entra, vuelve después de un corte o llega tras una migración.
+// Un RoomHello repetido de alguien que ya está (los reintentos de la reconexión y la migración)
+// solo recibe el estado de nuevo: sin aviso, sonido ni difusión.
+func (a *App) handleRoomHello(udp *transport.UDP, fo *room.Failover, payload []byte, addr *net.UDPAddr, addrStr string, now time.Time) {
+	envelope, err := room.Decode(payload)
+	if err != nil || envelope.Participant == nil {
+		return
+	}
+	joining := envelope.Participant
+	fo.HelloFrom(joining.ID, now)
+	for _, participant := range a.roomState.Participants {
+		if participant.ID == joining.ID && participant.Connected && participant.Address == addrStr {
+			a.sendRoomState(udp, addr)
+			return
+		}
+	}
+	logging.Infof("Procesando PacketRoomHello de %s", addrStr)
+	joining.Address = addrStr
+	joining.Connected = true
+	joining.LastSeenUTC = now.UTC()
+
+	// Asegurar nombre único: si ya existe otro participante conectado con el mismo nombre, añadir _PUTO
+	candidateName := strings.TrimSpace(joining.Username)
+	if candidateName == "" {
+		candidateName = config.DefaultUsername
+	}
+	for {
+		taken := false
+		for _, p := range a.roomState.Participants {
+			if p.Connected && p.ID != joining.ID && strings.EqualFold(strings.TrimSpace(p.Username), candidateName) {
+				taken = true
+				break
+			}
+		}
+		if !taken {
+			break
+		}
+		candidateName += "_PUTO"
+	}
+	joining.Username = candidateName
+
+	a.roomState.Participants = append([]room.Participant(nil), a.roomState.Participants...)
+	known := false
+	for index := range a.roomState.Participants {
+		if a.roomState.Participants[index].ID == joining.ID {
+			joining.Order = a.roomState.Participants[index].Order
+			a.roomState.Participants[index] = *joining
+			known = true
+			break
+		}
+	}
+	if !known {
+		joining.Order = len(a.roomState.Participants)
+		a.roomState.Participants = append(a.roomState.Participants, *joining)
+	}
+	if a.roomStore != nil {
+		a.roomStore.Replace(a.roomState)
+	}
+	fo.Hosting(a.roomState, now)
+	a.sendRoomState(udp, addr)
+	a.refreshPeersFromRoom()
+	// Si me voy, la dirección para volver es la del que queda de host: la que vio este socket (su
+	// salida a internet), no la IP con el puerto por defecto.
+	if candidate, ok := a.roomState.NextHost(); ok && candidate.Address != "" {
+		candidateTarget := candidate.Address
+		a.updateConfig(func(c *config.Config) { c.LastPeer = candidateTarget })
+		a.saveConfig()
+		fyne.Do(func() {
+			if a.endpointEntry != nil {
+				a.endpointEntry.SetText(candidateTarget)
+			}
+		})
+	}
+	logging.Infof("Cliente conectado: %s (%s)", joining.Username, addrStr)
+	joinedUser := joining.Username
+	go a.addSystemMessage(joinedUser + " se conectó.")
+	a.playEventSound(audio.SFXConnect)
+	a.broadcastRoomState(udp, addr)
+}
+
+// handleLegacyHello (host): PacketHello de versiones viejas, solo para mostrar el nombre.
+func (a *App) handleLegacyHello(payload []byte, addrStr string) {
+	username := strings.TrimSpace(string(payload))
+	if username == "" {
+		username = config.DefaultUsername
+	}
+	candidate := username
+	selfName := a.conf().Username
+	a.peerMu.Lock()
+	for {
+		taken := false
+		for _, p := range a.peerNames {
+			if p.address != addrStr && strings.EqualFold(p.name, candidate) {
+				taken = true
+				break
+			}
+		}
+		if !taken && strings.EqualFold(selfName, candidate) {
+			taken = true
+		}
+		if !taken {
+			break
+		}
+		candidate += "_PUTO"
+	}
+	a.peerMu.Unlock()
+	if a.addPeer(candidate, addrStr) {
+		a.playEventSound(audio.SFXConnect)
 	}
 }
 
@@ -264,8 +321,41 @@ func (a *App) handleParticipantLeave(participantID, username string, addr *net.U
 	udp.Broadcast(transport.Packet{Kind: transport.PacketRoomState, Sequence: a.sequence.Add(1), Payload: statePayload}, addr)
 }
 
+// handleHostLeave (cliente): el host avisa que se va. Llega repetido (UDP puede perder uno): se
+// atiende una vez. fo arranca la migración ya, sin esperar el período de gracia.
+func (a *App) handleHostLeave(payload []byte, fo *room.Failover, now time.Time) {
+	envelope, err := room.Decode(payload)
+	if err != nil || envelope.Participant == nil {
+		return
+	}
+	leaving := envelope.Participant
+	connected := false
+	for _, participant := range a.roomState.Participants {
+		if participant.ID == leaving.ID {
+			connected = participant.Connected
+			break
+		}
+	}
+	if !connected {
+		return
+	}
+	username := leaving.Username
+	if username == "" {
+		username = "El host"
+	}
+	logging.Infof("Notificación de desconexión recibida: %s", username)
+	go a.addSystemMessage(username + " se desconectó.")
+	a.playEventSound(audio.SFXDisconnect)
+	a.roomState.MarkDisconnected(leaving.ID)
+	a.refreshPeersFromRoom()
+	if leaving.ID == a.roomState.HostID {
+		fo.HostLeft(now)
+	}
+}
+
+// handleRoomState (cliente) aplica el estado que manda el host. El cambio de host lo decide
+// room.Failover (HostState), no acá.
 func (a *App) handleRoomState(state room.State, udp *transport.UDP) {
-	previousHost := a.roomState.HostID
 	for _, p := range state.Participants {
 		if p.ID == a.participantID {
 			if oldName := a.conf().Username; p.Username != "" && p.Username != oldName {
@@ -308,36 +398,19 @@ func (a *App) handleRoomState(state room.State, udp *transport.UDP) {
 	if state.HostID == a.participantID || a.hostMode.Load() {
 		return
 	}
-	if previousHost != "" && state.HostID != previousHost {
-		for _, participant := range state.Participants {
-			if participant.ID == state.HostID {
-				address, err := net.ResolveUDPAddr("udp", participant.Address)
-				if err == nil && address.IP != nil && !address.IP.IsUnspecified() {
-					newEndpoint := address.String()
-					a.setEndpoint(newEndpoint)
-					a.updateConfig(func(c *config.Config) { c.LastPeer = newEndpoint })
-					a.saveConfig()
-					fyne.Do(func() {
-						if a.endpointEntry != nil {
-							a.endpointEntry.SetText(newEndpoint)
-						}
-					})
-					// Abrir malgo tarda cientos de ms (segundos con Bluetooth): fuera de receiveLoop,
-					// que tiene que seguir entregando el audio de los demás.
-					a.stopEngine()
-					go a.startAudio(udp, address, false)
-					a.requestSoundSync()
-					a.sendRoomHello(udp, address)
-					a.sendHistorySync(udp, address)
-				}
-				break
-			}
-		}
-	}
 	go a.maybeSendSoundSync(udp)
 }
 
+// sendRoomHello se presenta al host (al conectar y al pasarse a un host nuevo) y le pide el
+// historial que falta.
 func (a *App) sendRoomHello(udp *transport.UDP, address *net.UDPAddr) {
+	a.sendHelloOnly(udp, address)
+	a.sendHistorySync(udp, address)
+}
+
+// sendHelloOnly es el RoomHello solo: los reintentos de la reconexión y la migración (cada 500 ms
+// a 2 s) no repiten el pedido de historial.
+func (a *App) sendHelloOnly(udp *transport.UDP, address *net.UDPAddr) {
 	cfg := a.conf()
 	participant := room.Participant{
 		ID:          a.participantID,
@@ -348,9 +421,24 @@ func (a *App) sendRoomHello(udp *transport.UDP, address *net.UDPAddr) {
 		Muted:       a.isMuted.Load(),
 		LastSeenUTC: time.Now().UTC(),
 	}
-	payload, _ := room.Encode(room.Envelope{Kind: room.HelloMessage, Room: &a.roomState, Participant: &participant})
+	payload, _ := room.Encode(room.Envelope{Kind: room.HelloMessage, Participant: &participant})
 	_ = udp.Send(address, transport.Packet{Kind: transport.PacketRoomHello, Sequence: a.sequence.Add(1), Payload: payload})
-	a.sendHistorySync(udp, address)
+}
+
+// sendPing manda un ping con la hora (el Pong de vuelta mide el lag).
+func (a *App) sendPing(udp *transport.UDP, address *net.UDPAddr) {
+	payload := make([]byte, 8)
+	binary.BigEndian.PutUint64(payload, uint64(time.Now().UnixNano()))
+	_ = udp.Send(address, transport.Packet{Kind: transport.PacketPing, Sequence: a.sequence.Add(1), Payload: payload})
+}
+
+// sendRoomState le manda el estado de la sala a uno solo.
+func (a *App) sendRoomState(udp *transport.UDP, address *net.UDPAddr) {
+	payload, err := room.Encode(room.Envelope{Kind: room.StateMessage, Room: &a.roomState})
+	if err != nil {
+		return
+	}
+	_ = udp.Send(address, transport.Packet{Kind: transport.PacketRoomState, Sequence: a.sequence.Add(1), Payload: payload})
 }
 
 // publishMuteState comunica el mute propio a la sala (correr fuera del hilo de UI). Muteado no
@@ -372,7 +460,7 @@ func (a *App) publishMuteState() {
 	a.sendMuteState(udp)
 }
 
-// sendMuteState avisa al host el mute propio. UDP puede perderlo: monitorHost lo reenvía
+// sendMuteState avisa al host el mute propio. UDP puede perderlo: failoverLoop lo reenvía
 // mientras el PacketRoomState del host no refleje el valor local (ver selfMuteSynced).
 func (a *App) sendMuteState(udp *transport.UDP) {
 	hostAddr := a.endpointAddr()
@@ -405,8 +493,7 @@ func (a *App) handleMutePacket(udp *transport.UDP, addr *net.UDPAddr, payload []
 		return
 	}
 	if !a.roomState.SetMuted(envelope.Participant.ID, addr.String(), envelope.Participant.Muted) {
-		statePayload, _ := room.Encode(room.Envelope{Kind: room.StateMessage, Room: &a.roomState})
-		_ = udp.Send(addr, transport.Packet{Kind: transport.PacketRoomState, Sequence: a.sequence.Add(1), Payload: statePayload})
+		a.sendRoomState(udp, addr)
 		return
 	}
 	logging.Infof("Mute de %s (%s): %v", envelope.Participant.ID, addr.String(), envelope.Participant.Muted)
@@ -423,95 +510,8 @@ func (a *App) broadcastRoomState(udp *transport.UDP, except *net.UDPAddr) {
 	udp.Broadcast(transport.Packet{Kind: transport.PacketRoomState, Sequence: a.sequence.Add(1), Payload: statePayload}, except)
 }
 
-func (a *App) monitorHost(udp *transport.UDP, stop <-chan struct{}) {
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-	var failedHost string
-	var candidateID string
-	var candidateDeadline time.Time
-	for {
-		select {
-		case <-stop:
-			return
-		case <-ticker.C:
-			if !a.hostMode.Load() {
-				if hostAddr := a.endpointAddr(); hostAddr != nil {
-					payload := make([]byte, 8)
-					binary.BigEndian.PutUint64(payload, uint64(time.Now().UnixNano()))
-					_ = udp.Send(hostAddr, transport.Packet{Kind: transport.PacketPing, Sequence: a.sequence.Add(1), Payload: payload})
-				}
-				if !a.selfMuteSynced() {
-					a.sendMuteState(udp)
-				}
-				a.maybeSendSoundSync(udp)
-			}
-			if a.hostMode.Load() || time.Since(time.Unix(0, a.lastHostSeen.Load())) < 6*time.Second {
-				continue
-			}
-			if failedHost == "" {
-				failedHost = a.roomState.HostID
-				a.roomState.MarkDisconnected(failedHost)
-				a.addSystemMessage("El host se desconectó.")
-			}
-			candidate, ok := a.roomState.NextHost()
-			if !ok {
-				return
-			}
-			if candidate.ID == a.participantID {
-				a.becomeHost(udp)
-				return
-			}
-			if candidate.ID != candidateID {
-				candidateID = candidate.ID
-				candidateDeadline = time.Now().Add(6 * time.Second)
-				continue
-			}
-			if time.Now().After(candidateDeadline) {
-				a.addSystemMessage("El candidato " + candidate.Username + " no está disponible.")
-				a.roomState.MarkDisconnected(candidate.ID)
-				candidateID = ""
-			}
-		}
-	}
-}
-
-func (a *App) becomeHost(udp *transport.UDP) {
-	logging.Infof("Migración iniciada: asumiendo el rol de host")
-	a.hostMode.Store(true)
-	a.roomState.HostID = a.participantID
-	a.roomState.Epoch++
-	for i := range a.roomState.Participants {
-		if a.roomState.Participants[i].ID == a.participantID {
-			a.roomState.Participants[i].CanBeHost = true
-			a.roomState.Participants[i].Muted = a.isMuted.Load()
-			break
-		}
-	}
-	go a.configureHostNetwork(udp.Address().Port)
-	for _, participant := range a.roomState.Participants {
-		if participant.ID == a.participantID {
-			continue
-		}
-		address, err := net.ResolveUDPAddr("udp", participant.Address)
-		if err == nil {
-			udp.AddPeer(address)
-		}
-	}
-	a.stopEngine()
-	a.startAudio(udp, nil, true)
-	a.addSystemMessage(a.conf().Username + " será el nuevo host.")
-	a.addSystemMessage("Creando nuevamente la sala...")
-	payload, _ := room.Encode(room.Envelope{Kind: room.StateMessage, Room: &a.roomState})
-	udp.Broadcast(transport.Packet{Kind: transport.PacketRoomState, Sequence: a.sequence.Add(1), Payload: payload}, nil)
-	a.addSystemMessage("Sala disponible.")
-	a.addSystemMessage("Reconectando participantes...")
-	if a.pingStop == nil {
-		a.pingStop = make(chan struct{})
-	}
-	go a.pingPeers(udp, a.pingStop)
-	go a.sweepAssetLoop(udp, a.pingStop)
-}
-
+// pingPeers (host) mide el lag de cada peer y da de baja a los que se callaron más de
+// participantTimeout.
 func (a *App) pingPeers(udp *transport.UDP, stop <-chan struct{}) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -522,16 +522,14 @@ func (a *App) pingPeers(udp *transport.UDP, stop <-chan struct{}) {
 		case <-ticker.C:
 			now := time.Now().UTC()
 			for _, peer := range udp.Peers() {
-				payload := make([]byte, 8)
-				binary.BigEndian.PutUint64(payload, uint64(time.Now().UnixNano()))
-				_ = udp.Send(peer, transport.Packet{Kind: transport.PacketPing, Sequence: a.sequence.Add(1), Payload: payload})
+				a.sendPing(udp, peer)
 			}
 			for index := range a.roomState.Participants {
 				p := &a.roomState.Participants[index]
 				if p.ID == a.participantID || !p.Connected {
 					continue
 				}
-				if !p.LastSeenUTC.IsZero() && now.Sub(p.LastSeenUTC) > 8*time.Second {
+				if !p.LastSeenUTC.IsZero() && now.Sub(p.LastSeenUTC) > participantTimeout {
 					peerAddr, _ := net.ResolveUDPAddr("udp", p.Address)
 					a.handleParticipantLeave(p.ID, p.Username, peerAddr, udp)
 				}

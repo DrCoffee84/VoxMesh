@@ -48,9 +48,12 @@ type portMapper interface {
 
 type clientFactory func(*goupnp.RootDevice, *url.URL) ([]portMapper, error)
 
-// TryMapUDP attempts UPnP port forwarding and returns whether it succeeded.
-// Routers without UPnP simply return an error; hosting can continue manually.
-func TryMapUDP(ctx context.Context, localPort uint16, lifetime uint32) error {
+// MapUDP abre por UPnP el primer puerto externo de candidates que el router acepte, siempre hacia
+// internalPort de esta PC (donde escucha el socket), y devuelve cuál quedó. Un puerto externo
+// ocupado por otra regla (ConflictInMappingEntry) pasa al siguiente candidato. lifetime es el
+// lease en segundos: hay que volver a llamarlo antes de que venza. Sin UPnP en el router devuelve
+// error; se puede abrir el puerto a mano.
+func MapUDP(ctx context.Context, candidates []uint16, internalPort uint16, lifetime uint32) (uint16, error) {
 	attempts := []struct {
 		name    string
 		urn     string
@@ -93,16 +96,16 @@ func TryMapUDP(ctx context.Context, localPort uint16, lifetime uint32) error {
 			failures = append(failures, fmt.Errorf("%s: no gateway found", attempt.name))
 			continue
 		}
-		if err := mapDevices(ctx, localPort, lifetime, attempt.name, devices, attempt.clients); err == nil {
-			return nil
-		} else {
-			failures = append(failures, err)
+		external, err := mapDevices(ctx, candidates, internalPort, lifetime, attempt.name, devices, attempt.clients)
+		if err == nil {
+			return external, nil
 		}
+		failures = append(failures, err)
 	}
-	return fmt.Errorf("UPnP UDP port mapping failed: %w", errors.Join(failures...))
+	return 0, fmt.Errorf("UPnP UDP port mapping failed: %w", errors.Join(failures...))
 }
 
-func mapDevices(ctx context.Context, localPort uint16, lifetime uint32, name string, devices []goupnp.MaybeRootDevice, clients clientFactory) error {
+func mapDevices(ctx context.Context, candidates []uint16, internalPort uint16, lifetime uint32, name string, devices []goupnp.MaybeRootDevice, clients clientFactory) (uint16, error) {
 	var failures []error
 	for _, device := range devices {
 		if device.Err != nil {
@@ -132,14 +135,19 @@ func mapDevices(ctx context.Context, localPort uint16, lifetime uint32, name str
 			continue
 		}
 		for _, mapper := range mappers {
-			err = mapper.AddPortMappingCtx(ctx, "", localPort, "UDP", localPort, localIP.String(), true, "VoxMesh", lifetime)
-			if err == nil {
-				return nil
+			for _, external := range candidates {
+				err = mapper.AddPortMappingCtx(ctx, "", external, "UDP", internalPort, localIP.String(), true, "VoxMesh", lifetime)
+				if err == nil {
+					return external, nil
+				}
+				failures = append(failures, fmt.Errorf("%s mapping %d to %s:%d: %w", name, external, localIP, internalPort, err))
+				if ctx.Err() != nil {
+					return 0, errors.Join(failures...)
+				}
 			}
-			failures = append(failures, fmt.Errorf("%s mapping to %s: %w", name, localIP, err))
 		}
 	}
-	return errors.Join(failures...)
+	return 0, errors.Join(failures...)
 }
 
 func asPortMappers[T portMapper](clients []T) []portMapper {
@@ -150,8 +158,8 @@ func asPortMappers[T portMapper](clients []T) []portMapper {
 	return mappers
 }
 
-// UnmapUDP removes the UPnP port forwarding rule for the specified local port.
-func UnmapUDP(ctx context.Context, localPort uint16) error {
+// UnmapUDP borra la regla UPnP del puerto externo que devolvió MapUDP.
+func UnmapUDP(ctx context.Context, externalPort uint16) error {
 	attempts := []struct {
 		name    string
 		urn     string
@@ -197,7 +205,7 @@ func UnmapUDP(ctx context.Context, localPort uint16) error {
 				continue
 			}
 			for _, mapper := range mappers {
-				_ = mapper.DeletePortMappingCtx(ctx, "", localPort, "UDP")
+				_ = mapper.DeletePortMappingCtx(ctx, "", externalPort, "UDP")
 			}
 		}
 	}

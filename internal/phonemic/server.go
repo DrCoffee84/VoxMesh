@@ -27,6 +27,7 @@ import (
 	"github.com/skip2/go-qrcode"
 	"nhooyr.io/websocket"
 
+	"voxmesh/internal/audio"
 	"voxmesh/internal/config"
 	"voxmesh/internal/logging"
 )
@@ -57,7 +58,7 @@ type Server struct {
 	username        string
 	connected       bool
 	sample          []byte
-	onPCM           func([]byte)
+	onPCM           func(frame []byte, at time.Time)
 	onStatus        func(string)
 	frames          chan []byte
 	bufferEnabled   bool
@@ -69,7 +70,10 @@ type Server struct {
 	stopOnce        sync.Once
 }
 
-func Start(token string, port int, buffer Buffer, username string, onPCM func([]byte), onStatus func(string)) (*Server, error) {
+// Start abre el servidor del micrófono del celular. onPCM recibe cada frame de 20 ms con su hora:
+// con buffer, la del horario de reparto (un atraso al repartir no parece una pausa); sin buffer,
+// la de llegada.
+func Start(token string, port int, buffer Buffer, username string, onPCM func(frame []byte, at time.Time), onStatus func(string)) (*Server, error) {
 	localIP, err := localIPv4()
 	if err != nil {
 		return nil, err
@@ -285,7 +289,7 @@ func (s *Server) handleWebSocket(writer http.ResponseWriter, request *http.Reque
 func (s *Server) enqueueFrame(frame []byte) {
 	copyFrame := append([]byte(nil), frame...)
 	if !s.bufferEnabled {
-		s.deliverFrame(copyFrame)
+		s.deliverFrame(copyFrame, time.Now())
 		return
 	}
 	select {
@@ -303,7 +307,7 @@ func (s *Server) enqueueFrame(frame []byte) {
 	}
 }
 
-func (s *Server) deliverFrame(frame []byte) {
+func (s *Server) deliverFrame(frame []byte, at time.Time) {
 	s.mu.Lock()
 	s.sample = append(s.sample, frame...)
 	if len(s.sample) > maxSampleBytes {
@@ -311,42 +315,64 @@ func (s *Server) deliverFrame(frame []byte) {
 	}
 	s.mu.Unlock()
 	if s.onPCM != nil {
-		s.onPCM(frame)
+		s.onPCM(frame, at)
 	}
 }
 
+// forwardPCM reparte los frames de la cola cada 20 ms con un horario fijo. Si la goroutine se
+// atrasa (PC cargada, o el procesamiento de onPCM tardó), en la vuelta siguiente entrega todos los
+// que tocaban. Con el ticker de antes Go salteaba los ticks atrasados: era un frame que salía
+// tarde y una voz más corta para los demás (se les vaciaba el buffer). Corre con prioridad de
+// audio porque onPCM procesa la voz (RNNoise, Opus).
 func (s *Server) forwardPCM() {
-	ticker := time.NewTicker(frameDuration)
-	defer ticker.Stop()
+	logging.Infof("Micrófono del celular: hilo de reparto con %s", audio.LockAudioThread())
+	timer := time.NewTimer(frameDuration)
+	defer timer.Stop()
 	playing := false
+	next := time.Now().Add(frameDuration)
 	for {
 		select {
 		case <-s.done:
 			return
-		case <-ticker.C:
-			if !playing {
-				if len(s.frames) < s.prebufferFrames {
-					continue
-				}
-				playing = true
+		case <-timer.C:
+		}
+		now := time.Now()
+		for !next.After(now) {
+			if !s.forwardOne(&playing, next) {
+				next = now // sin frame no hay atraso que recuperar: el horario arranca de nuevo
 			}
+			next = next.Add(frameDuration)
+		}
+		timer.Reset(time.Until(next))
+	}
+}
+
+// forwardOne entrega el frame que toca en due. Devuelve false si no había (cola vacía o todavía
+// juntando el prebuffer).
+func (s *Server) forwardOne(playing *bool, due time.Time) bool {
+	if !*playing {
+		if len(s.frames) < s.prebufferFrames {
+			return false
+		}
+		*playing = true
+	}
+	select {
+	case frame := <-s.frames:
+		// Deriva: si el reloj del celular corre más rápido que el de la PC, la cola crece
+		// despacio hasta el tope y la latencia queda fija cientos de ms arriba. Si sobran
+		// frames se tira uno, preferentemente silencioso.
+		if shouldDropForDrift(len(s.frames)+1, s.prebufferFrames, s.driftSlack, s.driftForce, frame) {
 			select {
-			case frame := <-s.frames:
-				// Deriva: si el reloj del celular corre más rápido que el de la PC, la cola crece
-				// despacio hasta el tope y la latencia queda fija cientos de ms arriba. Si sobran
-				// frames se tira uno, preferentemente silencioso.
-				if shouldDropForDrift(len(s.frames)+1, s.prebufferFrames, s.driftSlack, s.driftForce, frame) {
-					select {
-					case next := <-s.frames:
-						frame = next
-					default:
-					}
-				}
-				s.deliverFrame(frame)
+			case next := <-s.frames:
+				frame = next
 			default:
-				playing = false
 			}
 		}
+		s.deliverFrame(frame, due)
+		return true
+	default:
+		*playing = false
+		return false
 	}
 }
 

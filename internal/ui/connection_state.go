@@ -4,6 +4,7 @@ package ui
 
 import (
 	"net"
+	"sync/atomic"
 
 	"voxmesh/internal/audio"
 	"voxmesh/internal/transport"
@@ -13,6 +14,27 @@ import (
 // es un puntero atómico a un valor inmutable: los lectores hacen una sola carga (sin locks) y
 // los cambios publican un valor nuevo entero. Regla: cargar UNA vez y usar la variable local;
 // `if a.x != nil { a.x.Foo() }` con dos lecturas puede ver nil en la segunda.
+
+// stopSignal es el canal que detiene un grupo de goroutines (las de la conexión, o las del rol de
+// host). start crea uno nuevo (y cierra el anterior); stop lo cierra una sola vez aunque lo pidan a
+// la vez dos goroutines (bajarse de host y cortar la sala).
+type stopSignal struct {
+	ch atomic.Pointer[chan struct{}]
+}
+
+func (s *stopSignal) start() <-chan struct{} {
+	ch := make(chan struct{})
+	if previous := s.ch.Swap(&ch); previous != nil {
+		close(*previous)
+	}
+	return ch
+}
+
+func (s *stopSignal) stop() {
+	if previous := s.ch.Swap(nil); previous != nil {
+		close(*previous)
+	}
+}
 
 // endpointInfo es la dirección de la sala: la del host (cliente) o la que se comparte (host).
 // addr se resuelve al publicarla para que el audio saliente no llame a ResolveUDPAddr por frame.

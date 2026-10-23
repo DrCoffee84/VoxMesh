@@ -83,7 +83,7 @@ func Start() error {
 	if err := debug.SetCrashOutput(file, debug.CrashOptions{}); err != nil {
 		state.logger.Printf("ERROR configurar salida de crash: %v", err)
 	}
-	state.logger.Printf("=== inicio VoxMesh %s pid=%d %s/%s ===", version.Value, os.Getpid(), runtime.GOOS, runtime.GOARCH)
+	state.logger.Printf("=== inicio VoxMesh %s pid=%d %s/%s cpus=%d ===", version.Value, os.Getpid(), runtime.GOOS, runtime.GOARCH, runtime.NumCPU())
 	return nil
 }
 

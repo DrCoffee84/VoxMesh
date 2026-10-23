@@ -5,8 +5,6 @@ package ui
 import (
 	"net"
 	"os"
-	"runtime"
-	"runtime/debug"
 	"time"
 
 	"voxmesh/internal/assets"
@@ -35,7 +33,7 @@ func (a *App) requestSoundSync() {
 }
 
 // maybeSendSoundSync (cliente) manda el pedido mientras no llegue la respuesta: lo llaman
-// handleRoomState y monitorHost (cada 2 s), por si UDP pierde el pedido o la respuesta.
+// handleRoomState y failoverLoop (cada 2 s), por si UDP pierde el pedido o la respuesta.
 func (a *App) maybeSendSoundSync(udp *transport.UDP) {
 	store := a.historyStore
 	if !a.soundSyncPending.Load() || a.hostMode.Load() || store == nil || a.roomState.HostID == "" {
@@ -229,10 +227,6 @@ func (a *App) dropSounds(ids []string) []room.Sound {
 			}
 		}
 	}
-	go func() {
-		runtime.GC()
-		debug.FreeOSMemory()
-	}()
 	return removed
 }
 

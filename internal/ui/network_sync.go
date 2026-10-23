@@ -132,7 +132,10 @@ func (a *App) handleAssetMissing(udp *transport.UDP, addr *net.UDPAddr, payload 
 			if len(request.Missing) > 0 && !containsIndex(request.Missing, chunk.Index) {
 				continue
 			}
-			_ = udp.Send(addr, transport.Packet{Kind: transport.PacketAssetChunk, Sequence: a.sequence.Add(1), Payload: assets.Encode(chunk)})
+			// Con ritmo (SendBulk): mandarlo de golpe le quitaba la subida a la voz.
+			if !udp.SendBulk(addr, transport.Packet{Kind: transport.PacketAssetChunk, Sequence: a.sequence.Add(1), Payload: assets.Encode(chunk)}) {
+				return
+			}
 		}
 	}()
 }
@@ -155,20 +158,23 @@ func (a *App) sendAsset(kind byte, id, ext string, data []byte) {
 	if !a.connected() {
 		return
 	}
+	// Con ritmo (SendBulk, ~2 Mbps en total): un sonido de 8 MB de golpe saturaba la subida y la
+	// voz llegaba tarde mientras tanto.
 	go func() {
-		for i, chunk := range chunks {
+		for _, chunk := range chunks {
 			udp := a.transport.Load()
 			if udp == nil {
 				return
 			}
 			packet := transport.Packet{Kind: transport.PacketAssetChunk, Sequence: a.sequence.Add(1), Payload: assets.Encode(chunk)}
+			sent := false
 			if a.roomState.HostID == a.participantID {
-				udp.Broadcast(packet, nil)
+				sent = udp.BroadcastBulk(packet, nil)
 			} else if peer := a.endpointAddr(); peer != nil {
-				_ = udp.Send(peer, packet)
+				sent = udp.SendBulk(peer, packet)
 			}
-			if i%4 == 3 {
-				time.Sleep(2 * time.Millisecond)
+			if !sent {
+				return
 			}
 		}
 	}()

@@ -10,8 +10,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"runtime"
-	"runtime/debug"
 	"strconv"
 	"strings"
 
@@ -293,10 +291,6 @@ func (a *App) replaceSoundAudio(old room.Sound, name string, pcm []byte) {
 		a.sendAsset(assets.KindSound, sound.ID, sound.Ext, pcm)
 		a.sendSoundEnvelope(room.SoundRemoveMessage, old)
 		a.setStatus("Audio reemplazado: " + name)
-		go func() {
-			runtime.GC()
-			debug.FreeOSMemory()
-		}()
 	}()
 }
 
@@ -415,10 +409,6 @@ func (a *App) pickSoundFile(onLoaded func(name string, pcm []byte, peaks []int16
 		raw = nil // Liberar memoria del archivo original de inmediato
 		if decodeErr != nil {
 			a.showSoundError("No se pudo procesar el sonido: " + decodeErr.Error())
-			go func() {
-				runtime.GC()
-				debug.FreeOSMemory()
-			}()
 			return
 		}
 		name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
@@ -822,15 +812,12 @@ func (a *App) showSoundTrimDialog(title, defaultName string, pcm []byte, initial
 				onSave(soundName, trimmed)
 			}
 		}
-		// Limpieza explícita de referencias grandes y liberación forzada de RAM al SO
+		// Soltar las referencias grandes: el GC las libera y el runtime devuelve la RAM al SO solo
+		// (sin forzar un GC completo, que frenaba el audio).
 		pcm = nil
 		activePeaks = nil
 		waveImg = nil
 		zoomHistory = nil
-		go func() {
-			runtime.GC()
-			debug.FreeOSMemory()
-		}()
 	}, a.window)
 	d.Resize(fyne.NewSize(520, 480))
 	d.Show()
@@ -852,10 +839,6 @@ func (a *App) saveAndBroadcastSound(name string, pcm []byte) {
 		a.sendSoundEnvelope(room.SoundAddMessage, sound)
 		a.sendAsset(assets.KindSound, sound.ID, sound.Ext, pcm)
 		a.setStatus("Sonido agregado: " + name)
-		go func() {
-			runtime.GC()
-			debug.FreeOSMemory()
-		}()
 	}()
 }
 

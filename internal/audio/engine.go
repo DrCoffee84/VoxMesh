@@ -52,12 +52,17 @@ type streamWorkItem struct {
 type PlaybackProvider func() PlaybackSettings
 
 type Engine struct {
-	context       *malgo.AllocatedContext
-	capture       *malgo.Device
-	playback      *malgo.Device
-	captureFrames chan []byte
+	context  *malgo.AllocatedContext
+	capture  *malgo.Device
+	playback *malgo.Device
+	// Captura → goroutine de envío: frames de buffers preasignados (captureFree), así el callback
+	// de malgo (hilo de tiempo real) no pide memoria. Ver captureInput.
+	captureFrames chan CapturedFrame
+	captureFree   chan *[streamFrameBytes]byte
 	captureBuffer []byte
+	captureDrops  int // frames tirados desde el último encolado (bajo captureMu)
 	captureMu     sync.Mutex
+	sendThread    atomic.Pointer[string] // prioridad que consiguió la goroutine de envío
 	stopOnce      sync.Once
 
 	streams    map[string]*audioStream
@@ -76,6 +81,39 @@ type Engine struct {
 	// Limitador con envolvente del bus de mezcla; solo lo toca el callback de playback.
 	mixLimiter        peakLimiter
 	mixLimiterRelease float64
+
+	// Medición del lado que envía (TakeCaptureStats): la escriben el callback de captura y la
+	// goroutine de envío.
+	captureCount   atomic.Uint64
+	captureDropped atomic.Uint64
+	sendQueueMax   atomic.Int64
+	sendProcMax    atomic.Int64 // ns
+
+	// arrivals graba la llegada de cada paquete de red (nil = apagado).
+	arrivals atomic.Pointer[ArrivalRecorder]
+}
+
+// CapturedFrame es un frame de 20 ms del micrófono que el Engine le entrega a la goroutine de
+// envío (o que arma el servidor del celular).
+type CapturedFrame struct {
+	PCM []byte // S16LE; el buffer se reutiliza: vale solo durante el callback
+	// At es cuándo se capturó: un atraso al procesar no es una pausa del que habla.
+	At time.Time
+	// Dropped son los frames que la captura tuvo que tirar justo antes de este (la goroutine de
+	// envío estaba atrasada más que la cola): audio que no existe y que el que manda tiene que
+	// marcar como pérdida (avanzando la secuencia) para que los demás no se queden cortos.
+	Dropped int
+
+	buf *[streamFrameBytes]byte // buffer de captureFree a devolver (nil si no es del Engine)
+}
+
+// CaptureStats es lo que mide el Engine del lado que envía: si la captura entrega frames a
+// ritmo real (50 por segundo) y si la goroutine de envío los procesa a tiempo.
+type CaptureStats struct {
+	Frames   uint64        // frames de 20 ms que armó el callback de captura (acumulado)
+	Dropped  uint64        // frames tirados porque la cola de envío estaba llena (acumulado)
+	MaxQueue int           // cola máxima desde la lectura anterior (frames esperando)
+	MaxProc  time.Duration // procesamiento más lento de un frame desde la lectura anterior
 }
 
 func softClip(sample int32) int16 {
@@ -100,8 +138,15 @@ func softClip(sample int32) int16 {
 }
 
 func newEngineState() *Engine {
+	// Tantos buffers como lugares en la cola: con un buffer libre en la mano siempre hay lugar
+	// para encolarlo, así el callback nunca se bloquea.
+	free := make(chan *[streamFrameBytes]byte, config.AudioCaptureQueueFrames)
+	for range config.AudioCaptureQueueFrames {
+		free <- new([streamFrameBytes]byte)
+	}
 	return &Engine{
-		captureFrames: make(chan []byte, 8),
+		captureFrames: make(chan CapturedFrame, config.AudioCaptureQueueFrames),
+		captureFree:   free,
 		streams:       make(map[string]*audioStream),
 		volumes:       make(map[string]float64),
 		jitter:        defaultPlayback.Jitter,
@@ -117,7 +162,9 @@ func newEngineState() *Engine {
 	}
 }
 
-func NewEngine(inputName, outputName string, onFrame func([]byte)) (*Engine, error) {
+// NewEngine abre micrófono y salida. onFrame recibe cada frame capturado en una goroutine propia
+// con prioridad de audio (LockAudioThread); el PCM del frame vale solo durante la llamada.
+func NewEngine(inputName, outputName string, onFrame func(CapturedFrame)) (*Engine, error) {
 	context, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("inicializar motor de audio: %w", err)
@@ -145,19 +192,7 @@ func NewEngine(inputName, outputName string, onFrame func([]byte)) (*Engine, err
 	}
 	capture, err := malgo.InitDevice(context.Context, captureConfig, malgo.DeviceCallbacks{
 		Data: func(_, input []byte, _ uint32) {
-			engine.captureMu.Lock()
-			engine.captureBuffer = append(engine.captureBuffer, input...)
-			for len(engine.captureBuffer) >= streamFrameBytes {
-				frame := make([]byte, streamFrameBytes)
-				copy(frame, engine.captureBuffer[:streamFrameBytes])
-				copy(engine.captureBuffer, engine.captureBuffer[streamFrameBytes:])
-				engine.captureBuffer = engine.captureBuffer[:len(engine.captureBuffer)-streamFrameBytes]
-				select {
-				case engine.captureFrames <- frame:
-				default:
-				}
-			}
-			engine.captureMu.Unlock()
+			engine.captureInput(input, time.Now())
 		},
 	})
 	if err != nil {
@@ -195,11 +230,82 @@ func NewEngine(inputName, outputName string, onFrame func([]byte)) (*Engine, err
 	}
 
 	go func() {
+		priority := LockAudioThread()
+		engine.sendThread.Store(&priority)
 		for frame := range engine.captureFrames {
+			storeMax(&engine.sendQueueMax, int64(len(engine.captureFrames)))
+			start := time.Now()
 			onFrame(frame)
+			storeMax(&engine.sendProcMax, int64(time.Since(start)))
+			engine.captureFree <- frame.buf // hay lugar para todos los buffers: no bloquea
 		}
 	}()
 	return engine, nil
+}
+
+// captureInput arma frames de 20 ms con lo que entrega el micrófono y los encola para la
+// goroutine de envío. Corre en el hilo de tiempo real de malgo: no pide memoria (buffers de
+// captureFree) y nunca espera. Sin buffer libre, la goroutine de envío está atrasada más que toda
+// la cola (AudioCaptureQueueFrames): el frame se tira y el siguiente lo avisa (Dropped).
+func (e *Engine) captureInput(input []byte, now time.Time) {
+	e.captureMu.Lock()
+	defer e.captureMu.Unlock()
+	e.captureBuffer = append(e.captureBuffer, input...)
+	for len(e.captureBuffer) >= streamFrameBytes {
+		e.captureCount.Add(1)
+		select {
+		case buf := <-e.captureFree:
+			copy(buf[:], e.captureBuffer[:streamFrameBytes])
+			e.captureFrames <- CapturedFrame{PCM: buf[:], At: now, Dropped: e.captureDrops, buf: buf}
+			e.captureDrops = 0
+		default:
+			e.captureDrops++
+			e.captureDropped.Add(1)
+		}
+		copy(e.captureBuffer, e.captureBuffer[streamFrameBytes:])
+		e.captureBuffer = e.captureBuffer[:len(e.captureBuffer)-streamFrameBytes]
+	}
+}
+
+// SendThreadPriority dice qué prioridad consiguió la goroutine de envío ("" si todavía no arrancó).
+func (e *Engine) SendThreadPriority() string {
+	if e == nil {
+		return ""
+	}
+	if priority := e.sendThread.Load(); priority != nil {
+		return *priority
+	}
+	return ""
+}
+
+// storeMax sube v hasta x si es mayor (lo reinicia el lector con Swap).
+func storeMax(v *atomic.Int64, x int64) {
+	for {
+		old := v.Load()
+		if x <= old || v.CompareAndSwap(old, x) {
+			return
+		}
+	}
+}
+
+// TakeCaptureStats devuelve la medición de la captura y reinicia los máximos.
+func (e *Engine) TakeCaptureStats() CaptureStats {
+	if e == nil {
+		return CaptureStats{}
+	}
+	return CaptureStats{
+		Frames:   e.captureCount.Load(),
+		Dropped:  e.captureDropped.Load(),
+		MaxQueue: int(e.sendQueueMax.Swap(0)),
+		MaxProc:  time.Duration(e.sendProcMax.Swap(0)),
+	}
+}
+
+// SetArrivalRecorder empieza a grabar la llegada de cada paquete de red; nil lo apaga.
+func (e *Engine) SetArrivalRecorder(rec *ArrivalRecorder) {
+	if e != nil {
+		e.arrivals.Store(rec)
+	}
 }
 
 // mix es el callback de playback: arma output (S16LE) con la suma de todos los streams.
@@ -237,8 +343,8 @@ func (e *Engine) mix(output []byte) {
 			chunk := e.scratchBuffer[scratchOffset : scratchOffset+samples]
 			stream.jitter.setTuning(settings.Jitter)
 			if !stream.jitter.Read(chunk, now) {
-				// Purgar streams inactivos tras 2 segundos sin paquetes de audio
-				if now.Sub(stream.lastActive) > 2*time.Second {
+				// Sobrevive a las pausas de la charla: el jitter buffer conserva lo medido de la red.
+				if now.Sub(stream.lastActive) > config.JitterStreamIdleEvict {
 					delete(e.streams, id)
 				}
 				continue
@@ -452,6 +558,9 @@ func (e *Engine) PlayStreamSeq(senderID string, seq uint32, talkspurt uint8, pac
 	}
 
 	now := time.Now()
+	if rec := e.arrivals.Load(); rec != nil {
+		rec.Record(senderID, seq, talkspurt, now)
+	}
 	stream, exists := e.streams[senderID]
 	if !exists {
 		volume, ok := e.volumes[senderID]

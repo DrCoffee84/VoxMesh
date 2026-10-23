@@ -14,7 +14,7 @@ func TestPhoneMicUDPSecurity(t *testing.T) {
 	token := hex.EncodeToString(tokenBytes)
 
 	pcmReceived := make(chan []byte, 10)
-	server, err := Start(token, 0, Buffer{MS: 40, DriftSlackFrames: 2, DriftForceFrames: 4}, "Tester", func(pcm []byte) {
+	server, err := Start(token, 0, Buffer{MS: 40, DriftSlackFrames: 2, DriftForceFrames: 4}, "Tester", func(pcm []byte, _ time.Time) {
 		pcmReceived <- pcm
 	}, nil)
 	if err != nil {
@@ -85,6 +85,71 @@ func TestPhoneMicUDPSecurity(t *testing.T) {
 		}
 	case <-time.After(1 * time.Second):
 		t.Fatal("valid packet timed out and was not processed")
+	}
+}
+
+// Con el buffer activado, si el que procesa los frames se traba, el reparto se pone al día: ningún
+// frame se pierde ni sale con un hueco en su horario (con el ticker de antes Go salteaba los ticks
+// atrasados y la voz salía más corta).
+func TestForwardPCMCatchesUpAfterStall(t *testing.T) {
+	tokenBytes := make([]byte, 16)
+	_, _ = rand.Read(tokenBytes)
+	token := hex.EncodeToString(tokenBytes)
+
+	const frames = 30
+	type delivery struct {
+		first byte
+		at    time.Time
+	}
+	delivered := make(chan delivery, frames)
+	server, err := Start(token, 0, Buffer{Enabled: true, MS: 100, DriftSlackFrames: 10, DriftForceFrames: 10}, "Tester", func(pcm []byte, at time.Time) {
+		if pcm[1] == 5 {
+			time.Sleep(120 * time.Millisecond) // el procesamiento se traba 6 frames
+		}
+		delivered <- delivery{first: pcm[1], at: at}
+	}, nil)
+	if err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+	defer server.Stop()
+
+	conn, err := net.DialUDP("udp4", nil, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: server.Port()})
+	if err != nil {
+		t.Fatalf("failed to dial udp: %v", err)
+	}
+	defer conn.Close()
+	header := append([]byte("VMIC"), byte(len(token)))
+	header = append(header, []byte(token)...)
+	start := time.Now()
+	for n := 0; n < frames; n++ {
+		packet := append(append([]byte(nil), header...), make([]byte, frameBytes)...)
+		for i := len(header); i+1 < len(packet); i += 2 {
+			packet[i+1] = 0x30 // con voz: la deriva no lo tira por silencioso
+		}
+		packet[len(header)+1] = byte(n) // número de frame en la muestra 0
+		if _, err := conn.Write(packet); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(time.Until(start.Add(time.Duration(n+1) * frameDuration)))
+	}
+
+	var got []delivery
+	timeout := time.After(2 * time.Second)
+	for len(got) < frames {
+		select {
+		case d := <-delivered:
+			got = append(got, d)
+		case <-timeout:
+			t.Fatalf("delivered %d of %d frames", len(got), frames)
+		}
+	}
+	for i := 1; i < len(got); i++ {
+		if got[i].first != got[i-1].first+1 {
+			t.Fatalf("frame %d delivered after %d: a frame was lost", got[i].first, got[i-1].first)
+		}
+		if step := got[i].at.Sub(got[i-1].at); step != frameDuration {
+			t.Fatalf("frame %d is %v after the previous one in the schedule, want %v", got[i].first, step, frameDuration)
+		}
 	}
 }
 

@@ -100,10 +100,10 @@ var Params = []Param{
 
 	{Key: "jitter_buffer_ms", Label: "Buffer de recepción máximo", Help: "El colchón real se ajusta solo según el jitter de cada participante; esto es el máximo.", Profile: OutputProfile, Default: 300, Min: 40, Max: 500, Step: 10, Unit: "ms"},
 	{Key: "jitter_min_ms", Label: "Buffer de recepción mínimo", Profile: OutputProfile, Default: 40, Min: 20, Max: 200, Step: 20, Unit: "ms"},
-	{Key: "jitter_percentile", Label: "Cobertura del jitter", Help: "Percentil de los retrasos medidos que el colchón absorbe.", Profile: OutputProfile, Default: 95, Min: 80, Max: 99, Step: 1, Unit: "%"},
+	{Key: "jitter_percentile", Label: "Cobertura del jitter", Help: "Percentil de los retrasos medidos que el colchón absorbe. Los picos que se repiten (Wi-Fi) se cubren aparte.", Profile: OutputProfile, Default: 95, Min: 80, Max: 99, Step: 1, Unit: "%"},
 	{Key: "jitter_margin_ms", Label: "Margen extra", Profile: OutputProfile, Default: 20, Min: 0, Max: 100, Step: 20, Unit: "ms"},
 	{Key: "jitter_plc_max_ms", Label: "Ocultar pérdidas hasta", Help: "Después de esto, silencio.", Profile: OutputProfile, Default: 100, Min: 0, Max: 200, Step: 20, Unit: "ms"},
-	{Key: "jitter_talkspurt_gap_ms", Label: "Pausa que inicia frase nueva", Help: "Más corta = un corte de lag se reanuda sin esperar el colchón.", Profile: OutputProfile, Default: 300, Min: 100, Max: 1000, Step: 10, Unit: "ms"},
+	{Key: "jitter_talkspurt_gap_ms", Label: "Corte largo que espera colchón", Help: "Cada frase nueva espera el colchón. Dentro de una frase, un corte más largo que esto también; uno más corto sigue apenas llega el audio.", Profile: OutputProfile, Default: 300, Min: 100, Max: 1000, Step: 10, Unit: "ms"},
 	{Key: "jitter_drift_slack_ms", Label: "Exceso tolerado (deriva)", Profile: OutputProfile, Default: 40, Min: 20, Max: 200, Step: 20, Unit: "ms"},
 	{Key: "jitter_drift_force_ms", Label: "Exceso máximo (deriva)", Profile: OutputProfile, Default: 80, Min: 20, Max: 200, Step: 20, Unit: "ms"},
 

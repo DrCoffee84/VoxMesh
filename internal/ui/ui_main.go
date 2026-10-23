@@ -44,13 +44,15 @@ type App struct {
 	profiles        config.Profiles                     // perfiles de audio de entrada/salida (%AppData%\VoxMesh\perfiles)
 	transport       atomic.Pointer[transport.UDP]       // nil = sin sala, ver connection_state.go
 	sequence        atomic.Uint32
-	audioSequence   atomic.Uint32                     // secuencia propia del audio saliente (contigua, ver transport.FlagAudioSequence)
 	encoder         atomic.Pointer[audio.OpusEncoder] // encoder Opus del audio saliente, se recrea al conectar
-	sendMu          sync.Mutex                        // envío de audio: talkspurt, lastAudioSent, sendBuf
-	talkspurt       uint8                             // número de frase del audio saliente (transport.Packet.Talkspurt)
-	lastAudioSent   time.Time
+	sendMu          sync.Mutex                        // envío de audio: timeline, sendBuf
+	timeline        audioTimeline                     // secuencia y frase del audio saliente (ver transport.FlagAudioSequence)
+	audioSent       atomic.Uint64                     // paquetes de audio mandados (línea "Envío" del log)
 	sendBuf         []byte
+	arrivalRec      *audio.ArrivalRecorder // grabación de llegadas con nivel de log 2 (solo audioMonitorLoop)
+	arrivalEngine   *audio.Engine          // Engine al que está enganchada arrivalRec
 	endpoint        atomic.Pointer[endpointInfo]
+	upnpPort        atomic.Uint32 // puerto externo mapeado por UPnP (0 = ninguno), para borrarlo al cerrar
 	status          *widget.Label
 	peerHBox        *fyne.Container
 	hostPanel       *fyne.Container
@@ -64,13 +66,12 @@ type App struct {
 	peerMu          logging.TracedRWMutex
 	recordingMu     logging.TracedRWMutex
 	recordedInput   []byte
-	pingStop        chan struct{}
+	connLife        stopSignal // goroutines de la conexión (failoverLoop, sweepAssetLoop)
+	hostRole        stopSignal // goroutines del rol de host (pingPeers, renovación UPnP)
 	voiceProcessor  *audio.RNNoise
 	effects         *audio.Effects
 	audioEngine     atomic.Pointer[audio.Engine]
 	hostMode        atomic.Bool
-	lastHostSeen    atomic.Int64
-	monitorStop     chan struct{}
 	roomStore       *room.Store
 	historyStore    *history.Store
 	roomState       room.State
@@ -84,8 +85,7 @@ type App struct {
 	chatMu          logging.TracedRWMutex
 	selfNameLabel   *widget.Label
 	voiceIndicator  *canvas.Circle
-	voiceTimerMu    sync.Mutex
-	voiceTimer      *time.Timer
+	voiceLastAt     atomic.Int64 // UnixNano del último frame de voz mandado (lo apaga sweepVoiceIndicator)
 	voiceActive     atomic.Bool
 	isMuted         atomic.Bool // mute del micrófono: lo lee el callback de captura por frame (sendOutgoingPCM)
 	muteButton      *widget.Button
@@ -130,6 +130,10 @@ type App struct {
 }
 
 const phoneMicInput = "Micrófono del celular"
+
+// memoryLimit es el tope blando de memoria del runtime (debug.SetMemoryLimit): por encima, el GC
+// trabaja más seguido. Sobra para el uso normal; es una red de seguridad, no un objetivo.
+const memoryLimit = 512 << 20
 
 func New(executable string) *App {
 	cfgPath := config.Path(executable)
@@ -235,13 +239,10 @@ func (a *App) Run() {
 		time.Sleep(1 * time.Second)
 		a.checkForUpdates(false)
 	}()
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for range ticker.C {
-			debug.FreeOSMemory()
-		}
-	}()
+	// Tope blando de memoria en vez del debug.FreeOSMemory() cada 30 s: ese GC completo forzado
+	// frenaba las goroutines que asignan (también la de envío de audio) y competía con el hilo de
+	// UI. El runtime devuelve sola la memoria libre al sistema, de a poco.
+	debug.SetMemoryLimit(memoryLimit)
 	// Equivale a ShowAndRun, pero maximizar necesita la ventana ya creada (el HWND existe
 	// recién después de Show). Se muestra un instante con el tamaño normal guardado, que es
 	// al que vuelve al restaurar.

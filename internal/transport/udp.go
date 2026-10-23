@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 )
 
 const (
@@ -67,6 +68,16 @@ const FlagAudioSequence byte = 1 << 0
 // absorbe ráfagas (reenvío del host, sincronización de assets) sin que el SO descarte audio.
 const SocketBufferBytes = 4 << 20
 
+// Ritmo de los archivos (chunks de sonidos e imágenes, SendBulk). Sin límite, mandar un sonido de
+// 8 MB salía a ~20 Mbps por destino: saturaba la subida del host varios segundos, la cola del
+// router demoraba también la voz que reenvía y en Wi-Fi le quitaba aire al audio. La voz y el
+// control (Send, Broadcast) no pasan por acá.
+const (
+	BulkRateBytes  = 250_000 // ~2 Mbps en total, sumando todos los destinos
+	bulkBurstBytes = 16_000
+	bulkQueue      = 256 // paquetes esperando turno
+)
+
 type Packet struct {
 	Kind     byte
 	Flags    byte
@@ -112,6 +123,19 @@ type UDP struct {
 	peersMu sync.Mutex
 	peers   atomic.Pointer[[]*net.UDPAddr] // inmutable una vez publicada
 	readBuf []byte                         // buffer de lectura de Receive (un solo lector: receiveLoop)
+
+	bulk      chan bulkJob // archivos esperando turno (bulkLoop)
+	bulkOnce  sync.Once
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+// bulkJob es un paquete de archivo para un destino, o para todos los peers menos except.
+type bulkJob struct {
+	packet    Packet
+	to        *net.UDPAddr
+	except    *net.UDPAddr
+	broadcast bool
 }
 
 func Listen(address string) (*UDP, error) {
@@ -140,7 +164,12 @@ func Listen(address string) (*UDP, error) {
 	// de chunks de assets alcanzaba para que se descarte audio.
 	_ = conn.SetReadBuffer(SocketBufferBytes)
 	_ = conn.SetWriteBuffer(SocketBufferBytes)
-	return &UDP{conn: conn, readBuf: make([]byte, 64*1024)}, nil
+	return &UDP{
+		conn:    conn,
+		readBuf: make([]byte, 64*1024),
+		bulk:    make(chan bulkJob, bulkQueue),
+		closed:  make(chan struct{}),
+	}, nil
 }
 
 func (u *UDP) Address() *net.UDPAddr { return u.conn.LocalAddr().(*net.UDPAddr) }
@@ -238,4 +267,111 @@ func (u *UDP) Receive() (Packet, *net.UDPAddr, error) {
 	return packet, addr, err
 }
 
-func (u *UDP) Close() error { return u.conn.Close() }
+// SendBulk encola un paquete de archivo para addr (ritmo BulkRateBytes). Espera si la cola está
+// llena, así que se llama desde goroutines propias, nunca desde receiveLoop. Devuelve false si el
+// socket se cerró.
+func (u *UDP) SendBulk(addr *net.UDPAddr, packet Packet) bool {
+	if addr == nil {
+		return false
+	}
+	return u.enqueueBulk(bulkJob{packet: packet, to: addr}, true)
+}
+
+// BroadcastBulk es SendBulk a todos los peers menos except.
+func (u *UDP) BroadcastBulk(packet Packet, except *net.UDPAddr) bool {
+	return u.enqueueBulk(bulkJob{packet: packet, except: except, broadcast: true}, true)
+}
+
+// TryBroadcastBulk encola sin esperar (reenvío del host desde receiveLoop). Con la cola llena el
+// paquete no se reenvía: a quien le falte lo pide de nuevo (AssetMissing).
+func (u *UDP) TryBroadcastBulk(packet Packet, except *net.UDPAddr) bool {
+	return u.enqueueBulk(bulkJob{packet: packet, except: except, broadcast: true}, false)
+}
+
+func (u *UDP) enqueueBulk(job bulkJob, wait bool) bool {
+	u.bulkOnce.Do(func() { go u.bulkLoop() })
+	if !wait {
+		select {
+		case u.bulk <- job:
+			return true
+		default:
+			return false
+		}
+	}
+	select {
+	case u.bulk <- job:
+		return true
+	case <-u.closed:
+		return false
+	}
+}
+
+// bulkLoop manda los archivos encolados al ritmo de un token bucket (BulkRateBytes, con ráfagas
+// de hasta bulkBurstBytes).
+func (u *UDP) bulkLoop() {
+	bucket := newTokenBucket(BulkRateBytes, bulkBurstBytes)
+	defer bucket.stop()
+	for {
+		var job bulkJob
+		select {
+		case <-u.closed:
+			return
+		case job = <-u.bulk:
+		}
+		data := encode(job.packet)
+		targets := []*net.UDPAddr{job.to}
+		if job.broadcast {
+			targets = u.snapshot()
+		}
+		for _, peer := range targets {
+			if job.except != nil && sameAddr(peer, job.except) {
+				continue
+			}
+			if !bucket.wait(len(data), u.closed) {
+				return
+			}
+			_, _ = u.conn.WriteToUDP(data, peer)
+		}
+	}
+}
+
+// tokenBucket reparte crédito en bytes a ritmo constante, con un tope para las ráfagas.
+type tokenBucket struct {
+	rate, burst, tokens float64
+	last                time.Time
+	timer               *time.Timer
+}
+
+func newTokenBucket(rate, burst int) *tokenBucket {
+	timer := time.NewTimer(time.Hour)
+	timer.Stop()
+	return &tokenBucket{rate: float64(rate), burst: float64(burst), tokens: float64(burst), last: time.Now(), timer: timer}
+}
+
+// wait espera hasta tener n bytes de crédito y los gasta (un paquete más grande que la ráfaga
+// espera la ráfaga entera). Devuelve false si stop se cerró.
+func (b *tokenBucket) wait(n int, stop <-chan struct{}) bool {
+	need := min(float64(n), b.burst)
+	for {
+		now := time.Now()
+		b.tokens = min(b.burst, b.tokens+b.rate*now.Sub(b.last).Seconds())
+		b.last = now
+		if b.tokens >= need {
+			b.tokens -= need
+			return true
+		}
+		b.timer.Reset(time.Duration((need - b.tokens) / b.rate * float64(time.Second)))
+		select {
+		case <-stop:
+			return false
+		case <-b.timer.C:
+		}
+	}
+}
+
+func (b *tokenBucket) stop() { b.timer.Stop() }
+
+func (u *UDP) Close() error {
+	u.closeOnce.Do(func() { close(u.closed) })
+	return u.conn.Close()
+}
