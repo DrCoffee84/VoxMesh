@@ -10,6 +10,9 @@ const (
 	// lookahead es la única forma de que ningún pico pase el techo; la ganancia vuelve de a
 	// poco con el release, así que no hay escalones entre frames.
 	AudioSendLimiterAttackMS = 0.0
+	// AudioClipPeak es el pico de entrada (S16, ~ -1 dBFS) a partir del cual la voz se considera
+	// saturada: el modo grito entra (shout_on_clip) y el medidor y el avatar se ponen rojos.
+	AudioClipPeak = 29204
 	// AudioMaxPreRollFrames es el tope del pre-roll (Params: preroll_ms, máximo 100 ms).
 	AudioMaxPreRollFrames = 5
 	// AudioCaptureQueueFrames son los frames del micrófono (500 ms) que pueden esperar a la

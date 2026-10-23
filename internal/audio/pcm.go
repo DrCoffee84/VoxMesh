@@ -3,6 +3,9 @@ package audio
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
+
+	"voxmesh/internal/config"
 )
 
 const (
@@ -10,6 +13,32 @@ const (
 	Channels     = 1
 	FrameSamples = 960 // 20 ms at 48 kHz.
 )
+
+// LevelFloorDB es el piso del medidor de nivel.
+const LevelFloorDB = -60
+
+// FrameLevel mide un bloque S16LE: nivel RMS en dBFS (entre LevelFloorDB y 0, la escala del
+// medidor y del umbral del modo grito) y si algún pico llegó a la saturación (config.AudioClipPeak).
+func FrameLevel(pcm []byte) (db float32, clipped bool) {
+	count := len(pcm) / 2
+	if count == 0 {
+		return LevelFloorDB, false
+	}
+	var sum float64
+	for index := 0; index < count; index++ {
+		sample := int16(binary.LittleEndian.Uint16(pcm[index*2:]))
+		if sample >= config.AudioClipPeak || sample <= -config.AudioClipPeak {
+			clipped = true
+		}
+		normalized := float64(sample) / math.MaxInt16
+		sum += normalized * normalized
+	}
+	level := 20 * math.Log10(math.Sqrt(sum/float64(count)))
+	if math.IsInf(level, -1) || level < LevelFloorDB {
+		level = LevelFloorDB
+	}
+	return float32(math.Min(level, 0)), clipped
+}
 
 func EncodePCM(samples []int16) []byte {
 	encoded := make([]byte, len(samples)*2)

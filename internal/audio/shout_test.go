@@ -134,3 +134,36 @@ func TestShoutBegin_HoldCountsFromTheDelayedFrame(t *testing.T) {
 		}
 	}
 }
+
+func TestShoutBegin_ClipTriggersBelowThreshold(t *testing.T) {
+	settings := shoutTestSettings()
+	settings.ShoutEnabled = true
+	settings.ShoutThresholdDB = -3 // un frame que satura de a ratos no llega a este RMS
+	settings.ShoutHoldMS = 0
+	clippy := sineFrame(0, 3000) // RMS ≈ -23 dBFS
+	clippy[100], clippy[101] = 32767, -32768
+
+	off := settings
+	off.ShoutOnClip = false
+	if (&Effects{}).shoutBegin(clippy, FrameSamples, off) {
+		t.Fatal("sin ShoutOnClip un pico suelto no activa el modo grito")
+	}
+	settings.ShoutOnClip = true
+	if !(&Effects{}).shoutBegin(clippy, FrameSamples, settings) {
+		t.Fatal("con ShoutOnClip la saturación tiene que activar el modo grito")
+	}
+}
+
+func TestFrameLevel(t *testing.T) {
+	if db, clipped := FrameLevel(EncodePCM(make([]int16, FrameSamples))); db != LevelFloorDB || clipped {
+		t.Fatalf("silencio: %v dB, saturado %v", db, clipped)
+	}
+	frame := sineFrame(0, 16384) // pico -6 dBFS, RMS ≈ -9 dBFS
+	if db, clipped := FrameLevel(EncodePCM(frame)); db < -10 || db > -8 || clipped {
+		t.Fatalf("seno a -6 dBFS: %v dB, saturado %v", db, clipped)
+	}
+	frame[10] = -32768
+	if _, clipped := FrameLevel(EncodePCM(frame)); !clipped {
+		t.Fatal("un pico al tope tiene que marcar saturación")
+	}
+}

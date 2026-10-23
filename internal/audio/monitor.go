@@ -3,8 +3,6 @@
 package audio
 
 import (
-	"encoding/binary"
-	"math"
 	"strings"
 	"sync"
 
@@ -19,7 +17,9 @@ type Monitor struct {
 	once    sync.Once
 }
 
-func StartMonitor(name string, callback func(float32)) (*Monitor, error) {
+// StartMonitor abre el micrófono solo para medirlo: callback recibe el nivel y si saturó
+// (FrameLevel) por cada buffer de captura.
+func StartMonitor(name string, callback func(db float32, clipped bool)) (*Monitor, error) {
 	context, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
 	if err != nil {
 		return nil, err
@@ -40,23 +40,10 @@ func StartMonitor(name string, callback func(float32)) (*Monitor, error) {
 	monitor := &Monitor{context: context}
 	device, err := malgo.InitDevice(context.Context, deviceConfig, malgo.DeviceCallbacks{
 		Data: func(_, input []byte, _ uint32) {
-			var sum float64
-			count := len(input) / 2
-			for index := 0; index < count; index++ {
-				sample := float64(int16(binary.LittleEndian.Uint16(input[index*2:]))) / math.MaxInt16
-				sum += sample * sample
-			}
-			if count == 0 {
+			if len(input) < 2 {
 				return
 			}
-			level := float32(20 * math.Log10(math.Sqrt(sum/float64(count))))
-			if math.IsInf(float64(level), -1) || level < -60 {
-				level = -60
-			}
-			if level > 0 {
-				level = 0
-			}
-			callback(level)
+			callback(FrameLevel(input))
 		},
 	})
 	if err != nil {

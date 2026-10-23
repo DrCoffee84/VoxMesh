@@ -142,3 +142,31 @@ func TestMigrateToProfiles(t *testing.T) {
 		t.Fatal("instalación nueva: sin voxmesh.json no hay nada que migrar")
 	}
 }
+
+func TestApplyDefaultProfilesOnlyTouchesDefault(t *testing.T) {
+	settings := Default().LiveSettings
+	settings.ShoutThresholdDB = -5 // valor viejo guardado estando en Default
+	settings.OutputGainDB = 0
+	settings.ActiveOutputProfile = "Auriculares" // la salida tiene perfil propio
+	if !ApplyDefaultProfiles(&settings) {
+		t.Fatal("tenía que pisar la entrada")
+	}
+	if settings.ShoutThresholdDB != Default().ShoutThresholdDB {
+		t.Fatalf("la entrada en Default no recibió los valores de fábrica: %v", settings.ShoutThresholdDB)
+	}
+	if settings.OutputGainDB != 0 {
+		t.Fatal("un perfil propio no se toca")
+	}
+	if ApplyDefaultProfiles(&settings) {
+		t.Fatal("ya estaba en los valores de fábrica: no debería informar cambios")
+	}
+}
+
+func TestNextCustomProfileName(t *testing.T) {
+	if got := NextCustomProfileName(nil); got != "Personalizado" {
+		t.Fatalf("primero: %q", got)
+	}
+	if got := NextCustomProfileName([]string{"personalizado", "Personalizado 2", "Mi configuración"}); got != "Personalizado 3" {
+		t.Fatalf("siguiente libre: %q", got)
+	}
+}

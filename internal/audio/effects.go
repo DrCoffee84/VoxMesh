@@ -40,6 +40,7 @@ type FilterSettings struct {
 	RNNoiseDryMix    float32
 	ShoutEnabled     bool
 	ShoutThresholdDB float32 // RMS de entrada (dBFS) que activa el modo grito
+	ShoutOnClip      bool    // un pico ≥ config.AudioClipPeak también lo activa
 	ShoutDryMix      float32 // parte de señal original mientras dura el modo grito
 	ShoutHoldMS      int
 	// Final de la cadena de envío.

@@ -40,9 +40,10 @@ type App struct {
 	cfgPath         string
 	cfgSave         chan struct{}
 	cfgSaveMu       sync.Mutex
-	cfgBaseline     atomic.Pointer[config.LiveSettings] // != nil con ajustes abiertos: se persiste esto, no el borrador
-	profiles        config.Profiles                     // perfiles de audio de entrada/salida (%AppData%\VoxMesh\perfiles)
-	transport       atomic.Pointer[transport.UDP]       // nil = sin sala, ver connection_state.go
+	cfgBaseline     atomic.Pointer[config.LiveSettings]            // != nil con ajustes abiertos: se persiste esto, no el borrador
+	profiles        config.Profiles                                // perfiles de audio de entrada/salida (%AppData%\VoxMesh\perfiles)
+	levelListener   atomic.Pointer[func(db float32, clipped bool)] // medidor de Ajustes abierto: nivel/saturación de la entrada (reportInputLevel)
+	transport       atomic.Pointer[transport.UDP]                  // nil = sin sala, ver connection_state.go
 	sequence        atomic.Uint32
 	encoder         atomic.Pointer[audio.OpusEncoder] // encoder Opus del audio saliente, se recrea al conectar
 	sendMu          sync.Mutex                        // envío de audio: timeline, sendBuf
@@ -151,6 +152,8 @@ func New(executable string) *App {
 	if err != nil {
 		logging.Errorf("perfiles de audio: %s", logging.FormatError(err))
 	}
+	// Default no se guarda: el que lo usa recibe los valores de fábrica de esta versión.
+	defaultsApplied := config.ApplyDefaultProfiles(&cfg.LiveSettings)
 	voiceProcessor, _ := audio.NewRNNoise()
 	a := &App{
 		cfgPath:        cfgPath,
@@ -169,7 +172,7 @@ func New(executable string) *App {
 	}
 	a.cfg.Store(&cfg)
 	go a.configSaver()
-	if migrated {
+	if migrated || defaultsApplied {
 		a.saveConfig()
 	}
 	return a

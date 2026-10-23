@@ -27,7 +27,7 @@ type paramSection struct {
 // inputSections cubre todos los parámetros del perfil de entrada salvo audio_filter_enabled
 // (el check principal, fuera del acordeón). Lo verifica TestParamSectionsCoverProfiles.
 var inputSections = []paramSection{
-	{"Modo gritos", []string{"shout_enabled", "shout_threshold_db", "shout_dry_mix", "shout_hold_ms"}},
+	{"Modo gritos", []string{"shout_enabled", "shout_threshold_db", "shout_on_clip", "shout_dry_mix", "shout_hold_ms"}},
 	{"Supresión de ruido y voz", []string{"rnnoise_enabled", "rnnoise_mix", "vad_enabled", "vad_threshold", "vad_hold_ms", "noise_gate_enabled", "threshold_db", "gate_hold_ms"}},
 	{"Ecualización", []string{"high_pass_enabled", "high_pass_hz", "low_pass_enabled", "low_pass_hz", "notch_enabled", "notch_hz", "notch_q"}},
 	{"Dinámica", []string{"input_gain_db", "compressor_enabled", "compressor_threshold_db", "compressor_ratio", "compressor_attack_ms", "compressor_release_ms",
@@ -266,6 +266,30 @@ func (b *profileBar) load(name string) {
 			b.app.setStatus(fmt.Sprintf("Perfil %q cargado. Guardá la configuración para dejarlo activo.", name))
 		})
 	}()
+}
+
+// saveDefaultChangesAsProfile se llama al Guardar la configuración: si el perfil activo es
+// Default y los valores cambiaron, crea un perfil nuevo ("Personalizado", "Personalizado 2"...)
+// con ellos y lo deja activo. Default se pisa con los valores de fábrica al arrancar
+// (config.ApplyDefaultProfiles), así que si no esos cambios se perderían.
+func (b *profileBar) saveDefaultChangesAsProfile() (string, bool) {
+	cfg := b.app.conf()
+	if activeProfile(b.kind, cfg) != config.DefaultProfileName {
+		return "", false
+	}
+	defaults := config.Default()
+	if config.SameProfileValues(b.kind, defaults.LiveSettings, cfg.LiveSettings) {
+		return "", false
+	}
+	name := config.NextCustomProfileName(b.state.names)
+	current := cfg.LiveSettings
+	b.app.updateConfig(func(c *config.Config) { setActiveProfile(b.kind, c, name) })
+	go func() {
+		if err := b.app.profiles.Save(b.kind, name, current); err != nil {
+			b.app.setStatus(fmt.Sprintf("No se pudo crear el perfil %q: %s", name, err))
+		}
+	}()
+	return name, true
 }
 
 // loadDefault es el botón ↺: carga el perfil de fábrica.

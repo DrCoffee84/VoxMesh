@@ -37,9 +37,10 @@ var Params = []Param{
 	{Key: "audio_filter_enabled", Label: "Aplicar filtro de voz", Profile: InputProfile, Default: 1},
 
 	{Key: "shout_enabled", Label: "Modo gritos", Profile: InputProfile, Default: 1},
-	{Key: "shout_threshold_db", Label: "Volumen para entrar al modo grito", Help: "El mismo número que marca el medidor de nivel.", Profile: InputProfile, Default: -12, Min: -40, Max: 0, Step: 0.5, Unit: "dBFS"},
+	{Key: "shout_threshold_db", Label: "Volumen para entrar al modo grito", Help: "El mismo número que marca el medidor de nivel. Más a la izquierda = entra antes.", Profile: InputProfile, Default: -18, Min: -40, Max: 0, Step: 0.5, Unit: "dBFS"},
+	{Key: "shout_on_clip", Label: "Entrar también al saturar", Help: "Si la voz llega al tope (el medidor se pone rojo), entra al modo grito aunque no pase el volumen.", Profile: InputProfile, Default: 1},
 	{Key: "shout_dry_mix", Label: "Voz original al gritar", Profile: InputProfile, Default: 0.2, Min: 0, Max: 1, Step: 0.01, Unit: "%", Scale: 100},
-	{Key: "shout_hold_ms", Label: "Mantener modo grito", Profile: InputProfile, Default: 200, Min: 0, Max: 1000, Step: 10, Unit: "ms"},
+	{Key: "shout_hold_ms", Label: "Mantener modo grito", Profile: InputProfile, Default: 300, Min: 0, Max: 1000, Step: 10, Unit: "ms"},
 
 	{Key: "rnnoise_enabled", Label: "Supresión de ruido (RNNoise)", Profile: InputProfile, Default: 1},
 	{Key: "rnnoise_mix", Label: "Intensidad", Help: "Menos intensidad = voz más natural, algo de ruido.", Profile: InputProfile, Default: 1, Min: 0, Max: 1, Step: 0.01, Unit: "%", Scale: 100},

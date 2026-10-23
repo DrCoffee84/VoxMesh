@@ -24,6 +24,10 @@ const DefaultProfileName = "Default"
 // MigratedProfileName es el perfil donde se guarda la configuración que había al actualizar.
 const MigratedProfileName = "Mi configuración"
 
+// CustomProfileName es el nombre base del perfil que se crea solo al guardar cambios hechos
+// sobre Default ("Personalizado", "Personalizado 2", ...).
+const CustomProfileName = "Personalizado"
+
 const profileVersion = 1
 
 // Profiles maneja los perfiles guardados en Dir (normalmente ProfilesDir()).
@@ -193,6 +197,43 @@ func SameProfileValues(kind ProfileKind, a, b LiveSettings) bool {
 		}
 	}
 	return true
+}
+
+// ApplyDefaultProfiles pone los valores de fábrica en cada tipo cuyo perfil activo es Default.
+// Se corre al arrancar (después de MigrateToProfiles): Default no se guarda, así un cambio de
+// defaults en una actualización le llega a todos los que lo usan. Devuelve si cambió algo.
+func ApplyDefaultProfiles(settings *LiveSettings) bool {
+	changed := false
+	for _, kind := range []ProfileKind{InputProfile, OutputProfile} {
+		active := settings.ActiveInputProfile
+		if kind == OutputProfile {
+			active = settings.ActiveOutputProfile
+		}
+		if active != "" && active != DefaultProfileName {
+			continue
+		}
+		for _, param := range ProfileParams(kind) {
+			if math.Abs(param.Get(settings)-param.Default) > 1e-4 { // float32 guardado vs float64 de la tabla
+				param.Set(settings, param.Default)
+				changed = true
+			}
+		}
+	}
+	return changed
+}
+
+// NextCustomProfileName devuelve el primer "Personalizado", "Personalizado 2"... que no esté en
+// existing (sin distinguir mayúsculas ni nombres que darían el mismo archivo).
+func NextCustomProfileName(existing []string) string {
+	taken := make(map[string]bool, len(existing))
+	for _, name := range existing {
+		taken[profileFileName(name)] = true
+	}
+	name := CustomProfileName
+	for n := 2; taken[profileFileName(name)]; n++ {
+		name = fmt.Sprintf("%s %d", CustomProfileName, n)
+	}
+	return name
 }
 
 // MigrateToProfiles se corre al arrancar: si todavía no existe la carpeta de perfiles (primera

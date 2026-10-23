@@ -73,6 +73,7 @@ func InputSettings(cfg *config.Config) (NoiseGate, FilterSettings) {
 		RNNoiseDryMix:       1 - cfg.RNNoiseMix,
 		ShoutEnabled:        cfg.ShoutEnabled,
 		ShoutThresholdDB:    cfg.ShoutThresholdDB,
+		ShoutOnClip:         cfg.ShoutOnClip,
 		ShoutDryMix:         cfg.ShoutDryMix,
 		ShoutHoldMS:         cfg.ShoutHoldMS,
 		SendCeilingDB:       cfg.SendCeilingDB,

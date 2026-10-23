@@ -1,6 +1,10 @@
 package audio
 
-import "math"
+import (
+	"math"
+
+	"voxmesh/internal/config"
+)
 
 // Mezcla seca y modo grito (cadena de envío, ver PrepareOutgoingFrames).
 //
@@ -10,6 +14,8 @@ import "math"
 //
 // El modo grito se detecta sobre la entrada (antes de RNNoise): como la salida va un frame
 // atrasada, la mezcla llega a rampear durante el frame previo al grito y el grito sale entero.
+// Entra por volumen (RMS ≥ ShoutThresholdDB) o, con ShoutOnClip, porque la voz satura (un pico
+// ≥ config.AudioClipPeak): alguien que habla fuerte satura antes de llegar al volumen de grito.
 
 // shoutBegin guarda la entrada de RNNoise en la línea de retardo (deja en e.dry la entrada
 // alineada con lo que RNNoise va a devolver para este bloque) y actualiza el modo grito.
@@ -38,7 +44,9 @@ func (e *Effects) shoutBegin(samples []int16, delay int, settings FilterSettings
 		e.shoutFrames = 0
 		return false
 	}
-	if rmsDB(samples) >= float64(settings.ShoutThresholdDB) {
+	loud := rmsDB(samples) >= float64(settings.ShoutThresholdDB) ||
+		(settings.ShoutOnClip && peakAbs(samples) >= config.AudioClipPeak)
+	if loud {
 		// +2: el frame actual (rampa) y el siguiente, que es el que trae este audio por el
 		// retardo de RNNoise; el hold cuenta desde ahí.
 		e.shoutFrames = holdFrames(settings.ShoutHoldMS) + 2

@@ -13,8 +13,9 @@ import (
 
 type levelBar struct {
 	widget.BaseWidget
-	mu    sync.RWMutex
-	value float64
+	mu       sync.RWMutex
+	value    float64
+	clipping bool // barra en rojo: la entrada satura
 }
 
 type levelBarRenderer struct {
@@ -22,6 +23,8 @@ type levelBarRenderer struct {
 	backdrop *canvas.Rectangle
 	fill     *canvas.Rectangle
 }
+
+var levelFillColor = color.NRGBA{R: 55, G: 190, B: 125, A: 255}
 
 func newLevelBar() *levelBar {
 	bar := &levelBar{}
@@ -42,11 +45,22 @@ func (bar *levelBar) SetValue(value float64) {
 	bar.Refresh()
 }
 
+// SetClipping pinta la barra de rojo mientras la entrada satura.
+func (bar *levelBar) SetClipping(clipping bool) {
+	bar.mu.Lock()
+	changed := bar.clipping != clipping
+	bar.clipping = clipping
+	bar.mu.Unlock()
+	if changed {
+		bar.Refresh()
+	}
+}
+
 func (bar *levelBar) CreateRenderer() fyne.WidgetRenderer {
 	return &levelBarRenderer{
 		bar:      bar,
 		backdrop: canvas.NewRectangle(color.NRGBA{R: 50, G: 55, B: 65, A: 255}),
-		fill:     canvas.NewRectangle(color.NRGBA{R: 55, G: 190, B: 125, A: 255}),
+		fill:     canvas.NewRectangle(levelFillColor),
 	}
 }
 
@@ -67,6 +81,13 @@ func (renderer *levelBarRenderer) Objects() []fyne.CanvasObject {
 }
 
 func (renderer *levelBarRenderer) Refresh() {
+	renderer.bar.mu.RLock()
+	fill := levelFillColor
+	if renderer.bar.clipping {
+		fill = clipColor
+	}
+	renderer.bar.mu.RUnlock()
+	renderer.fill.FillColor = fill
 	renderer.Layout(renderer.bar.Size())
 	renderer.backdrop.Refresh()
 	renderer.fill.Refresh()

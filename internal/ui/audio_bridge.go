@@ -68,12 +68,20 @@ func (a *App) stopPhoneMic() {
 // receivePhonePCM recibe cada frame del celular con su hora en el horario del servidor (at): un
 // atraso al repartir no parece una pausa.
 func (a *App) receivePhonePCM(frame []byte, at time.Time) {
+	a.reportInputLevel(frame)
 	a.playPhonePreview(frame)
 	udp := a.transport.Load()
 	if udp == nil || !a.phoneMicEnabled() {
 		return
 	}
 	a.sendOutgoingPCM(audio.CapturedFrame{PCM: frame, At: at}, udp)
+}
+
+// reportInputLevel le pasa el nivel de un frame de entrada al medidor de Ajustes, si está abierto.
+func (a *App) reportInputLevel(pcm []byte) {
+	if listener := a.levelListener.Load(); listener != nil {
+		(*listener)(audio.FrameLevel(pcm))
+	}
 }
 
 func (a *App) phoneMicEnabled() bool {
@@ -130,6 +138,7 @@ func (a *App) startMicPreview(input, output string) error {
 	var engine *audio.Engine
 	var err error
 	engine, err = audio.NewEngine(input, output, func(frame audio.CapturedFrame) {
+		a.reportInputLevel(frame.PCM)
 		payload, shouldPlay := a.prepareOutgoingPCM(frame.PCM)
 		if shouldPlay && engine != nil {
 			engine.Play(payload)
@@ -248,6 +257,7 @@ func (a *App) startAudio(udp *transport.UDP) {
 		if a.phoneMicEnabled() {
 			return
 		}
+		a.reportInputLevel(frame.PCM)
 		a.sendOutgoingPCM(frame, udp)
 	})
 	if err != nil {

@@ -68,6 +68,7 @@ type LiveSettings struct {
 	AudioFilterEnabled    bool    `json:"audio_filter_enabled"`
 	ShoutEnabled          bool    `json:"shout_enabled"`
 	ShoutThresholdDB      float32 `json:"shout_threshold_db"`
+	ShoutOnClip           bool    `json:"shout_on_clip"`
 	ShoutDryMix           float32 `json:"shout_dry_mix"`
 	ShoutHoldMS           int     `json:"shout_hold_ms"`
 	RNNoiseEnabled        bool    `json:"rnnoise_enabled"`

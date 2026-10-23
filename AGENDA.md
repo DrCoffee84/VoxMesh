@@ -92,6 +92,13 @@ Hecho ([failover.go](internal/room/failover.go), [network_failover.go](internal/
 - [ ] **Probar en serio** (nivel de log 1): LAN con 3 instancias en puertos distintos, y por internet con los amigos: (a) el host sale; (b) el host corta el Wi-Fi 10 s; (c) el host corta el Wi-Fi 40 s y vuelve; (d) un cliente sale y vuelve a entrar; (e) un cliente corta el Wi-Fi 15 s. Revisar la actividad y el log: nadie en una sala fantasma ni con dos hosts.
 - [ ] Si hay NAT simétrico/CGNAT de los dos lados la migración no pasa (la app avisa). Única salida: un servidor de relay (TURN) o que alguien abra puerto.
 
+## 1.6 Voz fuerte, saturación y Default
+
+- [x] **Modo grito más permisivo por defecto**: entra con −18 dBFS (antes −12), también cuando la voz satura (pico ≥ −1 dBFS, check "Entrar también al saturar") y se mantiene 300 ms. Voz original al gritar: 20 %.
+- [x] **Default se actualiza solo**: con el perfil Default activo, al arrancar se toman los valores de fábrica de la versión instalada (`config.ApplyDefaultProfiles`). Si se cambia algo estando en Default, al Guardar se crea solo un perfil "Personalizado" ("Personalizado 2"...).
+- [x] **Saturación en rojo**: medidor de Ajustes (también en sala, escucha de prueba y celular) y aro rojo en el avatar. El de los demás llega con `FlagInputClipped` en los paquetes de audio.
+- [ ] **Probar con el amigo que habla fuerte**: que actualice y elija el perfil **Default** (hoy está en "Mi configuración", igual que vos). Si su avatar se pone rojo seguido, que baje el volumen del micrófono en Windows: lo que satura antes de llegar a VoxMesh ningún filtro lo arregla.
+
 # 2. Más adelante
 
 - [ ] **Mover `voxmesh.json` a `%AppData%\VoxMesh\`** (junto a `salas\` y `perfiles\`), para que la app sea solo el `.exe`. Migración: si existe el json al lado del exe y no en AppData, moverlo. Revisar [config.Path](internal/config/config.go), el updater (no tiene que tocar el json) y el README. Ojo con la migración de perfiles de `ui.New`: decide "había config" mirando `cfgPath`, tiene que mirar la ruta nueva y la vieja.

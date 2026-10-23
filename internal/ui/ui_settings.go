@@ -90,26 +90,42 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 		}
 	})
 	resetFilters := widget.NewButton("↺", inputProfileBar.loadDefault)
+	profileBars := []*profileBar{inputProfileBar} // + el de salida, más abajo
 	otherControls := &paramControls{app: a}
 	liveMonitoring := otherControls.control("live_monitoring")
 	level := newLevelBar()
 	level.SetValue(0)
 	levelText := widget.NewLabel("Nivel: -60 dBFS")
 	monitor := &levelMonitor{}
-	var lastLevelPaint atomic.Int64
+	var lastLevelPaint, lastClip atomic.Int64
 	// malgo llama a onLevel por cada buffer de captura (~100 veces/s). Un fyne.Do por llamada
 	// saturaba la cola del hilo de UI y cada SetText re-layouteaba la vista: se limita a ~15 fps.
-	onLevel := func(db float32) {
+	// La saturación se anota siempre (aunque no toque pintar) y queda en rojo clipHold.
+	onLevel := func(db float32, clipped bool) {
 		now := time.Now().UnixNano()
+		if clipped {
+			lastClip.Store(now)
+		}
 		last := lastLevelPaint.Load()
 		if now-last < int64(levelPaintInterval) || !lastLevelPaint.CompareAndSwap(last, now) {
 			return
 		}
+		clipping := now-lastClip.Load() < int64(clipHold)
 		fyne.Do(func() {
-			level.SetValue(float64((db + 60) / 60))
-			levelText.SetText(fmt.Sprintf("Nivel: %.0f dBFS", db))
+			level.SetValue(float64((db - audio.LevelFloorDB) / -audio.LevelFloorDB))
+			level.SetClipping(clipping)
+			text := fmt.Sprintf("Nivel: %.0f dBFS", db)
+			levelText.Importance = widget.MediumImportance
+			if clipping {
+				text += " · SATURA (bajá el volumen del micrófono)"
+				levelText.Importance = widget.DangerImportance
+			}
+			levelText.SetText(text)
 		})
 	}
+	// En sala, en la escucha de prueba y con el celular no corre el medidor propio: el nivel llega
+	// de los frames de entrada (reportInputLevel).
+	a.levelListener.Store(&onLevel)
 	var previewButton *widget.Button
 	previewActive := false
 	settingsClosed := false
@@ -312,6 +328,7 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 	closeSettings := func() {
 		closeOnce.Do(func() {
 			settingsClosed = true
+			a.levelListener.Store(nil)
 			close(phoneStatusStop)
 			// Antes stopPreview corría en una goroutine: tocaba previewButton fuera del hilo de UI
 			// y volvía a abrir el medidor de nivel justo al salir de ajustes.
@@ -351,6 +368,13 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 	}
 
 	saveSettings := func() {
+		// Cambios hechos sobre Default: van a un perfil nuevo (Default se pisa en cada arranque).
+		var created []string
+		for _, bar := range profileBars {
+			if profile, ok := bar.saveDefaultChangesAsProfile(); ok {
+				created = append(created, fmt.Sprintf("%q", profile))
+			}
+		}
 		name := strings.TrimSpace(username.Text)
 		if name == "" {
 			name = config.DefaultUsername
@@ -387,7 +411,11 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 				a.bottomBar.Hide()
 			}
 		}
-		a.setStatus("Configuración guardada.")
+		status := "Configuración guardada."
+		if len(created) > 0 {
+			status += " Tus cambios sobre Default quedaron en el perfil " + strings.Join(created, " y ") + "."
+		}
+		a.setStatus(status)
 		closeSettings()
 		a.saveConfig()
 		// Los selects publican el dispositivo en vivo: se compara contra el que había al abrir
@@ -468,6 +496,7 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 		}
 	})
 	resetOutputFilters := widget.NewButton("↺", outputProfileBar.loadDefault)
+	profileBars = append(profileBars, outputProfileBar)
 	showStatusBarCheck := otherControls.control("show_status_bar")
 	profileCard := uiCard(container.NewVBox(
 		widget.NewLabelWithStyle("👤 Perfil de Usuario", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
@@ -628,7 +657,7 @@ func (m *levelMonitor) detach() (*audio.Monitor, uint64) {
 	return old, m.gen
 }
 
-func (m *levelMonitor) Start(name string, onLevel func(float32)) {
+func (m *levelMonitor) Start(name string, onLevel func(db float32, clipped bool)) {
 	old, gen := m.detach()
 	go func() {
 		old.Stop()

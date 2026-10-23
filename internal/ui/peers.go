@@ -18,6 +18,7 @@ type peerView struct {
 	lag       time.Duration
 	speaking  bool
 	speakStop time.Time
+	clipUntil time.Time // hasta cuándo se pinta el avatar en rojo (su micrófono saturó)
 	isSelf    bool
 	muted     bool
 	net       peerNetStats
@@ -39,9 +40,11 @@ func (a *App) refreshPeersFromRoom() {
 	a.peerMu.Lock()
 	lagByAddress := make(map[string]time.Duration, len(a.peerNames))
 	netByID := make(map[string]peerNetStats, len(a.peerNames))
+	clipByID := make(map[string]time.Time, len(a.peerNames))
 	for _, peer := range a.peerNames {
 		lagByAddress[peer.address] = peer.lag
 		netByID[peer.id] = peer.net
+		clipByID[peer.id] = peer.clipUntil
 	}
 	a.peerNames = nil
 	if connected {
@@ -53,6 +56,7 @@ func (a *App) refreshPeersFromRoom() {
 			muted:     a.isMuted.Load(),
 			speaking:  a.voiceActive.Load(),
 			speakStop: time.Now().Add(250 * time.Millisecond),
+			clipUntil: clipByID[a.participantID],
 		})
 	}
 	for _, participant := range a.roomState.Participants {
@@ -60,12 +64,13 @@ func (a *App) refreshPeersFromRoom() {
 			continue
 		}
 		a.peerNames = append(a.peerNames, peerView{
-			id:      participant.ID,
-			name:    participant.Username,
-			address: participant.Address,
-			lag:     lagByAddress[participant.Address],
-			muted:   participant.Muted,
-			net:     netByID[participant.ID],
+			id:        participant.ID,
+			name:      participant.Username,
+			address:   participant.Address,
+			lag:       lagByAddress[participant.Address],
+			muted:     participant.Muted,
+			net:       netByID[participant.ID],
+			clipUntil: clipByID[participant.ID],
 		})
 	}
 	a.peerMu.Unlock()
@@ -146,6 +151,29 @@ func (a *App) markPeerSpeaking(id, address string) {
 	a.peerMu.Unlock()
 }
 
+// clipHold es cuánto queda rojo un avatar después del último frame saturado.
+const clipHold = time.Second
+
+// markPeerClipping pinta de rojo el avatar de id (el propio con a.participantID): su micrófono
+// saturó. Solo refresca cuando se prende; lo apaga sweepSpeakingPeers.
+func (a *App) markPeerClipping(id string) {
+	a.peerMu.Lock()
+	now := time.Now()
+	changed := false
+	for i := range a.peerNames {
+		p := &a.peerNames[i]
+		if p.id == id || (p.isSelf && id == a.participantID) {
+			changed = !now.Before(p.clipUntil)
+			p.clipUntil = now.Add(clipHold)
+			break
+		}
+	}
+	a.peerMu.Unlock()
+	if changed {
+		a.refreshPeerAvatars()
+	}
+}
+
 func (a *App) sweepSpeakingPeers() {
 	a.peerMu.Lock()
 	now := time.Now()
@@ -154,6 +182,10 @@ func (a *App) sweepSpeakingPeers() {
 		p := &a.peerNames[i]
 		if p.speaking && (now.After(p.speakStop) || p.speakStop.Sub(now) < 50*time.Millisecond) {
 			p.speaking = false
+			changed = true
+		}
+		if !p.clipUntil.IsZero() && !now.Before(p.clipUntil) {
+			p.clipUntil = time.Time{}
 			changed = true
 		}
 	}

@@ -74,6 +74,9 @@ func (a *App) handleAudioPacket(packet transport.Packet) {
 	if senderID == a.participantID {
 		return // mi propia voz devuelta (dos hosts reenviándose entre sí): sería eco
 	}
+	if packet.Flags&transport.FlagInputClipped != 0 {
+		a.markPeerClipping(senderID)
+	}
 	if engine := a.engine(); engine != nil {
 		engine.PlayStreamSeq(senderID, packet.Sequence, packet.Talkspurt, opusPacket)
 	}
@@ -84,6 +87,14 @@ func (a *App) handleAudioPacket(packet transport.Packet) {
 // El rol se mira en cada frame (host: a todos; cliente: a su host), así la migración de host no
 // reinicia el audio.
 func (a *App) sendOutgoingPCM(frame audio.CapturedFrame, udp *transport.UDP) {
+	// Saturación: se mide sobre lo capturado (antes de la cadena), pinta el avatar propio y viaja
+	// como flag en los paquetes de este frame para que los demás lo vean.
+	_, clipped := audio.FrameLevel(frame.PCM)
+	flags := transport.FlagAudioSequence
+	if clipped {
+		flags |= transport.FlagInputClipped
+		a.markPeerClipping(a.participantID)
+	}
 	frames, ok := a.prepareOutgoingFrames(frame.PCM)
 	// Mute: la cadena sigue corriendo (RNNoise retiene 20 ms y el VAD su hold; saltearla dejaría
 	// audio viejo que saldría al desmutear) pero el frame se descarta igual que con la compuerta
@@ -136,7 +147,7 @@ func (a *App) sendOutgoingPCM(frame audio.CapturedFrame, udp *transport.UDP) {
 			a.sendBuf = append(a.sendBuf, opusPacket...)
 			packet := transport.Packet{
 				Kind:      transport.PacketAudio,
-				Flags:     transport.FlagAudioSequence,
+				Flags:     flags,
 				Sequence:  seq,
 				Talkspurt: talkspurt,
 				Payload:   a.sendBuf,

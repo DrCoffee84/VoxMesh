@@ -64,6 +64,10 @@ func PacketKindName(kind byte) string {
 // Sequence es el contador global.
 const FlagAudioSequence byte = 1 << 0
 
+// FlagInputClipped marca un paquete de audio cuyo frame de origen saturó en el micrófono del
+// emisor: los demás pintan su avatar de rojo. Solo informativo (quien no lo conoce lo ignora).
+const FlagInputClipped byte = 1 << 1
+
 // SocketBufferBytes es el tamaño pedido para los buffers de envío y recepción del socket:
 // absorbe ráfagas (reenvío del host, sincronización de assets) sin que el SO descarte audio.
 const SocketBufferBytes = 4 << 20
