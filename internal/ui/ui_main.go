@@ -40,10 +40,10 @@ type App struct {
 	cfgPath         string
 	cfgSave         chan struct{}
 	cfgSaveMu       sync.Mutex
-	cfgBaseline     atomic.Pointer[config.LiveSettings]            // != nil con ajustes abiertos: se persiste esto, no el borrador
-	profiles        config.Profiles                                // perfiles de audio de entrada/salida (%AppData%\VoxMesh\perfiles)
-	levelListener   atomic.Pointer[func(inputMeter)]               // medidor de Ajustes abierto: cada frame de entrada procesado (reportMeter)
-	transport       atomic.Pointer[transport.UDP]                  // nil = sin sala, ver connection_state.go
+	cfgBaseline     atomic.Pointer[config.LiveSettings] // != nil con ajustes abiertos: se persiste esto, no el borrador
+	profiles        config.Profiles                     // perfiles de audio de entrada/salida (%AppData%\VoxMesh\perfiles)
+	levelListener   atomic.Pointer[func(inputMeter)]    // medidor de Ajustes abierto: cada frame de entrada procesado (reportMeter)
+	transport       atomic.Pointer[transport.UDP]       // nil = sin sala, ver connection_state.go
 	sequence        atomic.Uint32
 	encoder         atomic.Pointer[audio.OpusEncoder] // encoder Opus del audio saliente, se recrea al conectar
 	sendMu          sync.Mutex                        // envío de audio: timeline, sendBuf
