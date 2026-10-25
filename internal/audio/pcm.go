@@ -33,11 +33,30 @@ func FrameLevel(pcm []byte) (db float32, clipped bool) {
 		normalized := float64(sample) / math.MaxInt16
 		sum += normalized * normalized
 	}
+	return levelDBFS(sum, count), clipped
+}
+
+// SamplesLevel es el nivel RMS en dBFS (misma escala que FrameLevel) de muestras ya decodificadas:
+// el frame después de la cadena de envío, para el medidor post-filtro.
+func SamplesLevel(samples []int16) float32 {
+	if len(samples) == 0 {
+		return LevelFloorDB
+	}
+	var sum float64
+	for _, sample := range samples {
+		normalized := float64(sample) / math.MaxInt16
+		sum += normalized * normalized
+	}
+	return levelDBFS(sum, len(samples))
+}
+
+// levelDBFS pasa una suma de cuadrados normalizados a dBFS RMS, entre LevelFloorDB y 0.
+func levelDBFS(sum float64, count int) float32 {
 	level := 20 * math.Log10(math.Sqrt(sum/float64(count)))
 	if math.IsInf(level, -1) || level < LevelFloorDB {
 		level = LevelFloorDB
 	}
-	return float32(math.Min(level, 0)), clipped
+	return float32(math.Min(level, 0))
 }
 
 func EncodePCM(samples []int16) []byte {
@@ -57,22 +76,4 @@ func DecodePCM(data []byte) ([]int16, error) {
 		samples[index] = int16(binary.LittleEndian.Uint16(data[index*2:]))
 	}
 	return samples, nil
-}
-
-func PreparePCM(data []byte, gate NoiseGate, filterEnabled bool) ([]byte, error) {
-	if !filterEnabled {
-		return append([]byte(nil), data...), nil
-	}
-	samples, err := DecodePCM(data)
-	if err != nil {
-		return nil, err
-	}
-	for start := 0; start < len(samples); start += FrameSamples {
-		end := start + FrameSamples
-		if end > len(samples) {
-			end = len(samples)
-		}
-		gate.Apply(samples[start:end])
-	}
-	return EncodePCM(samples), nil
 }

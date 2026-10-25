@@ -57,3 +57,11 @@ func TestFormatParamValue(t *testing.T) {
 		}
 	}
 }
+
+func TestMeterPos(t *testing.T) {
+	for db, want := range map[float32]float64{-60: 0, -30: 0.5, 0: 1, -18: 0.7} {
+		if got := meterPos(db); got < want-1e-6 || got > want+1e-6 {
+			t.Fatalf("meterPos(%v) = %v, want %v", db, got, want)
+		}
+	}
+}

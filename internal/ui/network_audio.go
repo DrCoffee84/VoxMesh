@@ -74,8 +74,8 @@ func (a *App) handleAudioPacket(packet transport.Packet) {
 	if senderID == a.participantID {
 		return // mi propia voz devuelta (dos hosts reenviándose entre sí): sería eco
 	}
-	if packet.Flags&transport.FlagInputClipped != 0 {
-		a.markPeerClipping(senderID)
+	if packet.Flags&transport.FlagShout != 0 {
+		a.markPeerShouting(senderID)
 	}
 	if engine := a.engine(); engine != nil {
 		engine.PlayStreamSeq(senderID, packet.Sequence, packet.Talkspurt, opusPacket)
@@ -87,21 +87,21 @@ func (a *App) handleAudioPacket(packet transport.Packet) {
 // El rol se mira en cada frame (host: a todos; cliente: a su host), así la migración de host no
 // reinicia el audio.
 func (a *App) sendOutgoingPCM(frame audio.CapturedFrame, udp *transport.UDP) {
-	// Saturación: se mide sobre lo capturado (antes de la cadena), pinta el avatar propio y viaja
-	// como flag en los paquetes de este frame para que los demás lo vean.
-	_, clipped := audio.FrameLevel(frame.PCM)
-	flags := transport.FlagAudioSequence
-	if clipped {
-		flags |= transport.FlagInputClipped
-		a.markPeerClipping(a.participantID)
-	}
-	frames, ok := a.prepareOutgoingFrames(frame.PCM)
+	frames, ok, postDB := a.prepareOutgoingFrames(frame.PCM)
+	a.reportMeter(frame.PCM, ok, postDB)
 	// Mute: la cadena sigue corriendo (RNNoise retiene 20 ms y el VAD su hold; saltearla dejaría
 	// audio viejo que saldría al desmutear) pero el frame se descarta igual que con la compuerta
 	// cerrada (DTX): sin paquete, sin monitoreo ni indicador de voz. La secuencia no avanza, así
 	// que el jitter buffer del receptor lo ve como silencio, no como pérdida.
 	if !ok || len(frames) == 0 || a.isMuted.Load() {
 		return
+	}
+	// Modo grito: aro rojo en el avatar propio, y viaja como flag en los paquetes de este frame
+	// para que los demás lo vean.
+	flags := transport.FlagAudioSequence
+	if a.effects.Shouting() {
+		flags |= transport.FlagShout
+		a.markPeerShouting(a.participantID)
 	}
 	if engine := a.engine(); engine != nil && a.conf().LiveMonitoring {
 		for _, samples := range frames {
@@ -206,33 +206,41 @@ func (a *App) playbackSettings() audio.PlaybackSettings {
 
 // prepareOutgoingFrames devuelve los frames a mandar (ver audio.PrepareOutgoingFrames). Valen
 // hasta el próximo frame.
-func (a *App) prepareOutgoingFrames(frame []byte) ([][]int16, bool) {
+//
+// postDB es el nivel del frame ya procesado (lo que se manda, o se mandaría si la compuerta
+// estuviera abierta), para el medidor post-filtro.
+func (a *App) prepareOutgoingFrames(frame []byte) (frames [][]int16, ok bool, postDB float32) {
 	samples, err := audio.DecodePCM(frame)
 	if err != nil {
 		logging.Errorf("procesar audio saliente: %s", logging.FormatError(err))
-		return nil, false
+		return nil, false, audio.LevelFloorDB
 	}
 	cfg := a.conf()
 	gate, settings := audio.InputSettings(cfg)
-	frames, _, err := audio.PrepareOutgoingFrames(samples, a.voiceProcessor, gate, cfg.AudioFilterEnabled, cfg.VADThreshold, settings, a.effects)
+	frames, _, err = audio.PrepareOutgoingFrames(samples, a.voiceProcessor, gate, cfg.AudioFilterEnabled, cfg.VADThreshold, settings, a.effects)
 	if err != nil {
 		logging.Errorf("procesar audio saliente: %s", logging.FormatError(err))
-		return nil, false
+		return nil, false, audio.LevelFloorDB
 	}
-	return frames, len(frames) > 0
+	// La cadena procesa samples en el lugar: después de la llamada es el frame filtrado.
+	return frames, len(frames) > 0, audio.SamplesLevel(samples)
 }
 
 // prepareOutgoingPCM es la misma cadena en bytes (pre-roll concatenado), para la escucha de
-// prueba de ajustes.
+// prueba de ajustes. Le avisa al medidor (reportMeter) aunque el frame no salga.
 func (a *App) prepareOutgoingPCM(frame []byte) ([]byte, bool) {
-	cfg := a.conf()
-	gate, settings := audio.InputSettings(cfg)
-	payload, shouldSend, err := audio.PrepareOutgoingPCMWithFilters(frame, a.voiceProcessor, gate, cfg.AudioFilterEnabled, cfg.VADThreshold, settings, a.effects)
-	if err != nil || !shouldSend {
-		if err != nil {
-			logging.Errorf("procesar audio saliente: %s", logging.FormatError(err))
-		}
+	frames, ok, postDB := a.prepareOutgoingFrames(frame)
+	a.reportMeter(frame, ok, postDB)
+	if !ok {
 		return nil, false
 	}
-	return payload, true
+	total := 0
+	for _, samples := range frames {
+		total += len(samples)
+	}
+	joined := make([]int16, 0, total)
+	for _, samples := range frames {
+		joined = append(joined, samples...)
+	}
+	return audio.EncodePCM(joined), true
 }

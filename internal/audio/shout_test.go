@@ -167,3 +167,51 @@ func TestFrameLevel(t *testing.T) {
 		t.Fatal("un pico al tope tiene que marcar saturación")
 	}
 }
+
+func TestShouting_ReportsLastFrame(t *testing.T) {
+	denoiser, err := NewRNNoise()
+	if err != nil {
+		t.Fatal(err)
+	}
+	effects := &Effects{}
+	settings := shoutTestSettings()
+	settings.ShoutEnabled = true
+	settings.ShoutThresholdDB = -12
+	settings.ShoutHoldMS = 0
+	if _, _, err := PrepareOutgoingFrames(sineFrame(0, 100), denoiser, NoiseGate{}, true, 0.5, settings, effects); err != nil || effects.Shouting() {
+		t.Fatalf("quiet frame: shouting=%v err=%v", effects.Shouting(), err)
+	}
+	if _, _, err := PrepareOutgoingFrames(sineFrame(1, 20000), denoiser, NoiseGate{}, true, 0.5, settings, effects); err != nil || !effects.Shouting() {
+		t.Fatalf("loud frame: shouting=%v err=%v", effects.Shouting(), err)
+	}
+	settings.RNNoiseEnabled = false // sin RNNoise no hay modo grito
+	if _, _, err := PrepareOutgoingFrames(sineFrame(2, 20000), denoiser, NoiseGate{}, true, 0.5, settings, effects); err != nil || effects.Shouting() {
+		t.Fatalf("without RNNoise: shouting=%v err=%v", effects.Shouting(), err)
+	}
+}
+
+func TestSamplesLevelMatchesFrameLevel(t *testing.T) {
+	frame := sineFrame(0, 12000)
+	want, _ := FrameLevel(EncodePCM(frame))
+	if got := SamplesLevel(frame); got != want {
+		t.Fatalf("SamplesLevel %v, FrameLevel %v", got, want)
+	}
+}
+
+func TestEffectsVADReportsLastFrame(t *testing.T) {
+	denoiser, err := NewRNNoise()
+	if err != nil {
+		t.Fatal(err)
+	}
+	effects := &Effects{}
+	settings := shoutTestSettings()
+	if _, _, err := PrepareOutgoingFrames(sineFrame(0, 8000), denoiser, NoiseGate{}, true, 0.5, settings, effects); err != nil {
+		t.Fatal(err)
+	}
+	if vad := effects.VAD(); vad < 0 || vad > 1 {
+		t.Fatalf("VAD with RNNoise: %v", vad)
+	}
+	if _, _, err := PrepareOutgoingFrames(sineFrame(1, 8000), denoiser, NoiseGate{}, false, 0.5, settings, effects); err != nil || effects.VAD() != -1 {
+		t.Fatalf("VAD without the filter chain: %v (err %v)", effects.VAD(), err)
+	}
+}

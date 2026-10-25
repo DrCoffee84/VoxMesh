@@ -5,40 +5,35 @@ import (
 	"testing"
 )
 
-func TestPrepareOutgoingPCMDropsSilentFrameWithRNNoise(t *testing.T) {
+func TestPrepareOutgoingFramesDropsSilentFrameWithRNNoise(t *testing.T) {
 	denoiser, err := NewRNNoise()
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw := EncodePCM(make([]int16, RNNoiseFrameSamples))
-	output, shouldSend, err := PrepareOutgoingPCM(raw, denoiser, NoiseGate{ThresholdDB: -55}, true, 0.5)
+	frames, _, err := PrepareOutgoingFrames(make([]int16, RNNoiseFrameSamples), denoiser, NoiseGate{ThresholdDB: -55}, true, 0.5, DefaultFilterSettings(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if shouldSend {
+	if len(frames) != 0 {
 		t.Fatal("silent frame should not be sent")
 	}
-	if output != nil {
-		t.Fatal("silent frame should not produce a packet payload")
-	}
 }
 
-func TestPrepareOutgoingPCMKeepsRawWhenFilterDisabled(t *testing.T) {
+func TestPrepareOutgoingFramesKeepsRawWhenFilterDisabled(t *testing.T) {
 	denoiser, err := NewRNNoise()
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw := EncodePCM([]int16{100, -100})
-	output, shouldSend, err := PrepareOutgoingPCM(raw, denoiser, NoiseGate{ThresholdDB: 0}, false, 0.5)
+	frames, _, err := PrepareOutgoingFrames([]int16{100, -100}, denoiser, NoiseGate{ThresholdDB: 0}, false, 0.5, DefaultFilterSettings(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !shouldSend || string(output) != string(raw) {
-		t.Fatal("disabled filter must send unchanged PCM")
+	if len(frames) != 1 || len(frames[0]) != 2 || frames[0][0] != 100 || frames[0][1] != -100 {
+		t.Fatalf("disabled filter must send unchanged PCM, got %v", frames)
 	}
 }
 
-func TestPrepareOutgoingPCMWithFilters_ShoutGoesThroughRNNoise(t *testing.T) {
+func TestPrepareOutgoingFrames_ShoutGoesThroughRNNoise(t *testing.T) {
 	denoiser, err := NewRNNoise()
 	if err != nil {
 		t.Fatal(err)
@@ -58,21 +53,16 @@ func TestPrepareOutgoingPCMWithFilters_ShoutGoesThroughRNNoise(t *testing.T) {
 			n := frame*FrameSamples + i
 			shoutSamples[i] = int16(32767 * math.Sin(2*math.Pi*300*float64(n)/SampleRate))
 		}
-		raw := EncodePCM(shoutSamples)
 
-		output, shouldSend, err := PrepareOutgoingPCMWithFilters(raw, denoiser, NoiseGate{}, true, 0.5, settings, nil)
+		frames, _, err := PrepareOutgoingFrames(shoutSamples, denoiser, NoiseGate{}, true, 0.5, settings, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !shouldSend {
+		if len(frames) != 1 {
 			t.Fatal("loud shout must be sent")
 		}
 
-		outSamples, err := DecodePCM(output)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, s := range outSamples {
+		for _, s := range frames[0] {
 			if s > ceiling || s < -ceiling {
 				t.Fatalf("expected shout peak under %d, got %d", ceiling, s)
 			}
@@ -100,34 +90,29 @@ func TestFloatToInt16Saturates(t *testing.T) {
 	}
 }
 
-func TestPrepareOutgoingPCMWithFilters_PeakCeiling(t *testing.T) {
+func TestPrepareOutgoingFrames_PeakCeiling(t *testing.T) {
 	// Filter disabled: safety ceiling ~27000
 	loudSamples := make([]int16, FrameSamples)
 	for i := range loudSamples {
 		loudSamples[i] = 32000
 	}
-	raw := EncodePCM(loudSamples)
 
-	output, shouldSend, err := PrepareOutgoingPCMWithFilters(raw, nil, NoiseGate{}, false, 0.5, DefaultFilterSettings(), nil)
+	frames, _, err := PrepareOutgoingFrames(loudSamples, nil, NoiseGate{}, false, 0.5, DefaultFilterSettings(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !shouldSend {
+	if len(frames) != 1 {
 		t.Fatal("unfiltered frame must be sent")
 	}
 
-	outSamples, err := DecodePCM(output)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, s := range outSamples {
+	for _, s := range frames[0] {
 		if s > 27000 || s < -27000 {
 			t.Fatalf("expected ceiling at 27000, got %d", s)
 		}
 	}
 }
 
-func TestPrepareOutgoingPCMWithFilters_TanhLimiter(t *testing.T) {
+func TestPrepareOutgoingFrames_TanhLimiter(t *testing.T) {
 	effects := &Effects{}
 	settings := DefaultFilterSettings()
 	settings.LimiterEnabled = true
@@ -140,23 +125,18 @@ func TestPrepareOutgoingPCMWithFilters_TanhLimiter(t *testing.T) {
 	for i := range samples {
 		samples[i] = 30000
 	}
-	raw := EncodePCM(samples)
 
-	output, shouldSend, err := PrepareOutgoingPCMWithFilters(raw, nil, NoiseGate{}, true, 0.5, settings, effects)
+	frames, _, err := PrepareOutgoingFrames(samples, nil, NoiseGate{}, true, 0.5, settings, effects)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !shouldSend {
+	if len(frames) != 1 {
 		t.Fatal("frame must be sent")
 	}
 
-	outSamples, err := DecodePCM(output)
-	if err != nil {
-		t.Fatal(err)
-	}
 	// With -6dB threshold and tanh compression, peak should be well below 20000
-	if outSamples[0] >= 20000 {
-		t.Fatalf("expected tanh limiter to compress below 20000, got %d", outSamples[0])
+	if frames[0][0] >= 20000 {
+		t.Fatalf("expected tanh limiter to compress below 20000, got %d", frames[0][0])
 	}
 }
 
@@ -201,6 +181,86 @@ func TestPrepareOutgoingFrames_PreRollSendsPreviousFramesWithFadeIn(t *testing.T
 	frames, started, _ = PrepareOutgoingFrames(constant(10000), nil, gate, true, 0.5, settings, effects)
 	if started || len(frames) != 1 {
 		t.Fatalf("open gate should send just the current frame, got %d (started %v)", len(frames), started)
+	}
+}
+
+func TestProcessRecording_MatchesSendChain(t *testing.T) {
+	settings := DefaultFilterSettings()
+	settings.RNNoiseEnabled = false
+	settings.NoiseGateEnabled = true
+	settings.GateHoldMS = 0
+	gate := NoiseGate{ThresholdDB: -30}
+	var input [][]int16
+	for i := 0; i < 15; i++ {
+		amplitude := 50.0
+		if i >= 5 && i < 10 {
+			amplitude = 16000
+		}
+		input = append(input, sineFrame(i, amplitude))
+	}
+	var recording []int16
+	for _, frame := range input {
+		recording = append(recording, frame...)
+	}
+
+	effects := &Effects{}
+	var sent []int16
+	first := -1
+	for i, frame := range input {
+		frames, _, err := PrepareOutgoingFrames(append([]int16(nil), frame...), nil, gate, true, 0.5, settings, effects)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(frames) > 0 && first < 0 {
+			first = i - (len(frames) - 1)
+		}
+		for _, f := range frames {
+			sent = append(sent, f...)
+		}
+	}
+	if first < 0 {
+		t.Fatal("voice was never sent")
+	}
+	want := make([]int16, len(recording))
+	copy(want[first*FrameSamples:], sent)
+
+	got, err := ProcessRecording(EncodePCM(append(recording, 1, 2, 3)), nil, gate, true, 0.5, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotSamples, err := DecodePCM(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gotSamples) != len(want) {
+		t.Fatalf("recording length %d, want %d", len(gotSamples), len(want))
+	}
+	for i := range want {
+		if gotSamples[i] != want[i] {
+			t.Fatalf("sample %d: %d, want %d", i, gotSamples[i], want[i])
+		}
+	}
+}
+
+func TestEffectsReset_DropsStalePreRoll(t *testing.T) {
+	settings := DefaultFilterSettings()
+	settings.RNNoiseEnabled = false
+	settings.NoiseGateEnabled = true
+	settings.GateHoldMS = 0
+	gate := NoiseGate{ThresholdDB: -30}
+	effects := &Effects{}
+	for i := 0; i < 3; i++ {
+		if frames, _, err := PrepareOutgoingFrames(sineFrame(i, 50), nil, gate, true, 0.5, settings, effects); err != nil || len(frames) != 0 {
+			t.Fatalf("closed gate sent %d frames (err %v)", len(frames), err)
+		}
+	}
+	effects.Reset()
+	frames, started, err := PrepareOutgoingFrames(sineFrame(3, 16000), nil, gate, true, 0.5, settings, effects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !started || len(frames) != 1 {
+		t.Fatalf("after Reset the first open frame must go alone, got %d frames (started %v)", len(frames), started)
 	}
 }
 

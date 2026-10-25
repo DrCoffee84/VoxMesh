@@ -53,8 +53,8 @@ func TestDefaultComesFromParams(t *testing.T) {
 			t.Fatalf("%q: Default() tiene %v, la tabla %v", param.Key, got, param.Default)
 		}
 	}
-	// Defaults elegidos: solo filtro de voz + RNNoise + VAD en la entrada, salida apagada.
-	if !cfg.AudioFilterEnabled || !cfg.RNNoiseEnabled || !cfg.VADEnabled || cfg.NoiseGateEnabled || cfg.LimiterEnabled {
+	// Defaults elegidos: filtro de voz + RNNoise + VAD + puerta baja en la entrada, salida apagada.
+	if !cfg.AudioFilterEnabled || !cfg.RNNoiseEnabled || !cfg.VADEnabled || !cfg.NoiseGateEnabled || cfg.ThresholdDB != -50 || cfg.LimiterEnabled {
 		t.Fatalf("defaults de entrada inesperados: %+v", cfg.LiveSettings)
 	}
 	if cfg.OutputFilterEnabled || cfg.OutputGainDB != 5 || cfg.JitterBufferMS != 300 || cfg.ShoutDryMix != 0.2 {

@@ -63,18 +63,6 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 	input.SetSelected(cfg.InputDevice)
 	output := widget.NewSelect(outputOptions, nil)
 	output.SetSelected(cfg.OutputDevice)
-	mode := widget.NewRadioGroup([]string{"Activación por voz", "Push-to-talk"}, func(selected string) {
-		if selected == "Push-to-talk" {
-			a.updateConfig(func(c *config.Config) { c.MicMode = config.PushToTalk })
-		} else {
-			a.updateConfig(func(c *config.Config) { c.MicMode = config.VoiceActivation })
-		}
-	})
-	if cfg.MicMode == config.PushToTalk {
-		mode.SetSelected("Push-to-talk")
-	} else {
-		mode.SetSelected("Activación por voz")
-	}
 	// Configuración avanzada de entrada y salida: controles generados desde config.Params, con su
 	// barra de perfiles arriba (ui_audio_params.go).
 	inputControls := &paramControls{app: a}
@@ -82,11 +70,27 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 	filterCheck := inputControls.control("audio_filter_enabled")
 	advancedFilters := container.NewVBox(inputProfileRow, inputControls.accordion(inputSections))
 	advancedFilters.Hide()
+	// Detalle del medidor (con Configuración avanzada abierta): cuánta voz ve el VAD contra lo que
+	// exige, y el nivel después de los filtros contra el volumen mínimo de la puerta de ruido.
+	vadText := widget.NewLabel("Voz detectada (VAD): –")
+	vadBar := newLevelBar()
+	postText := widget.NewLabel("Después de filtros: –")
+	postBar := newLevelBar()
+	postLegend := widget.NewLabel("Lo que se manda, ya limpio. Línea blanca: volumen mínimo para mandar (puerta de ruido; tenue si está apagada).")
+	postLegend.Wrapping = fyne.TextWrapWord
+	postLegend.Importance = widget.LowImportance
+	meterDetailsLegend := widget.NewLabel("Línea blanca: lo que exige el VAD para mandar.")
+	meterDetailsLegend.Wrapping = fyne.TextWrapWord
+	meterDetailsLegend.Importance = widget.LowImportance
+	meterDetails := container.NewVBox(vadText, vadBar, meterDetailsLegend)
+	meterDetails.Hide()
 	advancedButton := widget.NewButton("Configuración avanzada", func() {
 		if advancedFilters.Visible() {
 			advancedFilters.Hide()
+			meterDetails.Hide()
 		} else {
 			advancedFilters.Show()
+			meterDetails.Show()
 		}
 	})
 	resetFilters := widget.NewButton("↺", inputProfileBar.loadDefault)
@@ -96,25 +100,59 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 	level := newLevelBar()
 	level.SetValue(0)
 	levelText := widget.NewLabel("Nivel: -60 dBFS")
+	levelLegend := widget.NewLabel("Gris: silencio · Amarillo: hay sonido pero no se manda · Verde: se manda · Rojo: modo grito. Línea roja: volumen para entrar al modo grito.")
+	levelLegend.Wrapping = fyne.TextWrapWord
+	levelLegend.Importance = widget.LowImportance
 	monitor := &levelMonitor{}
-	var lastLevelPaint, lastClip atomic.Int64
-	// malgo llama a onLevel por cada buffer de captura (~100 veces/s). Un fyne.Do por llamada
-	// saturaba la cola del hilo de UI y cada SetText re-layouteaba la vista: se limita a ~15 fps.
-	// La saturación se anota siempre (aunque no toque pintar) y queda en rojo clipHold.
-	onLevel := func(db float32, clipped bool) {
+	var lastLevelPaint, lastClip, lastSent, lastShout atomic.Int64
+	// Llega un inputMeter por frame (50 por segundo), ya procesado por la cadena de envío. Un
+	// fyne.Do por frame saturaba la cola del hilo de UI y cada SetText re-layouteaba la vista: se
+	// pinta a ~15 fps. Lo que pasa entre pinturas (se mandó, modo grito, saturó) se anota siempre
+	// y se sostiene un rato, así un frame suelto no se pierde ni hace parpadear el color.
+	onMeter := func(m inputMeter) {
 		now := time.Now().UnixNano()
-		if clipped {
+		if m.clipped {
 			lastClip.Store(now)
+		}
+		if m.sent {
+			lastSent.Store(now)
+		}
+		if m.shout {
+			lastShout.Store(now)
 		}
 		last := lastLevelPaint.Load()
 		if now-last < int64(levelPaintInterval) || !lastLevelPaint.CompareAndSwap(last, now) {
 			return
 		}
+		fill, state := meterQuietColor, ""
+		switch {
+		case m.muted:
+			fill, state = meterHeldColor, "no se envía (muteado)"
+		case now-lastShout.Load() < int64(meterHold):
+			fill, state = shoutColor, "modo grito"
+		case now-lastSent.Load() < int64(meterHold):
+			fill, state = levelFillColor, "enviando"
+		case m.db > meterQuietDB:
+			fill, state = meterHeldColor, "no se envía"
+		}
 		clipping := now-lastClip.Load() < int64(clipHold)
 		fyne.Do(func() {
-			level.SetValue(float64((db - audio.LevelFloorDB) / -audio.LevelFloorDB))
-			level.SetClipping(clipping)
-			text := fmt.Sprintf("Nivel: %.0f dBFS", db)
+			cfg := a.conf()
+			level.SetValue(meterPos(m.db))
+			level.SetColor(fill)
+			if cfg.ShoutEnabled {
+				level.SetMarker(meterPos(cfg.ShoutThresholdDB), shoutColor)
+			} else {
+				level.SetMarker(0, nil)
+			}
+			paintPostMeter(cfg, m, postText, postBar)
+			if meterDetails.Visible() {
+				paintVADMeter(cfg, m, vadText, vadBar)
+			}
+			text := fmt.Sprintf("Nivel: %.0f dBFS", m.db)
+			if state != "" {
+				text += " · " + state
+			}
 			levelText.Importance = widget.MediumImportance
 			if clipping {
 				text += " · SATURA (bajá el volumen del micrófono)"
@@ -123,9 +161,9 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 			levelText.SetText(text)
 		})
 	}
-	// En sala, en la escucha de prueba y con el celular no corre el medidor propio: el nivel llega
-	// de los frames de entrada (reportInputLevel).
-	a.levelListener.Store(&onLevel)
+	// Todo lo que pasa por la cadena de envío (sala, escucha de prueba, celular y el medidor
+	// propio, que la corre sin mandar nada) le avisa al medidor con reportMeter.
+	a.levelListener.Store(&onMeter)
 	var previewButton *widget.Button
 	previewActive := false
 	settingsClosed := false
@@ -143,7 +181,7 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 			levelText.SetText("Nivel: controlado desde el celular")
 			return
 		}
-		monitor.Start(name, onLevel)
+		monitor.Start(name, a.meterFrame)
 	}
 	startMonitor(input.Selected)
 	stopPreview := func() {
@@ -417,6 +455,9 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 		}
 		a.setStatus(status)
 		closeSettings()
+		if cfg.PeerVolumeMax != baseline.PeerVolumeMax {
+			a.applyPeerVolumeMax()
+		}
 		a.saveConfig()
 		// Los selects publican el dispositivo en vivo: se compara contra el que había al abrir
 		// ajustes (antes se comparaba contra a.cfg ya modificado y nunca reiniciaba).
@@ -509,7 +550,11 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 		input,
 		levelText,
 		level,
-		mode,
+		levelLegend,
+		postText,
+		postBar,
+		postLegend,
+		meterDetails,
 		container.NewHBox(filterCheck, advancedButton, resetFilters),
 		advancedFilters,
 		liveMonitoring,
@@ -638,6 +683,71 @@ func (a *App) showPhoneMic() {
 // levelPaintInterval limita los repintados del medidor de nivel (~15 fps).
 const levelPaintInterval = 66 * time.Millisecond
 
+// Estados del medidor de nivel (renderSettingsView): gris silencio, amarillo hay sonido pero la
+// cadena no lo manda, verde se manda (levelFillColor), rojo modo grito (shoutColor).
+const (
+	meterQuietDB = -50                    // por debajo, silencio (gris) y no "no se envía"
+	meterHold    = 150 * time.Millisecond // cuánto se sostiene "enviando" / "modo grito"
+	clipHold     = time.Second            // cuánto queda el aviso "SATURA"
+)
+
+var (
+	meterQuietColor     = color.NRGBA{R: 105, G: 112, B: 125, A: 255}
+	meterHeldColor      = color.NRGBA{R: 235, G: 190, B: 60, A: 255}
+	meterMarkerColor    = color.NRGBA{R: 235, G: 235, B: 240, A: 255}
+	meterMarkerOffColor = color.NRGBA{R: 235, G: 235, B: 240, A: 70}
+)
+
+// meterPos lleva un nivel en dBFS a la posición de la barra (LevelFloorDB → 0, 0 dBFS → 1).
+func meterPos(db float32) float64 {
+	return float64((db - audio.LevelFloorDB) / -audio.LevelFloorDB)
+}
+
+// paintVADMeter pinta la barra del VAD (hilo de UI). El VAD es una probabilidad, no un volumen:
+// por eso tiene su propia barra (0–100 %) con la exigencia como línea.
+func paintVADMeter(cfg *config.Config, m inputMeter, vadText *widget.Label, vadBar *levelBar) {
+	switch {
+	case m.vad < 0:
+		vadBar.SetValue(0)
+		vadBar.SetMarker(0, nil)
+		vadText.SetText("Voz detectada (VAD): no se mide (filtro de voz o supresión de ruido apagados)")
+	default:
+		vadBar.SetValue(float64(m.vad))
+		vadColor := meterHeldColor
+		if m.vad >= cfg.VADThreshold {
+			vadColor = levelFillColor
+		}
+		vadBar.SetColor(vadColor)
+		text := fmt.Sprintf("Voz detectada (VAD): %.0f %% · exige %.0f %%", m.vad*100, cfg.VADThreshold*100)
+		marker := color.Color(meterMarkerColor)
+		if !cfg.VADEnabled {
+			text += " (VAD apagado: no corta)"
+			marker = meterMarkerOffColor
+		}
+		vadBar.SetMarker(float64(cfg.VADThreshold), marker)
+		vadText.SetText(text)
+	}
+}
+
+// paintPostMeter pinta la barra post-filtro (hilo de UI): lo que se manda, ya limpio. La puerta
+// de ruido mide ese audio, por eso su línea va acá y no en la barra de entrada.
+func paintPostMeter(cfg *config.Config, m inputMeter, postText *widget.Label, postBar *levelBar) {
+	postBar.SetValue(meterPos(m.postDB))
+	postColor, state := meterQuietColor, "no se manda"
+	if m.sent {
+		postColor, state = levelFillColor, "se manda"
+	}
+	postBar.SetColor(postColor)
+	gate := fmt.Sprintf("volumen mínimo %.0f dBFS", cfg.ThresholdDB)
+	marker := color.Color(meterMarkerColor)
+	if !cfg.NoiseGateEnabled {
+		gate += " (puerta apagada)"
+		marker = meterMarkerOffColor
+	}
+	postBar.SetMarker(meterPos(cfg.ThresholdDB), marker)
+	postText.SetText(fmt.Sprintf("Después de filtros: %.0f dBFS · %s · %s", m.postDB, state, gate))
+}
+
 // levelMonitor abre y cierra el medidor de nivel de ajustes fuera del hilo de UI:
 // malgo.InitContext/InitDevice (WASAPI) tarda cientos de ms, o segundos con dispositivos
 // Bluetooth. gen descarta un arranque viejo (se cambió de dispositivo o se cerró la vista
@@ -657,11 +767,11 @@ func (m *levelMonitor) detach() (*audio.Monitor, uint64) {
 	return old, m.gen
 }
 
-func (m *levelMonitor) Start(name string, onLevel func(db float32, clipped bool)) {
+func (m *levelMonitor) Start(name string, onFrame func(pcm []byte)) {
 	old, gen := m.detach()
 	go func() {
 		old.Stop()
-		started, err := audio.StartMonitor(name, onLevel)
+		started, err := audio.StartMonitor(name, onFrame)
 		if err != nil {
 			logging.Errorf("medidor de nivel %q: %s", name, logging.FormatError(err))
 			return
@@ -705,6 +815,11 @@ func (a *App) testPhoneMic() {
 			a.setStatus("No llegó audio desde el celular.")
 			return
 		}
+		data, err := a.processTestRecording(a.conf(), data)
+		if err != nil {
+			a.setStatus("No se pudo aplicar el filtro: " + err.Error())
+			return
+		}
 		a.recordingMu.Lock()
 		a.recordedInput = data
 		a.recordingMu.Unlock()
@@ -718,33 +833,36 @@ func (a *App) testInput(name string) {
 		return
 	}
 	a.setStatus("Grabando desde " + name + "...")
-	cfg := a.conf()
-	filterEnabled := cfg.AudioFilterEnabled
-	thresholdDB := cfg.ThresholdDB
 	go func() {
 		data, err := audio.RecordInput(name, 2*time.Second)
 		if err != nil {
 			a.setStatus("No se pudo grabar: " + err.Error())
 			return
 		}
-		if filterEnabled {
-			data, _, err = audio.PrepareOutgoingPCM(data, a.voiceProcessor, audio.NoiseGate{ThresholdDB: thresholdDB}, true, cfg.VADThreshold)
-		} else {
-			data, err = audio.PreparePCM(data, audio.NoiseGate{ThresholdDB: thresholdDB}, false)
-		}
+		cfg := a.conf()
+		data, err = a.processTestRecording(cfg, data)
 		if err != nil {
 			a.setStatus("No se pudo aplicar el filtro: " + err.Error())
 			return
 		}
 		a.recordingMu.Lock()
-		a.recordedInput = append(a.recordedInput[:0], data...)
+		a.recordedInput = data
 		a.recordingMu.Unlock()
 		mode := "audio crudo"
-		if filterEnabled {
+		if cfg.AudioFilterEnabled {
 			mode = "audio con filtro"
 		}
 		a.setStatus("Micrófono OK: " + mode + ", " + strconv.Itoa(len(data)) + " bytes.")
 	}()
+}
+
+func (a *App) processTestRecording(cfg *config.Config, data []byte) ([]byte, error) {
+	denoiser, err := audio.NewRNNoise()
+	if err != nil {
+		return nil, err
+	}
+	gate, settings := audio.InputSettings(cfg)
+	return audio.ProcessRecording(data, denoiser, gate, cfg.AudioFilterEnabled, cfg.VADThreshold, settings)
 }
 
 func (a *App) testOutput(name string) {

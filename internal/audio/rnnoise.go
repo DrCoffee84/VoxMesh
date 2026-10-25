@@ -29,6 +29,15 @@ func NewRNNoise() (*RNNoise, error) {
 	return &RNNoise{denoiser: denoiser}, nil
 }
 
+func (r *RNNoise) Reset() {
+	if r == nil || r.denoiser == nil {
+		return
+	}
+	r.mu.Lock()
+	r.denoiser.Reset()
+	r.mu.Unlock()
+}
+
 // Delay es el retardo de RNNoise en muestras: la salida de la muestra i corresponde a la
 // entrada i − Delay() (960 a 48 kHz, un frame).
 func (r *RNNoise) Delay() int {
@@ -101,39 +110,28 @@ func floatToInt16(value float32) int16 {
 	return int16(math.Round(float64(value)))
 }
 
-// PrepareOutgoingPCM procesa un bloque suelto (grabación de prueba) con los filtros por defecto.
-func PrepareOutgoingPCM(data []byte, denoiser *RNNoise, gate NoiseGate, filterEnabled bool, vadThreshold float32) ([]byte, bool, error) {
-	settings := DefaultFilterSettings()
-	return PrepareOutgoingPCMWithFilters(data, denoiser, gate, filterEnabled, vadThreshold, settings, nil)
-}
-
-// PrepareOutgoingPCMWithFilters es PrepareOutgoingFrames en bytes S16LE: devuelve los frames que
-// saldrían concatenados (pre-roll incluido, que es audio anterior al frame actual). Lo usan la
-// escucha de prueba y la grabación; la sala usa PrepareOutgoingFrames directo.
-func PrepareOutgoingPCMWithFilters(data []byte, denoiser *RNNoise, gate NoiseGate, filterEnabled bool, vadThreshold float32, settings FilterSettings, effects *Effects) ([]byte, bool, error) {
-	if len(data) == 0 {
-		return nil, false, nil
-	}
+func ProcessRecording(data []byte, denoiser *RNNoise, gate NoiseGate, filterEnabled bool, vadThreshold float32, settings FilterSettings) ([]byte, error) {
 	samples, err := DecodePCM(data)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	frames, _, err := PrepareOutgoingFrames(samples, denoiser, gate, filterEnabled, vadThreshold, settings, effects)
-	if err != nil || len(frames) == 0 {
-		return nil, false, err
+	effects := &Effects{}
+	out := make([]int16, 0, len(samples))
+	for start := 0; start+FrameSamples <= len(samples); start += FrameSamples {
+		frames, _, err := PrepareOutgoingFrames(samples[start:start+FrameSamples], denoiser, gate, filterEnabled, vadThreshold, settings, effects)
+		if err != nil {
+			return nil, err
+		}
+		if len(frames) == 0 {
+			out = append(out, make([]int16, FrameSamples)...)
+			continue
+		}
+		out = out[:len(out)-(len(frames)-1)*FrameSamples]
+		for _, frame := range frames {
+			out = append(out, frame...)
+		}
 	}
-	if len(frames) == 1 {
-		return EncodePCM(frames[0]), true, nil
-	}
-	total := 0
-	for _, frame := range frames {
-		total += len(frame)
-	}
-	joined := make([]int16, 0, total)
-	for _, frame := range frames {
-		joined = append(joined, frame...)
-	}
-	return EncodePCM(joined), true, nil
+	return EncodePCM(out), nil
 }
 
 // PrepareOutgoingFrames corre la cadena de envío sobre un frame (in-place) y devuelve los frames
@@ -152,6 +150,9 @@ func PrepareOutgoingFrames(samples []int16, denoiser *RNNoise, gate NoiseGate, f
 	ceiling := sendCeiling(settings, filterEnabled)
 
 	if !filterEnabled {
+		if effects != nil {
+			effects.setLastFrame(false, -1)
+		}
 		limitSend(samples, ceiling, settings.SendReleaseMS, effects)
 		return [][]int16{samples}, false, nil
 	}
@@ -179,14 +180,17 @@ func PrepareOutgoingFrames(samples []int16, denoiser *RNNoise, gate NoiseGate, f
 		if effects != nil {
 			shout = effects.shoutBegin(samples, denoiser.Delay(), settings)
 		}
-		speech, _, err := denoiser.ProcessSamplesWithOptions(samples, gate, vadThreshold, settings.VADEnabled, false)
+		speech, vad, err := denoiser.ProcessSamplesWithOptions(samples, gate, vadThreshold, settings.VADEnabled, false)
 		if err != nil {
 			return nil, false, err
 		}
 		hasSpeech = speech || shout
 		if effects != nil {
 			effects.shoutMix(samples, shout, settings)
+			effects.setLastFrame(shout, vad)
 		}
+	} else if effects != nil {
+		effects.setLastFrame(false, -1)
 	}
 
 	gateOpen := !settings.NoiseGateEnabled || gate.Open(samples)

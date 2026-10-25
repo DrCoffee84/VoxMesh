@@ -12,16 +12,16 @@ import (
 )
 
 type peerView struct {
-	id        string
-	name      string
-	address   string
-	lag       time.Duration
-	speaking  bool
-	speakStop time.Time
-	clipUntil time.Time // hasta cuándo se pinta el avatar en rojo (su micrófono saturó)
-	isSelf    bool
-	muted     bool
-	net       peerNetStats
+	id         string
+	name       string
+	address    string
+	lag        time.Duration
+	speaking   bool
+	speakStop  time.Time
+	shoutUntil time.Time // hasta cuándo va el aro rojo del avatar (habló en modo grito)
+	isSelf     bool
+	muted      bool
+	net        peerNetStats
 }
 
 // peerNetStats es lo que mide el jitter buffer del emisor en el último intervalo (audioMonitorLoop).
@@ -40,23 +40,23 @@ func (a *App) refreshPeersFromRoom() {
 	a.peerMu.Lock()
 	lagByAddress := make(map[string]time.Duration, len(a.peerNames))
 	netByID := make(map[string]peerNetStats, len(a.peerNames))
-	clipByID := make(map[string]time.Time, len(a.peerNames))
+	shoutByID := make(map[string]time.Time, len(a.peerNames))
 	for _, peer := range a.peerNames {
 		lagByAddress[peer.address] = peer.lag
 		netByID[peer.id] = peer.net
-		clipByID[peer.id] = peer.clipUntil
+		shoutByID[peer.id] = peer.shoutUntil
 	}
 	a.peerNames = nil
 	if connected {
 		a.peerNames = append(a.peerNames, peerView{
-			id:        a.participantID,
-			name:      selfName,
-			address:   "127.0.0.1",
-			isSelf:    true,
-			muted:     a.isMuted.Load(),
-			speaking:  a.voiceActive.Load(),
-			speakStop: time.Now().Add(250 * time.Millisecond),
-			clipUntil: clipByID[a.participantID],
+			id:         a.participantID,
+			name:       selfName,
+			address:    "127.0.0.1",
+			isSelf:     true,
+			muted:      a.isMuted.Load(),
+			speaking:   a.voiceActive.Load(),
+			speakStop:  time.Now().Add(250 * time.Millisecond),
+			shoutUntil: shoutByID[a.participantID],
 		})
 	}
 	for _, participant := range a.roomState.Participants {
@@ -64,13 +64,13 @@ func (a *App) refreshPeersFromRoom() {
 			continue
 		}
 		a.peerNames = append(a.peerNames, peerView{
-			id:        participant.ID,
-			name:      participant.Username,
-			address:   participant.Address,
-			lag:       lagByAddress[participant.Address],
-			muted:     participant.Muted,
-			net:       netByID[participant.ID],
-			clipUntil: clipByID[participant.ID],
+			id:         participant.ID,
+			name:       participant.Username,
+			address:    participant.Address,
+			lag:        lagByAddress[participant.Address],
+			muted:      participant.Muted,
+			net:        netByID[participant.ID],
+			shoutUntil: shoutByID[participant.ID],
 		})
 	}
 	a.peerMu.Unlock()
@@ -151,20 +151,20 @@ func (a *App) markPeerSpeaking(id, address string) {
 	a.peerMu.Unlock()
 }
 
-// clipHold es cuánto queda rojo un avatar después del último frame saturado.
-const clipHold = time.Second
+// shoutRingHold es cuánto queda el aro rojo después del último frame en modo grito.
+const shoutRingHold = 400 * time.Millisecond
 
-// markPeerClipping pinta de rojo el avatar de id (el propio con a.participantID): su micrófono
-// saturó. Solo refresca cuando se prende; lo apaga sweepSpeakingPeers.
-func (a *App) markPeerClipping(id string) {
+// markPeerShouting le pone el aro rojo al avatar de id (el propio con a.participantID): habló en
+// modo grito. Solo refresca cuando se prende; lo apaga sweepSpeakingPeers.
+func (a *App) markPeerShouting(id string) {
 	a.peerMu.Lock()
 	now := time.Now()
 	changed := false
 	for i := range a.peerNames {
 		p := &a.peerNames[i]
 		if p.id == id || (p.isSelf && id == a.participantID) {
-			changed = !now.Before(p.clipUntil)
-			p.clipUntil = now.Add(clipHold)
+			changed = !now.Before(p.shoutUntil)
+			p.shoutUntil = now.Add(shoutRingHold)
 			break
 		}
 	}
@@ -184,8 +184,8 @@ func (a *App) sweepSpeakingPeers() {
 			p.speaking = false
 			changed = true
 		}
-		if !p.clipUntil.IsZero() && !now.Before(p.clipUntil) {
-			p.clipUntil = time.Time{}
+		if !p.shoutUntil.IsZero() && !now.Before(p.shoutUntil) {
+			p.shoutUntil = time.Time{}
 			changed = true
 		}
 	}
@@ -259,6 +259,28 @@ func (a *App) setPeerVolume(id, name string, volume float64, persist bool) {
 		c.PeerVolumes[name] = volume
 	})
 	a.saveConfig()
+}
+
+func (a *App) applyPeerVolumeMax() {
+	limit := float64(a.conf().PeerVolumeMax)
+	var over []string
+	a.peerVolumeMu.RLock()
+	for id, volume := range a.peerVolumes {
+		if volume > limit {
+			over = append(over, id)
+		}
+	}
+	a.peerVolumeMu.RUnlock()
+	for _, id := range over {
+		a.setPeerVolume(id, "", limit, false)
+	}
+	a.updateConfig(func(c *config.Config) {
+		for name, volume := range c.PeerVolumes {
+			c.PeerVolumes[name] = min(volume, limit)
+		}
+	})
+	a.peerChips = nil
+	a.refreshPeerAvatars()
 }
 
 // loadSavedPeerVolumes aplica el volumen guardado por nombre a los participantes que todavía no

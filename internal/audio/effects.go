@@ -77,6 +77,43 @@ type Effects struct {
 	dry         []int16 // entrada alineada con la salida de RNNoise del bloque actual
 	dryMix      float64 // proporción de original aplicada al final del bloque anterior
 	shoutFrames int     // frames que le quedan al modo grito
+	shouting    bool    // el último frame procesado estaba en modo grito (Shouting)
+	vad         float32 // probabilidad de voz del último frame (VAD); -1 sin RNNoise
+}
+
+func (e *Effects) Reset() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.highInput, e.highOutput, e.lowOutput = 0, 0, 0
+	e.notchX1, e.notchX2, e.notchY1, e.notchY2 = 0, 0, 0, 0
+	e.compEnv, e.expEnv = 0, 0
+	e.vadHoldFrames, e.gateHoldFrames, e.wasOpen = 0, 0, false
+	e.sendLimiterReady, e.preRollCount = false, 0
+	clear(e.dryDelay)
+	e.dryPos, e.dryMix, e.shoutFrames = 0, 0, 0
+	e.shouting, e.vad = false, 0
+}
+
+// Shouting indica si el último frame que pasó por la cadena de envío estaba en modo grito (para
+// el medidor y el avatar).
+func (e *Effects) Shouting() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.shouting
+}
+
+// VAD es la probabilidad de voz (0–1) que RNNoise le dio al último frame; -1 si no corrió.
+func (e *Effects) VAD() float32 {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.vad
+}
+
+// setLastFrame guarda lo que la cadena decidió del último frame (para el medidor).
+func (e *Effects) setLastFrame(shouting bool, vad float32) {
+	e.mu.Lock()
+	e.shouting, e.vad = shouting, vad
+	e.mu.Unlock()
 }
 
 func (e *Effects) KeepVoiceOpen(vadOpen, gateOpen bool, settings FilterSettings) bool {

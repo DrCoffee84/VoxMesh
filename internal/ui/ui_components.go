@@ -21,8 +21,8 @@ import (
 	"voxmesh/internal/version"
 )
 
-// clipColor es el rojo de saturación (aro del avatar y medidor de nivel).
-var clipColor = color.NRGBA{R: 230, G: 60, B: 60, A: 255}
+// shoutColor es el rojo del modo grito (aro del avatar y barra del medidor).
+var shoutColor = color.NRGBA{R: 230, G: 60, B: 60, A: 255}
 
 // voiceHold es cuánto queda prendido el indicador de voz propia después del último frame mandado.
 const voiceHold = 350 * time.Millisecond
@@ -569,14 +569,14 @@ func (c *peerChip) update(peer peerView, now time.Time) {
 		circleColor = color.NRGBA{R: 46, G: 204, B: 113, A: 255}
 		textColor = color.NRGBA{R: 15, G: 35, B: 15, A: 255}
 	}
-	// Aro rojo mientras su micrófono satura (markPeerClipping).
+	// Aro rojo mientras habla en modo grito (markPeerShouting).
 	var strokeWidth float32
-	if now.Before(peer.clipUntil) {
+	if now.Before(peer.shoutUntil) {
 		strokeWidth = 3
 	}
 	if c.circle.FillColor != circleColor || c.circle.StrokeWidth != strokeWidth {
 		c.circle.FillColor = circleColor
-		c.circle.StrokeColor = clipColor
+		c.circle.StrokeColor = shoutColor
 		c.circle.StrokeWidth = strokeWidth
 		c.circle.Refresh()
 	}
