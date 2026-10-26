@@ -4,7 +4,9 @@ package ui
 
 import (
 	"encoding/binary"
+	"errors"
 	"net"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -25,28 +27,59 @@ const participantTimeout = 20 * time.Second
 // receiveLoop es el único lector del socket de la conexión. fo es la migración de host de esta
 // conexión: dice qué paquetes de un cliente vienen de su host y decide qué hacer con el estado de
 // otra sala o con el aviso de que el host se va.
+//
+// Solo termina cuando se cierra el socket. Cualquier otro error de lectura se registra (máx. una
+// línea cada receiveErrorLogEvery) y se sigue leyendo: antes el primer error dejaba sordo al
+// host y la sala migraba sola.
 func (a *App) receiveLoop(udp *transport.UDP, fo *room.Failover) {
+	var lastErrorLog time.Time
+	var errorsSinceLog int
 	for {
 		packet, addr, err := udp.Receive()
 		if err != nil {
-			logging.Infof("bucle UDP detenido: %s", logging.FormatError(err))
-			return
+			if errors.Is(err, net.ErrClosed) {
+				logging.Infof("bucle UDP detenido: %s", logging.FormatError(err))
+				return
+			}
+			errorsSinceLog++
+			if time.Since(lastErrorLog) >= receiveErrorLogEvery {
+				logging.Errorf("leer UDP (%d errores): %s", errorsSinceLog, logging.FormatError(err))
+				lastErrorLog, errorsSinceLog = time.Now(), 0
+			}
+			time.Sleep(receiveErrorPause) // un error que se repite no gira en vacío
+			continue
 		}
-		now := time.Now()
-		// Audio: el host lo reenvía antes que nada, sin esperar a procesarlo.
-		if packet.Kind == transport.PacketAudio && a.hostMode.Load() {
-			udp.AddPeer(addr)
-			udp.Broadcast(packet, addr)
+		a.handlePacket(udp, fo, packet, addr)
+	}
+}
+
+const (
+	receiveErrorLogEvery = 10 * time.Second
+	receiveErrorPause    = 50 * time.Millisecond
+)
+
+// handlePacket procesa un paquete recibido. Un panic al procesarlo (payload malformado de un
+// peer) pierde ese paquete y queda en el log, pero no mata la app.
+func (a *App) handlePacket(udp *transport.UDP, fo *room.Failover, packet transport.Packet, addr *net.UDPAddr) {
+	defer func() {
+		if value := recover(); value != nil {
+			logging.Errorf("panic procesando paquete tipo %d de %s: %v\n%s", packet.Kind, addr, value, debug.Stack())
 		}
-		addrStr := addr.String() // una sola vez por paquete
-		if logging.IsTrace() {
-			logging.Tracef("Tráfico UDP recibido: tipo=%d, origen=%s, tamaño=%d bytes", packet.Kind, addrStr, len(packet.Payload))
-		}
-		if a.hostMode.Load() {
-			a.handleHostPacket(udp, fo, packet, addr, addrStr, now)
-		} else {
-			a.handleClientPacket(udp, fo, packet, addr, addrStr, now)
-		}
+	}()
+	now := time.Now()
+	// Audio: el host lo reenvía antes que nada, sin esperar a procesarlo.
+	if packet.Kind == transport.PacketAudio && a.hostMode.Load() {
+		udp.AddPeer(addr)
+		udp.Broadcast(packet, addr)
+	}
+	addrStr := addr.String() // una sola vez por paquete
+	if logging.IsTrace() {
+		logging.Tracef("Tráfico UDP recibido: tipo=%d, origen=%s, tamaño=%d bytes", packet.Kind, addrStr, len(packet.Payload))
+	}
+	if a.hostMode.Load() {
+		a.handleHostPacket(udp, fo, packet, addr, addrStr, now)
+	} else {
+		a.handleClientPacket(udp, fo, packet, addr, addrStr, now)
 	}
 }
 

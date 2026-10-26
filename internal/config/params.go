@@ -37,7 +37,7 @@ var Params = []Param{
 	{Key: "audio_filter_enabled", Label: "Aplicar filtro de voz", Profile: InputProfile, Default: 1},
 
 	{Key: "shout_enabled", Label: "Modo gritos", Profile: InputProfile, Default: 1},
-	{Key: "shout_threshold_db", Label: "Volumen para entrar al modo grito", Help: "El mismo número que marca el medidor de nivel. Más a la izquierda = entra antes.", Profile: InputProfile, Default: -18, Min: -40, Max: 0, Step: 0.5, Unit: "dBFS"},
+	{Key: "shout_threshold_db", Label: "Volumen para entrar al modo grito", Help: "El mismo número que marca el medidor de nivel. Más a la izquierda = entra antes.", Profile: InputProfile, Default: -5.5, Min: -40, Max: 0, Step: 0.5, Unit: "dBFS"},
 	{Key: "shout_on_clip", Label: "Entrar también al saturar", Help: "Si la voz llega al tope (el medidor se pone rojo), entra al modo grito aunque no pase el volumen.", Profile: InputProfile, Default: 1},
 	{Key: "shout_dry_mix", Label: "Voz original al gritar", Profile: InputProfile, Default: 0.2, Min: 0, Max: 1, Step: 0.01, Unit: "%", Scale: 100},
 	{Key: "shout_hold_ms", Label: "Mantener modo grito", Profile: InputProfile, Default: 300, Min: 0, Max: 1000, Step: 10, Unit: "ms"},
@@ -48,7 +48,7 @@ var Params = []Param{
 	{Key: "vad_threshold", Label: "Exigencia del VAD", Help: "Qué tan seguro tiene que estar de que es voz para mandarla. Más a la derecha = corta más ruidos, pero te puede comer palabras dichas bajito. Más a la izquierda = deja pasar más.", Profile: InputProfile, Default: 0.5, Min: 0, Max: 1, Step: 0.05},
 	{Key: "vad_hold_ms", Label: "Seguir mandando al callarte", Help: "Cuánto sigue mandando después de que dejás de hablar, para no cortar el final de las palabras ni las pausas cortas.", Profile: InputProfile, Default: 250, Min: 0, Max: 500, Step: 10, Unit: "ms"},
 	{Key: "noise_gate_enabled", Label: "Puerta de ruido", Help: "Corta lo que, ya limpio, queda por debajo de un volumen (la línea blanca de la barra \"Después de filtros\"). Bien baja solo saca el ruidito que deja la supresión de ruido; subila si se cuela ruido fuerte.", Profile: InputProfile, Default: 1},
-	{Key: "threshold_db", Label: "Volumen mínimo para mandar", Help: "El mismo número del medidor. Más a la derecha = tenés que hablar más fuerte para que se mande.", Profile: InputProfile, Default: -50, Min: -60, Max: -5, Step: 0.5, Unit: "dBFS"},
+	{Key: "threshold_db", Label: "Volumen mínimo para mandar", Help: "El mismo número del medidor. Más a la derecha = tenés que hablar más fuerte para que se mande.", Profile: InputProfile, Default: -42, Min: -60, Max: -5, Step: 0.5, Unit: "dBFS"},
 	{Key: "gate_hold_ms", Label: "Mantener puerta abierta", Help: "Cuánto queda abierta después de bajar del volumen mínimo, para no cortar el final de las palabras.", Profile: InputProfile, Default: 250, Min: 0, Max: 500, Step: 10, Unit: "ms"},
 
 	{Key: "high_pass_enabled", Label: "Pasa-altos", Help: "Quita golpes, vibración y graves.", Profile: InputProfile, Default: 0},
@@ -117,7 +117,8 @@ var Params = []Param{
 	{Key: "show_status_bar", Label: "Mostrar barra de estado inferior", Default: 1},
 	{Key: "event_sounds_enabled", Label: "Sonidos de eventos (conexión, desconexión, chat)", Default: 1},
 	{Key: "allow_host_migration", Label: "Permitir ser Host de respaldo si el Host se desconecta", Default: 1},
-	{Key: "log_level", Label: "Nivel de registros", Default: 0, Min: 0, Max: 2, Step: 1},
+	// Sin nivel 0: un 0 guardado por una versión anterior queda fuera de rango y pasa a 1 al cargar.
+	{Key: "log_level", Label: "Nivel de registros", Default: 1, Min: 1, Max: 2, Step: 1},
 }
 
 // paramFields es el índice de cada clave json en LiveSettings.

@@ -127,6 +127,7 @@ type UDP struct {
 	peersMu sync.Mutex
 	peers   atomic.Pointer[[]*net.UDPAddr] // inmutable una vez publicada
 	readBuf []byte                         // buffer de lectura de Receive (un solo lector: receiveLoop)
+	invalid atomic.Uint64                  // datagramas descartados por Receive (no VoxMesh)
 
 	bulk      chan bulkJob // archivos esperando turno (bulkLoop)
 	bulkOnce  sync.Once
@@ -147,7 +148,7 @@ func Listen(address string) (*UDP, error) {
 		Control: func(network, address string, c syscall.RawConn) error {
 			var controlErr error
 			err := c.Control(func(fd uintptr) {
-				controlErr = setReusePort(fd)
+				controlErr = configureSocket(fd)
 			})
 			if err != nil {
 				return err
@@ -262,14 +263,26 @@ func (u *UDP) Broadcast(packet Packet, except *net.UDPAddr) {
 // Receive lee un paquete. No es seguro para lectores concurrentes (reutiliza readBuf); solo lo
 // llama receiveLoop. El paquete devuelto es una copia del tamaño justo: los handlers asíncronos
 // (chat, assets) retienen el payload después de la próxima lectura.
+// Los datagramas que no son VoxMesh (scanners de Internet: con UPnP el puerto queda abierto) se
+// descartan acá y se cuentan en Invalid; antes el error de decode cortaba receiveLoop. Solo
+// devuelve errores del socket.
 func (u *UDP) Receive() (Packet, *net.UDPAddr, error) {
-	n, addr, err := u.conn.ReadFromUDP(u.readBuf)
-	if err != nil {
-		return Packet{}, nil, err
+	for {
+		n, addr, err := u.conn.ReadFromUDP(u.readBuf)
+		if err != nil {
+			return Packet{}, nil, err
+		}
+		packet, err := decode(append([]byte(nil), u.readBuf[:n]...))
+		if err != nil {
+			u.invalid.Add(1)
+			continue
+		}
+		return packet, addr, nil
 	}
-	packet, err := decode(append([]byte(nil), u.readBuf[:n]...))
-	return packet, addr, err
 }
+
+// Invalid cuenta los datagramas descartados por no ser paquetes VoxMesh válidos.
+func (u *UDP) Invalid() uint64 { return u.invalid.Load() }
 
 // SendBulk encola un paquete de archivo para addr (ritmo BulkRateBytes). Espera si la cola está
 // llena, así que se llama desde goroutines propias, nunca desde receiveLoop. Devuelve false si el

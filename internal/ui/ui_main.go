@@ -29,6 +29,7 @@ import (
 	"voxmesh/internal/transport"
 	"voxmesh/internal/updater"
 	"voxmesh/internal/version"
+	"voxmesh/internal/winproc"
 )
 
 //go:embed icon.png
@@ -72,6 +73,8 @@ type App struct {
 	voiceProcessor  *audio.RNNoise
 	effects         *audio.Effects
 	audioEngine     atomic.Pointer[audio.Engine]
+	audioRecovery   audioRecovery // reapertura automática del audio caído (solo audioMonitorLoop)
+	awakeErrLogged  bool          // ya se registró que no se pudo evitar la suspensión (solo audioMonitorLoop)
 	hostMode        atomic.Bool
 	roomStore       *room.Store
 	historyStore    *history.Store
@@ -196,6 +199,8 @@ func (a *App) setStatus(text string) {
 func (a *App) Run() {
 	_ = logging.Start()
 	logging.Infof("VoxMesh %s iniciado", version.Value)
+	// Antes de crear la ventana: prioridad, fuera del power throttling, sin ventana fantasma.
+	logging.Infof("Proceso: %s", winproc.Configure())
 	defer func() {
 		a.stopPhoneMic()
 		a.stopPreviewAudio()
@@ -238,10 +243,12 @@ func (a *App) Run() {
 	a.startHotkeyListener()
 	a.startUIWatchdog()
 	go a.audioMonitorLoop()
-	go func() {
-		time.Sleep(1 * time.Second)
-		a.checkForUpdates(false)
-	}()
+	if !version.IsDev() { // el manual (Ajustes) sigue andando en builds locales
+		go func() {
+			time.Sleep(1 * time.Second)
+			a.checkForUpdates(false)
+		}()
+	}
 	// Tope blando de memoria en vez del debug.FreeOSMemory() cada 30 s: ese GC completo forzado
 	// frenaba las goroutines que asignan (también la de envío de audio) y competía con el hilo de
 	// UI. El runtime devuelve sola la memoria libre al sistema, de a poco.

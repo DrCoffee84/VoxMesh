@@ -25,9 +25,15 @@ if (-not (Test-Path "dist")) {
 Remove-Item .\dist\voxmesh.exe -ErrorAction SilentlyContinue
 
 $build = (Get-Date -Format "yyyyMMdd-HHmm")
+# Versión = último tag + "-dev": el updater corta en "-", así que un build local vale lo mismo que
+# su release y no ofrece "actualizar" a él (con "0.9.5_fecha" lo ofrecía siempre y, si se
+# aceptaba, reemplazaba el build por el release y lo relanzaba).
+$tag = (git describe --tags --abbrev=0 2>$null)
+if (-not $tag) { $tag = "v0.0.0" }
+$version = "$($tag.TrimStart('v'))-dev.$build"
 Write-Host "Compilando VoxMesh con CGO y Fyne UI..." -ForegroundColor Cyan
 
-go build -trimpath -tags nolibopusfile -ldflags "-s -w -H windowsgui -linkmode external -extldflags -static -X voxmesh/internal/version.Value=0.9.5_$build" -o dist/voxmesh.exe ./cmd/voxmesh
+go build -trimpath -tags nolibopusfile -ldflags "-s -w -H windowsgui -linkmode external -extldflags -static -X voxmesh/internal/version.Value=$version" -o dist/voxmesh.exe ./cmd/voxmesh
 
 if ($LASTEXITCODE -eq 0) {
     $size = (Get-Item .\dist\voxmesh.exe).Length / 1MB

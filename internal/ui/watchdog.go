@@ -18,6 +18,9 @@ import (
 // barra de tareas) recién a los 5 s sin bombear mensajes.
 const uiStallThreshold = 750 * time.Millisecond
 
+// processPauseThreshold: entre dos ticks del watchdog (1 s) pasó tanto → el proceso estuvo pausado.
+const processPauseThreshold = 5 * time.Second
+
 // maxBusyGoroutines limita cuántas goroutines ocupadas se registran por bloqueo.
 const maxBusyGoroutines = 20
 
@@ -28,8 +31,16 @@ func (a *App) startUIWatchdog() {
 	go func() {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
+		lastTick := time.Now()
 		for range ticker.C {
 			sent := time.Now()
+			// Un tick de 1 s que llega mucho después: el proceso entero estuvo frenado (suspensión
+			// de la PC, Windows lo pausó). No es un bloqueo de la UI; el monitor de audio reabre
+			// los dispositivos si quedaron invalidados.
+			if paused := sent.Sub(lastTick); paused >= processPauseThreshold {
+				logging.Errorf("proceso pausado %v por el sistema (suspensión o Windows lo frenó; %s)", paused.Round(time.Millisecond), runtimeSummary())
+			}
+			lastTick = sent
 			done := make(chan struct{})
 			fyne.Do(func() { close(done) })
 			select {
@@ -46,6 +57,7 @@ func (a *App) startUIWatchdog() {
 			}
 			<-done
 			logging.Errorf("hilo de UI liberado tras %v", time.Since(sent))
+			lastTick = time.Now() // la espera de arriba no es una pausa del proceso
 		}
 	}()
 }

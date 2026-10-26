@@ -3,12 +3,9 @@
 package audio
 
 import (
-	"strings"
 	"sync"
 
 	"github.com/gen2brain/malgo"
-
-	"voxmesh/internal/config"
 )
 
 // Monitor abre el micrófono fuera de una sala, para el medidor de Ajustes.
@@ -27,16 +24,12 @@ const monitorQueueFrames = 8
 // StartMonitor abre el micrófono sin sala y le pasa a onFrame cada frame de 20 ms (S16LE, el slice
 // vale solo durante la llamada) desde una goroutine propia: fuera del hilo de captura, así quien
 // lo usa puede correr la cadena de envío para saber si ese audio se mandaría.
-func StartMonitor(name string, onFrame func(pcm []byte)) (*Monitor, error) {
+func StartMonitor(choice Device, onFrame func(pcm []byte)) (*Monitor, error) {
 	context, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
 	if err != nil {
 		return nil, err
 	}
-	deviceID, err := findDeviceID(context, malgo.Capture, name)
-	if err != nil {
-		context.Free()
-		return nil, err
-	}
+	deviceID, _, _ := resolveDevice(context, malgo.Capture, choice)
 	deviceConfig := malgo.DefaultDeviceConfig(malgo.Capture)
 	deviceConfig.Capture.Format = malgo.FormatS16
 	deviceConfig.Capture.Channels = Channels
@@ -93,8 +86,4 @@ func (m *Monitor) Stop() {
 		m.context.Free()
 		close(m.frames)
 	})
-}
-
-func IsDefaultDevice(name string) bool {
-	return strings.TrimSpace(name) == "" || name == config.DefaultDevice
 }

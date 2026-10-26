@@ -83,12 +83,7 @@ func (a *App) stopConnectionAsync() <-chan struct{} {
 		a.playEventSound(audio.SFXDisconnect)
 		time.Sleep(150 * time.Millisecond)
 		a.stopEngine()
-		a.soundMu.Lock()
-		if a.soundPlayer != nil {
-			a.soundPlayer.Stop()
-			a.soundPlayer = nil
-		}
-		a.soundMu.Unlock()
+		a.dropSoundPlayer()
 		a.hostRole.stop()
 		username := a.conf().Username
 		participant := room.Participant{ID: a.participantID, Username: username, Address: udp.Address().String()}

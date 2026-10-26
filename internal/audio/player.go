@@ -18,17 +18,13 @@ type Player struct {
 	once    sync.Once
 }
 
-func NewPlayer(outputName string) (*Player, error) {
+func NewPlayer(output Device) (*Player, error) {
 	context, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("inicializar salida de audio: %w", err)
 	}
 	player := &Player{context: context, queue: make(chan []byte, 32)}
-	outputID, err := findDeviceID(context, malgo.Playback, outputName)
-	if err != nil {
-		player.Stop()
-		return nil, err
-	}
+	outputID, _, _ := resolveDevice(context, malgo.Playback, output)
 	deviceConfig := malgo.DefaultDeviceConfig(malgo.Playback)
 	deviceConfig.Playback.Format = malgo.FormatS16
 	deviceConfig.Playback.Channels = Channels

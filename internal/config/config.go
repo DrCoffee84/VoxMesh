@@ -60,6 +60,10 @@ type LiveSettings struct {
 	MicMode      MicMode `json:"mic_mode"`
 	InputDevice  string  `json:"input_device"`
 	OutputDevice string  `json:"output_device"`
+	// ID de Windows del dispositivo elegido (vacío = predeterminado o config vieja, que se busca
+	// por nombre). Si al abrir el audio ya no está, se vuelve al predeterminado y se olvida.
+	InputDeviceID  string `json:"input_device_id,omitempty"`
+	OutputDeviceID string `json:"output_device_id,omitempty"`
 	// Perfil cargado ("" = Default). Ver profiles.go.
 	ActiveInputProfile  string `json:"active_input_profile,omitempty"`
 	ActiveOutputProfile string `json:"active_output_profile,omitempty"`

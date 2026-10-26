@@ -55,6 +55,8 @@ type Engine struct {
 	context  *malgo.AllocatedContext
 	capture  *malgo.Device
 	playback *malgo.Device
+	// Lo que se abrió para cada elección (Devices); fijo desde NewEngine.
+	inputDevice, outputDevice Resolved
 	// Captura → goroutine de envío: frames de buffers preasignados (captureFree), así el callback
 	// de malgo (hilo de tiempo real) no pide memoria. Ver captureInput.
 	captureFrames chan CapturedFrame
@@ -91,6 +93,14 @@ type Engine struct {
 
 	// arrivals graba la llegada de cada paquete de red (nil = apagado).
 	arrivals atomic.Pointer[ArrivalRecorder]
+
+	// Salud de los dispositivos (Health): cuándo se abrió y el último callback de cada uno
+	// (UnixNano), qué dispositivo avisó que el sistema lo detuvo, y si el Stop fue nuestro.
+	started      atomic.Int64
+	lastCapture  atomic.Int64
+	lastPlayback atomic.Int64
+	lost         atomic.Pointer[string]
+	stopping     atomic.Bool
 }
 
 // CapturedFrame es un frame de 20 ms del micrófono que el Engine le entrega a la goroutine de
@@ -163,24 +173,18 @@ func newEngineState() *Engine {
 }
 
 // NewEngine abre micrófono y salida. onFrame recibe cada frame capturado en una goroutine propia
-// con prioridad de audio (LockAudioThread); el PCM del frame vale solo durante la llamada.
-func NewEngine(inputName, outputName string, onFrame func(CapturedFrame)) (*Engine, error) {
+// con prioridad de audio (LockAudioThread); el PCM del frame vale solo durante la llamada. Si un
+// dispositivo elegido ya no está abre el predeterminado (Devices dice cuál se abrió).
+func NewEngine(input, output Device, onFrame func(CapturedFrame)) (*Engine, error) {
 	context, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("inicializar motor de audio: %w", err)
 	}
 	engine := newEngineState()
 	engine.context = context
-	inputID, err := findDeviceID(context, malgo.Capture, inputName)
-	if err != nil {
-		engine.Stop()
-		return nil, err
-	}
-	outputID, err := findDeviceID(context, malgo.Playback, outputName)
-	if err != nil {
-		engine.Stop()
-		return nil, err
-	}
+	inputID, inputResolved, _ := resolveDevice(context, malgo.Capture, input)
+	outputID, outputResolved, _ := resolveDevice(context, malgo.Playback, output)
+	engine.inputDevice, engine.outputDevice = inputResolved, outputResolved
 
 	captureConfig := malgo.DefaultDeviceConfig(malgo.Capture)
 	captureConfig.Capture.Format = malgo.FormatS16
@@ -192,8 +196,11 @@ func NewEngine(inputName, outputName string, onFrame func(CapturedFrame)) (*Engi
 	}
 	capture, err := malgo.InitDevice(context.Context, captureConfig, malgo.DeviceCallbacks{
 		Data: func(_, input []byte, _ uint32) {
-			engine.captureInput(input, time.Now())
+			now := time.Now()
+			engine.lastCapture.Store(now.UnixNano())
+			engine.captureInput(input, now)
 		},
+		Stop: func() { engine.deviceStopped("micrófono") },
 	})
 	if err != nil {
 		engine.Stop()
@@ -211,8 +218,10 @@ func NewEngine(inputName, outputName string, onFrame func(CapturedFrame)) (*Engi
 	}
 	playback, err := malgo.InitDevice(context.Context, playbackConfig, malgo.DeviceCallbacks{
 		Data: func(output, _ []byte, _ uint32) {
+			engine.lastPlayback.Store(time.Now().UnixNano())
 			engine.mix(output)
 		},
+		Stop: func() { engine.deviceStopped("salida") },
 	})
 	if err != nil {
 		engine.Stop()
@@ -220,6 +229,7 @@ func NewEngine(inputName, outputName string, onFrame func(CapturedFrame)) (*Engi
 	}
 	engine.playback = playback
 
+	engine.started.Store(time.Now().UnixNano())
 	if err := engine.capture.Start(); err != nil {
 		engine.Stop()
 		return nil, fmt.Errorf("iniciar micrófono: %w", err)
@@ -267,6 +277,28 @@ func (e *Engine) captureInput(input []byte, now time.Time) {
 	}
 }
 
+// deviceStopped es el callback Stop de malgo: el sistema detuvo un dispositivo (desconectado,
+// invalidado al volver de una suspensión). Los Stop de Engine.Stop no cuentan.
+func (e *Engine) deviceStopped(device string) {
+	if !e.stopping.Load() {
+		e.lost.CompareAndSwap(nil, &device)
+	}
+}
+
+// Health dice si los dos dispositivos siguen vivos: ninguno detenido por el sistema y los dos
+// con callbacks en los últimos DeviceSilenceLimit. Si no, reason dice qué pasó (para el log y la
+// barra de estado) y hay que reabrir el audio.
+func (e *Engine) Health(now time.Time) (ok bool, reason string) {
+	if e == nil || e.stopping.Load() {
+		return true, ""
+	}
+	lost := ""
+	if device := e.lost.Load(); device != nil {
+		lost = *device
+	}
+	return deviceHealth(now, e.started.Load(), e.lastCapture.Load(), e.lastPlayback.Load(), lost)
+}
+
 // SendThreadPriority dice qué prioridad consiguió la goroutine de envío ("" si todavía no arrancó).
 func (e *Engine) SendThreadPriority() string {
 	if e == nil {
@@ -286,6 +318,11 @@ func storeMax(v *atomic.Int64, x int64) {
 			return
 		}
 	}
+}
+
+// Devices dice qué micrófono y qué salida se abrieron, y si alguno elegido ya no estaba.
+func (e *Engine) Devices() (input, output Resolved) {
+	return e.inputDevice, e.outputDevice
 }
 
 // TakeCaptureStats devuelve la medición de la captura y reinicia los máximos.
@@ -652,6 +689,7 @@ func (e *Engine) Stop() {
 		return
 	}
 	e.stopOnce.Do(func() {
+		e.stopping.Store(true)
 		if e.capture != nil {
 			_ = e.capture.Stop()
 			e.capture.Uninit()

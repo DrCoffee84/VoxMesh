@@ -35,15 +35,28 @@ type captureSnapshot struct {
 	sent   uint64 // a.audioSent
 }
 
+// audioMonitorLoop vive lo que la app. Un panic en una vuelta queda en el log y el monitor vuelve
+// a arrancar (con las mediciones de cero): sin él no hay recuperación del audio ni indicadores.
 func (a *App) audioMonitorLoop() {
+	for !logging.Guard("monitor de audio", a.runAudioMonitor) {
+		time.Sleep(time.Second)
+	}
+}
+
+func (a *App) runAudioMonitor() {
 	ticker := time.NewTicker(audioMonitorInterval)
 	defer ticker.Stop()
 	var audible []string
 	var lastStats, lastLog time.Time
 	var prevStats, prevLog map[string]audio.JitterStats
 	var prevCapture captureSnapshot
+	var lastHealth time.Time
 	for now := range ticker.C {
 		a.sweepVoiceIndicator(now)
+		if now.Sub(lastHealth) >= audioHealthInterval {
+			lastHealth = now
+			a.checkAudioHealth(now)
+		}
 		engine := a.engine()
 		if engine == nil {
 			prevStats, prevLog = nil, nil

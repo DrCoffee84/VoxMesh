@@ -43,12 +43,14 @@ func (a *App) showSettings() {
 }
 
 func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outputProfiles profileState) {
-	inputOptions := append([]string{config.DefaultDevice, phoneMicInput}, devices.Inputs...)
-	outputOptions := append([]string{config.DefaultDevice}, devices.Outputs...)
 	// cfg es la instantánea al abrir la vista: solo para valores iniciales de los widgets. Los
 	// callbacks publican con updateConfig y, si necesitan el valor vigente, leen a.conf().
 	cfg := a.conf()
-	openedInput, openedOutput := cfg.InputDevice, cfg.OutputDevice
+	inputOptions, inputDevices, inputSelected := deviceOptions(devices.Inputs, savedInput(cfg), phoneMicInput)
+	outputOptions, outputDevices, outputSelected := deviceOptions(devices.Outputs, outputChoice(cfg))
+	inputDevice := func(label string) audio.Device { return deviceByLabel(inputDevices, label) }
+	outputDevice := func(label string) audio.Device { return deviceByLabel(outputDevices, label) }
+	openedInput, openedOutput := savedInput(cfg), outputChoice(cfg)
 	// baseline es LiveSettings al abrir: mientras la vista esté abierta writeConfig persiste esto
 	// (no el borrador en vivo) y discardSettings lo restaura. Los campos de texto (nombre, puertos)
 	// no se publican hasta Guardar.
@@ -60,9 +62,9 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 	username := widget.NewEntry()
 	username.SetText(cfg.Username)
 	input := widget.NewSelect(inputOptions, nil)
-	input.SetSelected(cfg.InputDevice)
+	input.SetSelected(inputSelected)
 	output := widget.NewSelect(outputOptions, nil)
-	output.SetSelected(cfg.OutputDevice)
+	output.SetSelected(outputSelected)
 	// Configuración avanzada de entrada y salida: controles generados desde config.Params, con su
 	// barra de perfiles arriba (ui_audio_params.go).
 	inputControls := &paramControls{app: a}
@@ -168,20 +170,20 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 	previewActive := false
 	settingsClosed := false
 	// Las closures de abajo corren en el hilo de UI; abrir/cerrar dispositivos va en levelMonitor.
-	startMonitor := func(name string) {
+	startMonitor := func(label string) {
 		if a.connected() {
 			monitor.Stop()
 			level.SetValue(0)
 			levelText.SetText("Nivel: micrófono activo en la sala")
 			return
 		}
-		if name == phoneMicInput {
+		if label == phoneMicInput {
 			monitor.Stop()
 			level.SetValue(0)
 			levelText.SetText("Nivel: controlado desde el celular")
 			return
 		}
-		monitor.Start(name, a.meterFrame)
+		monitor.Start(inputDevice(label), a.meterFrame)
 	}
 	startMonitor(input.Selected)
 	stopPreview := func() {
@@ -204,7 +206,8 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 	lastPhoneState := "" // último estado pintado por refreshPhoneStatus (solo hilo de UI)
 	input.OnChanged = func(selected string) {
 		stopPreview()
-		a.updateConfig(func(c *config.Config) { c.InputDevice = selected })
+		device := inputDevice(selected)
+		a.updateConfig(func(c *config.Config) { c.InputDevice, c.InputDeviceID = device.Name, device.ID })
 		startMonitor(selected)
 		if selected == phoneMicInput {
 			a.showPhoneMic()
@@ -215,11 +218,12 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 	}
 	output.OnChanged = func(selected string) {
 		stopPreview()
-		a.updateConfig(func(c *config.Config) { c.OutputDevice = selected })
+		device := outputDevice(selected)
+		a.updateConfig(func(c *config.Config) { c.OutputDevice, c.OutputDeviceID = device.Name, device.ID })
 	}
 	testInput := widget.NewButton("Grabar prueba", nil)
-	playRecording := widget.NewButton("Reproducir prueba", func() { a.playRecording(output.Selected) })
-	testOutput := widget.NewButton("Reproducir tono", func() { a.testOutput(output.Selected) })
+	playRecording := widget.NewButton("Reproducir prueba", func() { a.playRecording(outputDevice(output.Selected)) })
+	testOutput := widget.NewButton("Reproducir tono", func() { a.testOutput(outputDevice(output.Selected)) })
 	showQR := widget.NewButton("Mostrar QR", func() {
 		a.showPhoneMic()
 		refreshPhoneStatus()
@@ -250,15 +254,15 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 			a.setStatus("La prueba de micrófono solo está disponible fuera de una sala.")
 			return
 		}
-		inputName, outputName := input.Selected, output.Selected
-		if inputName == phoneMicInput && !a.phoneMicEnabled() {
+		inputDev, outputDev := inputDevice(input.Selected), outputDevice(output.Selected)
+		if inputDev.Name == phoneMicInput && !a.phoneMicEnabled() {
 			a.setStatus("Primero iniciá el servidor y conectá el celular.")
 			return
 		}
 		monitor.Stop()
 		previewButton.Disable()
 		go func() {
-			err := a.startMicPreview(inputName, outputName)
+			err := a.startMicPreview(inputDev, outputDev)
 			fyne.Do(func() {
 				previewButton.Enable()
 				if settingsClosed {
@@ -287,7 +291,7 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 		}
 		testInput.Disable()
 		lastPhoneState = "" // el Disable manual desincroniza el caché: forzar el próximo repintado
-		a.testInput(input.Selected)
+		a.testInput(inputDevice(input.Selected))
 		duration := 2200 * time.Millisecond
 		if input.Selected == phoneMicInput {
 			duration = 5 * time.Second
@@ -461,7 +465,7 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 		a.saveConfig()
 		// Los selects publican el dispositivo en vivo: se compara contra el que había al abrir
 		// ajustes (antes se comparaba contra a.cfg ya modificado y nunca reiniciaba).
-		if a.connected() && (openedInput != cfg.InputDevice || openedOutput != cfg.OutputDevice) {
+		if a.connected() && (openedInput != savedInput(cfg) || openedOutput != outputChoice(cfg)) {
 			go a.restartAudioInRoom()
 		}
 	}
@@ -601,29 +605,21 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 		go a.checkForUpdates(true)
 	})
 	logLevelLabel := widget.NewLabel("Nivel de registros (logs):")
-	logLevelOptions := []string{
-		"0 - Solo Errores",
-		"1 - Debug Normal",
-		"2 - Debug Avanzado",
-	}
-	logLevelSelect := widget.NewSelect(logLevelOptions, func(selected string) {
-		level := logging.LevelError
-		switch selected {
-		case "1 - Debug Normal":
-			level = logging.LevelControl
-		case "2 - Debug Avanzado":
+	// Sin "solo errores": con el nivel normal el log ya dice qué pasó (estado, dispositivos,
+	// conexiones) cuando alguien que no es dev manda el archivo.
+	const logNormal, logAdvanced = "1 - Normal (recomendado)", "2 - Avanzado"
+	logLevelSelect := widget.NewSelect([]string{logNormal, logAdvanced}, func(selected string) {
+		level := logging.LevelControl
+		if selected == logAdvanced {
 			level = logging.LevelTrace
 		}
 		a.updateConfig(func(c *config.Config) { c.LogLevel = level })
 		logging.SetLevel(level)
 	})
-	switch cfg.LogLevel {
-	case logging.LevelControl:
-		logLevelSelect.SetSelected("1 - Debug Normal")
-	case logging.LevelTrace:
-		logLevelSelect.SetSelected("2 - Debug Avanzado")
-	default:
-		logLevelSelect.SetSelected("0 - Solo Errores")
+	if cfg.LogLevel >= logging.LevelTrace {
+		logLevelSelect.SetSelected(logAdvanced)
+	} else {
+		logLevelSelect.SetSelected(logNormal)
 	}
 	interfaceCard := uiCard(container.NewVBox(
 		widget.NewLabelWithStyle("⚙️ Interfaz y Sistema", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
@@ -650,7 +646,7 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 // servidor abre sockets, puede generar el certificado TLS y guarda la config: va en segundo plano
 // y solo el diálogo se arma en el hilo de UI.
 func (a *App) showPhoneMic() {
-	a.updateConfig(func(c *config.Config) { c.InputDevice = phoneMicInput })
+	a.updateConfig(func(c *config.Config) { c.InputDevice, c.InputDeviceID = phoneMicInput, "" })
 	go func() {
 		server, err := a.ensurePhoneMicServer()
 		if err != nil {
@@ -767,13 +763,13 @@ func (m *levelMonitor) detach() (*audio.Monitor, uint64) {
 	return old, m.gen
 }
 
-func (m *levelMonitor) Start(name string, onFrame func(pcm []byte)) {
+func (m *levelMonitor) Start(device audio.Device, onFrame func(pcm []byte)) {
 	old, gen := m.detach()
 	go func() {
 		old.Stop()
-		started, err := audio.StartMonitor(name, onFrame)
+		started, err := audio.StartMonitor(device, onFrame)
 		if err != nil {
-			logging.Errorf("medidor de nivel %q: %s", name, logging.FormatError(err))
+			logging.Errorf("medidor de nivel %q: %s", device.Name, logging.FormatError(err))
 			return
 		}
 		m.mu.Lock()
@@ -792,6 +788,45 @@ func (m *levelMonitor) Stop() {
 	if old, _ := m.detach(); old != nil {
 		go old.Stop()
 	}
+}
+
+// deviceOptions arma las opciones de un select de dispositivos: el predeterminado, las fijas
+// (fixed: el celular) y los que da Windows por nombre (si dos se llaman igual, el segundo lleva
+// " (2)"). Devuelve de qué dispositivo es cada etiqueta y cuál mostrar elegida: la guardada (por ID,
+// o por nombre en una config vieja) o, si ya no está, el predeterminado. No escribe la config.
+func deviceOptions(devices []audio.Device, want audio.Device, fixed ...string) ([]string, map[string]audio.Device, string) {
+	options := append([]string{config.DefaultDevice}, fixed...)
+	byLabel := make(map[string]audio.Device, len(options)+len(devices))
+	selected := config.DefaultDevice
+	for _, label := range options {
+		byLabel[label] = audio.Device{Name: label}
+		if want.ID == "" && want.Name == label {
+			selected = label
+		}
+	}
+	index, _ := audio.PickDevice(devices, want)
+	for i, device := range devices {
+		label := device.Name
+		for n := 2; ; n++ {
+			if _, taken := byLabel[label]; !taken {
+				break
+			}
+			label = fmt.Sprintf("%s (%d)", device.Name, n)
+		}
+		byLabel[label] = device
+		options = append(options, label)
+		if i == index {
+			selected = label
+		}
+	}
+	return options, byLabel, selected
+}
+
+func deviceByLabel(byLabel map[string]audio.Device, label string) audio.Device {
+	if device, ok := byLabel[label]; ok {
+		return device
+	}
+	return audio.DefaultChoice
 }
 
 func (a *App) testPhoneMic() {
@@ -827,14 +862,14 @@ func (a *App) testPhoneMic() {
 	}()
 }
 
-func (a *App) testInput(name string) {
-	if name == phoneMicInput {
+func (a *App) testInput(device audio.Device) {
+	if device.Name == phoneMicInput {
 		a.testPhoneMic()
 		return
 	}
-	a.setStatus("Grabando desde " + name + "...")
+	a.setStatus("Grabando desde " + deviceLabel(device) + "...")
 	go func() {
-		data, err := audio.RecordInput(name, 2*time.Second)
+		data, err := audio.RecordInput(device, 2*time.Second)
 		if err != nil {
 			a.setStatus("No se pudo grabar: " + err.Error())
 			return
@@ -865,10 +900,10 @@ func (a *App) processTestRecording(cfg *config.Config, data []byte) ([]byte, err
 	return audio.ProcessRecording(data, denoiser, gate, cfg.AudioFilterEnabled, cfg.VADThreshold, settings)
 }
 
-func (a *App) testOutput(name string) {
-	a.setStatus("Reproduciendo tono en " + name + "...")
+func (a *App) testOutput(device audio.Device) {
+	a.setStatus("Reproduciendo tono en " + deviceLabel(device) + "...")
 	go func() {
-		if err := audio.PlayTestTone(name, time.Second); err != nil {
+		if err := audio.PlayTestTone(device, time.Second); err != nil {
 			a.setStatus("No se pudo reproducir: " + err.Error())
 			return
 		}
@@ -876,7 +911,7 @@ func (a *App) testOutput(name string) {
 	}()
 }
 
-func (a *App) playRecording(name string) {
+func (a *App) playRecording(device audio.Device) {
 	a.recordingMu.RLock()
 	data := append([]byte(nil), a.recordedInput...)
 	a.recordingMu.RUnlock()
@@ -886,7 +921,7 @@ func (a *App) playRecording(name string) {
 	}
 	a.setStatus("Reproduciendo la grabación...")
 	go func() {
-		if err := audio.PlayPCM(name, data); err != nil {
+		if err := audio.PlayPCM(device, data); err != nil {
 			a.setStatus("No se pudo reproducir la grabación: " + err.Error())
 			return
 		}

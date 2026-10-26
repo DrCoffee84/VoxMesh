@@ -53,8 +53,10 @@ func TestDefaultComesFromParams(t *testing.T) {
 			t.Fatalf("%q: Default() tiene %v, la tabla %v", param.Key, got, param.Default)
 		}
 	}
-	// Defaults elegidos: filtro de voz + RNNoise + VAD + puerta baja en la entrada, salida apagada.
-	if !cfg.AudioFilterEnabled || !cfg.RNNoiseEnabled || !cfg.VADEnabled || !cfg.NoiseGateEnabled || cfg.ThresholdDB != -50 || cfg.LimiterEnabled {
+	// Defaults elegidos (perfil "Personalizado" de Coffee): filtro de voz + RNNoise + VAD + modo
+	// grito a -5.5 dBFS + puerta de ruido a -42 dBFS; limitador del usuario apagado; salida apagada.
+	if !cfg.AudioFilterEnabled || !cfg.RNNoiseEnabled || !cfg.VADEnabled || !cfg.NoiseGateEnabled || cfg.ThresholdDB != -42 ||
+		cfg.ShoutThresholdDB != -5.5 || cfg.LimiterEnabled {
 		t.Fatalf("defaults de entrada inesperados: %+v", cfg.LiveSettings)
 	}
 	if cfg.OutputFilterEnabled || cfg.OutputGainDB != 5 || cfg.JitterBufferMS != 300 || cfg.ShoutDryMix != 0.2 {
@@ -92,7 +94,22 @@ func TestLoadResetsOutOfRangeToDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.JitterBufferMS != 300 || cfg.LogLevel != 0 || cfg.RNNoiseMix != 1 || cfg.VADThreshold != 0.8 {
+	if cfg.JitterBufferMS != 300 || cfg.LogLevel != 1 || cfg.RNNoiseMix != 1 || cfg.VADThreshold != 0.8 {
 		t.Fatalf("fuera de rango no volvió al default: jitter %d log %d mix %v vad %v", cfg.JitterBufferMS, cfg.LogLevel, cfg.RNNoiseMix, cfg.VADThreshold)
+	}
+}
+
+// Las versiones anteriores guardaban log_level 0 por defecto: ahora el mínimo es 1.
+func TestLoadOldLogLevelZeroBecomesOne(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "voxmesh.json")
+	if err := os.WriteFile(path, []byte(`{"log_level":0}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LogLevel != 1 {
+		t.Fatalf("log_level 0 quedó en %d, quería 1", cfg.LogLevel)
 	}
 }

@@ -16,6 +16,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"voxmesh/internal/config"
+	"voxmesh/internal/logging"
 	"voxmesh/internal/room"
 )
 
@@ -214,38 +215,46 @@ func (a *App) isTypingInApp() bool {
 func (a *App) startHotkeyListener() {
 	a.publishHotkeys()
 	go func() {
-		wasDown := make(map[string]bool)
-		for {
-			time.Sleep(25 * time.Millisecond)
-			list := activeHotkeys.Load()
-			if list == nil {
-				continue
-			}
-			for _, bound := range *list {
-				key := bound.soundID
-				if key == "" {
-					key = "__stop__"
-				}
-				active := isHotkeyActive(bound.hk)
-				pressed := active && !wasDown[key]
-				wasDown[key] = active
-				if !pressed {
-					continue
-				}
-				// Una tecla suelta (letra/número) no se dispara mientras se escribe en VoxMesh.
-				// El foco solo se consulta en ese caso, que es raro (una vez por pulsación).
-				hk := bound.hk
-				if !hk.shift && !hk.ctrl && !hk.alt && !isFunctionOrNumpad(hk.vk) && a.isTypingInApp() {
-					continue
-				}
-				if bound.soundID == "" {
-					a.stopSoundboard()
-				} else {
-					a.triggerSoundByID(bound.soundID)
-				}
-			}
+		// Un panic queda en el log y el poller vuelve a arrancar: los atajos siguen andando.
+		for !logging.Guard("atajos de teclado", a.pollHotkeys) {
+			time.Sleep(time.Second)
 		}
 	}()
+}
+
+// pollHotkeys lee el teclado cada 25 ms y dispara los sonidos de las teclas recién apretadas.
+func (a *App) pollHotkeys() {
+	wasDown := make(map[string]bool)
+	for {
+		time.Sleep(25 * time.Millisecond)
+		list := activeHotkeys.Load()
+		if list == nil {
+			continue
+		}
+		for _, bound := range *list {
+			key := bound.soundID
+			if key == "" {
+				key = "__stop__"
+			}
+			active := isHotkeyActive(bound.hk)
+			pressed := active && !wasDown[key]
+			wasDown[key] = active
+			if !pressed {
+				continue
+			}
+			// Una tecla suelta (letra/número) no se dispara mientras se escribe en VoxMesh.
+			// El foco solo se consulta en ese caso, que es raro (una vez por pulsación).
+			hk := bound.hk
+			if !hk.shift && !hk.ctrl && !hk.alt && !isFunctionOrNumpad(hk.vk) && a.isTypingInApp() {
+				continue
+			}
+			if bound.soundID == "" {
+				a.stopSoundboard()
+			} else {
+				a.triggerSoundByID(bound.soundID)
+			}
+		}
+	}
 }
 
 func (a *App) showSoundBindDialog(sound room.Sound) {

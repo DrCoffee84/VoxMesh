@@ -121,8 +121,8 @@ func (a *App) detachPreviewAudio() func() {
 
 // startMicPreview abre la escucha de prueba del micrófono (pantalla de ajustes). Abre
 // dispositivos malgo, así que se llama fuera del hilo de UI.
-func (a *App) startMicPreview(input, output string) error {
-	if input == phoneMicInput {
+func (a *App) startMicPreview(input, output audio.Device) error {
+	if input.Name == phoneMicInput {
 		player, err := audio.NewPlayer(output)
 		if err != nil {
 			return err
@@ -176,7 +176,7 @@ func (a *App) ensureSoundPlayer() *audio.Player {
 	if a.soundPlayer != nil {
 		return a.soundPlayer
 	}
-	player, err := audio.NewPlayer(a.conf().OutputDevice)
+	player, err := audio.NewPlayer(outputChoice(a.conf()))
 	if err != nil {
 		logging.Errorf("iniciar salida de sonidos: %s", logging.FormatError(err))
 		return nil
@@ -245,37 +245,125 @@ func (a *App) stopSoundboard() {
 // si es host o cliente en cada frame.
 func (a *App) startAudio(udp *transport.UDP) {
 	cfg := a.conf()
-	inputDevice := cfg.InputDevice
-	if inputDevice == phoneMicInput {
-		inputDevice = config.DefaultDevice
-	}
+	inputWant, outputWant := inputChoice(cfg), outputChoice(cfg)
 	a.resetEncoder()
 	a.effects.Reset()
 	a.voiceProcessor.Reset()
-	engine, err := audio.NewEngine(inputDevice, cfg.OutputDevice, func(frame audio.CapturedFrame) {
+	engine, err := audio.NewEngine(inputWant, outputWant, func(frame audio.CapturedFrame) {
 		if a.phoneMicEnabled() {
 			return
 		}
 		a.sendOutgoingPCM(frame, udp)
 	})
 	if err != nil {
-		a.setStatus("Audio no disponible: " + err.Error())
+		logging.Errorf("audio no disponible: %s", logging.FormatError(err))
+		a.setStatus("Audio no disponible: " + err.Error() + ". Probá con Refresh Audio.")
 		return
 	}
 	engine.SetPlaybackSettings(a.playbackSettings)
 	a.applyPeerVolumes(engine)
+	input, output := engine.Devices()
+	notice := a.applyResolvedDevices(inputWant, outputWant, input, output)
 	if !a.publishEngine(engine, udp) {
 		return
 	}
-	a.setStatus("Audio iniciado correctamente")
+	a.setStatus(notice + "Audio listo: " + audioDevicesText(cfg, input, output))
 }
 
+// inputChoice es el micrófono elegido en la config. El celular no es un dispositivo de Windows:
+// con él la sala abre el predeterminado (su captura se ignora, ver startAudio).
+func inputChoice(cfg *config.Config) audio.Device {
+	if cfg.InputDevice == phoneMicInput {
+		return audio.DefaultChoice
+	}
+	return savedInput(cfg)
+}
+
+// savedInput es la entrada guardada tal cual (el celular incluido), para Ajustes.
+func savedInput(cfg *config.Config) audio.Device {
+	return audio.Device{Name: cfg.InputDevice, ID: cfg.InputDeviceID}
+}
+
+func outputChoice(cfg *config.Config) audio.Device {
+	return audio.Device{Name: cfg.OutputDevice, ID: cfg.OutputDeviceID}
+}
+
+// applyResolvedDevices guarda lo que se abrió para cada elección: si el elegido ya no estaba queda
+// el predeterminado de Windows (no se recuerda: el próximo cambio de dispositivo lo resuelve
+// Windows); si estaba, se completa su ID (config de una versión anterior) o su nombre nuevo. Solo
+// pisa una elección que no cambió mientras se abría el audio. Devuelve el aviso para la barra de
+// estado ("" si no faltó ninguno).
+func (a *App) applyResolvedDevices(inputWant, outputWant audio.Device, input, output audio.Resolved) string {
+	before := a.conf()
+	after := a.updateConfig(func(c *config.Config) {
+		if c.InputDevice != phoneMicInput && c.InputDevice == inputWant.Name && c.InputDeviceID == inputWant.ID {
+			c.InputDevice, c.InputDeviceID = input.Device.Name, input.Device.ID
+		}
+		if c.OutputDevice == outputWant.Name && c.OutputDeviceID == outputWant.ID {
+			c.OutputDevice, c.OutputDeviceID = output.Device.Name, output.Device.ID
+		}
+	})
+	if after.InputDevice != before.InputDevice || after.InputDeviceID != before.InputDeviceID ||
+		after.OutputDevice != before.OutputDevice || after.OutputDeviceID != before.OutputDeviceID {
+		a.saveConfig()
+	}
+	notice := ""
+	if input.Missing && before.InputDevice != phoneMicInput {
+		logging.Errorf("micrófono %q no encontrado: se usa el predeterminado de Windows", inputWant.Name)
+		notice += "No encontré el micrófono «" + inputWant.Name + "»: uso el predeterminado de Windows. "
+	}
+	if output.Missing {
+		logging.Errorf("salida %q no encontrada: se usa la predeterminada de Windows", outputWant.Name)
+		notice += "No encontré la salida «" + outputWant.Name + "»: uso la predeterminada de Windows. "
+	}
+	return notice
+}
+
+// audioDevicesText dice por dónde entra y sale el audio, para la barra de estado.
+func audioDevicesText(cfg *config.Config, input, output audio.Resolved) string {
+	mic := deviceLabel(input.Device)
+	if cfg.InputDevice == phoneMicInput {
+		mic = "celular"
+	}
+	return "micrófono «" + mic + "», salida «" + deviceLabel(output.Device) + "»."
+}
+
+func deviceLabel(device audio.Device) string {
+	if audio.IsDefaultDevice(device.Name) {
+		return "predeterminado de Windows"
+	}
+	return device.Name
+}
+
+// dropSoundPlayer cierra la salida del soundboard; el próximo sonido la abre de nuevo con el
+// dispositivo vigente. Lento (libera malgo): fuera del hilo de UI.
+func (a *App) dropSoundPlayer() {
+	a.soundMu.Lock()
+	player := a.soundPlayer
+	a.soundPlayer = nil
+	a.soundMu.Unlock()
+	if player != nil {
+		player.Stop()
+	}
+}
+
+// restartAudioInRoom es "Refresh Audio" (y Guardar en Ajustes con otro dispositivo): vuelve a
+// pedirle a Windows los dispositivos y abre el elegido si sigue, si no el predeterminado. Corre
+// fuera del hilo de UI.
 func (a *App) restartAudioInRoom() {
 	a.stopEngine()
+	a.dropSoundPlayer()
 	if udp := a.transport.Load(); udp != nil {
-		a.setStatus("Reiniciando audio en la sala...")
+		a.setStatus("Recargando el audio...")
 		go a.startAudio(udp)
 	} else {
-		a.setStatus("No estas conectado a ningún servidor")
+		cfg := a.conf()
+		inputWant, outputWant := inputChoice(cfg), outputChoice(cfg)
+		input, output, err := audio.ResolveDevices(inputWant, outputWant)
+		if err != nil {
+			logging.Errorf("recargar audio: %s", logging.FormatError(err))
+		}
+		notice := a.applyResolvedDevices(inputWant, outputWant, input, output)
+		a.setStatus(notice + "Audio recargado: " + audioDevicesText(cfg, input, output))
 	}
 }

@@ -183,3 +183,45 @@ func TestUDP_CloseUnblocksSendBulk(t *testing.T) {
 		t.Fatal("SendBulk still blocked after Close")
 	}
 }
+
+// Basura en el puerto (scanners) y el ICMP "port unreachable" de mandarle algo a un peer que ya
+// cerró no cortan Receive: antes cualquiera de los dos dejaba sordo a receiveLoop.
+func TestReceiveSurvivesJunkAndClosedPeer(t *testing.T) {
+	server, err := Listen("127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	client, err := Listen("127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	gone, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	goneAddr := gone.LocalAddr().(*net.UDPAddr)
+	_ = gone.Close()
+
+	if err := server.Send(goneAddr, Packet{Kind: PacketPing}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.conn.WriteToUDP([]byte("no soy VoxMesh"), server.Address()); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Send(server.Address(), Packet{Kind: PacketChat, Payload: []byte("hola")}); err != nil {
+		t.Fatal(err)
+	}
+	_ = server.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	got, _, err := server.Receive()
+	if err != nil {
+		t.Fatalf("Receive: %v", err)
+	}
+	if got.Kind != PacketChat || string(got.Payload) != "hola" {
+		t.Fatalf("paquete = %+v, quería el chat", got)
+	}
+	if server.Invalid() != 1 {
+		t.Fatalf("Invalid() = %d, quería 1", server.Invalid())
+	}
+}

@@ -42,10 +42,12 @@ func (a *App) failoverLoop(udp *transport.UDP, fo *room.Failover, stop <-chan st
 			fo.Tick(now)
 			if !a.hostMode.Load() && now.Sub(lastResync) >= clientResync {
 				lastResync = now
-				if !a.selfMuteSynced() {
-					a.sendMuteState(udp)
-				}
-				a.maybeSendSoundSync(udp)
+				logging.Guard("resync con el host", func() {
+					if !a.selfMuteSynced() {
+						a.sendMuteState(udp)
+					}
+					a.maybeSendSoundSync(udp)
+				})
 			}
 		case <-fo.Wake():
 		}
@@ -53,7 +55,8 @@ func (a *App) failoverLoop(udp *transport.UDP, fo *room.Failover, stop <-chan st
 			if a.transport.Load() != udp {
 				return // la sala se cerró (también por un ActGiveUp de este mismo lote)
 			}
-			a.runFailoverAction(udp, fo, action)
+			// Un panic en una acción la pierde a ella sola: la migración sigue viva.
+			logging.Guard("migración de host", func() { a.runFailoverAction(udp, fo, action) })
 		}
 	}
 }

@@ -17,9 +17,9 @@ import (
 )
 
 const (
-	LevelError   = 0 // 0 = Solo Errores (Default)
-	LevelControl = 1 // 1 = Debug Normal (Control)
-	LevelTrace   = 2 // 2 = Debug Avanzado (Trace)
+	LevelError   = 0 // 0 = Solo Errores (antes de cargar la config; ya no se puede elegir)
+	LevelControl = 1 // 1 = Normal (Control, default): errores + estado y eventos
+	LevelTrace   = 2 // 2 = Avanzado (Trace)
 )
 
 var currentLevel atomic.Int32
@@ -143,6 +143,20 @@ func Recover(ctx string) {
 			Panic(value)
 		}
 	}
+}
+
+// Guard corre fn y, si hace panic, lo registra con su stack y vuelve normalmente: para los bucles
+// de larga vida (monitor de audio, migración de host, hotkeys), donde un panic no recuperado
+// cierra la app entera. Devuelve si fn terminó sin panic.
+func Guard(ctx string, fn func()) (ok bool) {
+	defer func() {
+		if value := recover(); value != nil {
+			Errorf("panic [%s]: %v\n%s", ctx, value, debug.Stack())
+			ok = false
+		}
+	}()
+	fn()
+	return true
 }
 
 func Close() {
