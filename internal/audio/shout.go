@@ -16,6 +16,9 @@ import (
 // atrasada, la mezcla llega a rampear durante el frame previo al grito y el grito sale entero.
 // Entra por volumen (RMS ≥ ShoutThresholdDB) o, con ShoutOnClip, porque la voz satura (un pico
 // ≥ config.AudioClipPeak): alguien que habla fuerte satura antes de llegar al volumen de grito.
+// Un golpe en la mesa también satura, pero es un impulso: la saturación solo cuenta con un
+// factor de cresta bajo y hacen falta config.AudioShoutEnterFrames frames fuertes seguidos para
+// entrar. Si no, el golpe abría el envío (el grito cuenta como voz) y salía crudo por la mezcla.
 
 // shoutBegin guarda la entrada de RNNoise en la línea de retardo (deja en e.dry la entrada
 // alineada con lo que RNNoise va a devolver para este bloque) y actualiza el modo grito.
@@ -41,14 +44,17 @@ func (e *Effects) shoutBegin(samples []int16, delay int, settings FilterSettings
 	}
 
 	if !settings.ShoutEnabled {
-		e.shoutFrames = 0
+		e.shoutFrames, e.loudFrames = 0, 0
 		return false
 	}
-	loud := rmsDB(samples) >= float64(settings.ShoutThresholdDB) ||
-		(settings.ShoutOnClip && peakAbs(samples) >= config.AudioClipPeak)
-	if loud {
-		// +2: el frame actual (rampa) y el siguiente, que es el que trae este audio por el
-		// retardo de RNNoise; el hold cuenta desde ahí.
+	if shoutLoud(samples, settings) {
+		e.loudFrames++
+	} else {
+		e.loudFrames = 0
+	}
+	if e.loudFrames >= config.AudioShoutEnterFrames || (e.loudFrames > 0 && e.shoutFrames > 0) {
+		// +2: el frame actual (rampa; por el retardo de RNNoise trae el frame de entrada anterior)
+		// y el siguiente, que trae este; el hold cuenta desde ahí.
 		e.shoutFrames = holdFrames(settings.ShoutHoldMS) + 2
 	}
 	if e.shoutFrames == 0 {
@@ -78,6 +84,22 @@ func (e *Effects) shoutMix(samples []int16, shout bool, settings FilterSettings)
 		mix := from + step*float64(i+1)
 		samples[i] = floatToInt16(float32(float64(filtered)*(1-mix) + float64(e.dry[i])*mix))
 	}
+}
+
+// shoutLoud indica si el frame de entrada cuenta como grito: RMS ≥ ShoutThresholdDB o, con
+// ShoutOnClip, saturación con energía (factor de cresta ≤ AudioShoutMaxCrestDB; un golpe satura
+// con un pico suelto y no cuenta).
+func shoutLoud(samples []int16, settings FilterSettings) bool {
+	rms := rmsDB(samples)
+	if rms >= float64(settings.ShoutThresholdDB) {
+		return true
+	}
+	if !settings.ShoutOnClip {
+		return false
+	}
+	peak := peakAbs(samples)
+	return peak >= config.AudioClipPeak &&
+		20*math.Log10(float64(peak)/math.MaxInt16)-rms <= config.AudioShoutMaxCrestDB
 }
 
 func clampMix(value float32) float64 {

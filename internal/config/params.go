@@ -38,7 +38,7 @@ var Params = []Param{
 
 	{Key: "shout_enabled", Label: "Modo gritos", Profile: InputProfile, Default: 1},
 	{Key: "shout_threshold_db", Label: "Volumen para entrar al modo grito", Help: "El mismo número que marca el medidor de nivel. Más a la izquierda = entra antes.", Profile: InputProfile, Default: -5.5, Min: -40, Max: 0, Step: 0.5, Unit: "dBFS"},
-	{Key: "shout_on_clip", Label: "Entrar también al saturar", Help: "Si la voz llega al tope (el medidor se pone rojo), entra al modo grito aunque no pase el volumen.", Profile: InputProfile, Default: 1},
+	{Key: "shout_on_clip", Label: "Entrar también al saturar", Help: "Si la voz llega al tope (el medidor se pone rojo), entra al modo grito aunque no pase el volumen. Golpes y ruidos cortos no cuentan.", Profile: InputProfile, Default: 1},
 	{Key: "shout_dry_mix", Label: "Voz original al gritar", Profile: InputProfile, Default: 0.2, Min: 0, Max: 1, Step: 0.01, Unit: "%", Scale: 100},
 	{Key: "shout_hold_ms", Label: "Mantener modo grito", Profile: InputProfile, Default: 300, Min: 0, Max: 1000, Step: 10, Unit: "ms"},
 

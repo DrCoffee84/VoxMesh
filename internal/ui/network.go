@@ -214,7 +214,7 @@ func (a *App) handleRoomHello(udp *transport.UDP, fo *room.Failover, payload []b
 			return
 		}
 	}
-	logging.Infof("Procesando PacketRoomHello de %s", addrStr)
+	logging.Tracef("Procesando PacketRoomHello de %s", addrStr)
 	joining.Address = addrStr
 	joining.Connected = true
 	joining.LastSeenUTC = now.UTC()

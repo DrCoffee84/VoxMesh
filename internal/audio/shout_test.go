@@ -1,6 +1,11 @@
 package audio
 
-import "testing"
+import (
+	"math"
+	"testing"
+
+	"voxmesh/internal/config"
+)
 
 // shoutTestSettings: solo RNNoise, sin VAD/compuerta/limitador del usuario, para medir la mezcla.
 func shoutTestSettings() FilterSettings {
@@ -72,18 +77,27 @@ func TestShout_ForcesVoiceAndSendsOriginalAligned(t *testing.T) {
 		}
 	}
 
-	// Grito (RMS ≈ -7 dBFS): sale aunque el VAD no lo vea como voz.
-	loud := sineFrame(3, 20000)
-	frames, started, err := PrepareOutgoingFrames(append([]int16(nil), loud...), denoiser, NoiseGate{}, true, vadThreshold, settings, effects)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !started || len(frames) == 0 {
-		t.Fatal("shout frame must open the gate")
+	// Grito (RMS ≈ -7 dBFS): sale aunque el VAD no lo vea como voz, a partir del frame fuerte
+	// número AudioShoutEnterFrames (antes podría ser un golpe).
+	frame := 3
+	var loud []int16
+	for n := 1; n <= config.AudioShoutEnterFrames; n++ {
+		loud = sineFrame(frame, 20000)
+		frames, started, err := PrepareOutgoingFrames(append([]int16(nil), loud...), denoiser, NoiseGate{}, true, vadThreshold, settings, effects)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n < config.AudioShoutEnterFrames && len(frames) != 0 {
+			t.Fatalf("loud frame %d of %d already opened the gate", n, config.AudioShoutEnterFrames)
+		}
+		if n == config.AudioShoutEnterFrames && (!started || len(frames) == 0) {
+			t.Fatal("a sustained shout must open the gate")
+		}
+		frame++
 	}
 
-	// El frame siguiente trae el audio del grito (retardo de RNNoise): 100 % original, exacto.
-	frames, _, err = PrepareOutgoingFrames(sineFrame(4, 20000), denoiser, NoiseGate{}, true, vadThreshold, settings, effects)
+	// El frame siguiente trae el audio del último (retardo de RNNoise): 100 % original, exacto.
+	frames, _, err := PrepareOutgoingFrames(sineFrame(frame, 20000), denoiser, NoiseGate{}, true, vadThreshold, settings, effects)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,6 +107,92 @@ func TestShout_ForcesVoiceAndSendsOriginalAligned(t *testing.T) {
 	for i, sample := range frames[0] {
 		if sample != loud[i] {
 			t.Fatalf("sample %d: got %d, want original shout %d", i, sample, loud[i])
+		}
+	}
+}
+
+// knockSignal es un golpe en la mesa: silencio y, desde offset, ruido de banda ancha que
+// arranca saturado (amplitud 40000, recortada a int16) y decae con constante tauSamples.
+// Determinístico (xorshift). Un tono que decae no sirve: el VAD de RNNoise lo toma como voz.
+func knockSignal(frames, offset int, tauSamples float64) [][]int16 {
+	state := uint32(2463534242)
+	out := make([][]int16, frames)
+	for n := range out {
+		out[n] = make([]int16, FrameSamples)
+		for i := range out[n] {
+			state ^= state << 13
+			state ^= state >> 17
+			state ^= state << 5
+			k := n*FrameSamples + i - offset
+			if k < 0 {
+				continue
+			}
+			noise := float64(state)/math.MaxUint32*2 - 1
+			v := 40000 * math.Exp(-float64(k)/tauSamples) * noise
+			out[n][i] = int16(math.Max(math.Min(v, math.MaxInt16), math.MinInt16))
+		}
+	}
+	return out
+}
+
+func TestShoutBegin_IgnoresKnock(t *testing.T) {
+	settings := shoutTestSettings()
+	settings.ShoutEnabled = true
+	settings.ShoutOnClip = true
+	// Seco (1 ms) o con resonancia (5 ms), en medio de un frame o justo en el borde de dos.
+	for _, tau := range []float64{48, 240} {
+		for _, offset := range []int{FrameSamples + 100, FrameSamples + 500, 2*FrameSamples - 60, 2*FrameSamples - 10} {
+			effects := &Effects{}
+			for n, frame := range knockSignal(6, offset, tau) {
+				if effects.shoutBegin(frame, FrameSamples, settings) {
+					t.Fatalf("knock (tau %v, offset %d) activated shout mode on frame %d", tau, offset, n)
+				}
+			}
+		}
+	}
+}
+
+func TestShout_KnockIsNotSent(t *testing.T) {
+	denoiser, err := NewRNNoise()
+	if err != nil {
+		t.Fatal(err)
+	}
+	effects := &Effects{}
+	settings := shoutTestSettings()
+	settings.VADEnabled = true
+	settings.VADHoldMS = 0
+	settings.ShoutEnabled = true // resto del modo grito con los valores de fábrica
+	const vadThreshold = 0.99
+	for n, frame := range knockSignal(10, 3*FrameSamples-60, 240) {
+		frames, _, err := PrepareOutgoingFrames(frame, denoiser, NoiseGate{}, true, vadThreshold, settings, effects)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(frames) != 0 || effects.Shouting() {
+			t.Fatalf("frame %d: the knock was sent (%d frames, shouting %v, vad %.2f)", n, len(frames), effects.Shouting(), effects.VAD())
+		}
+	}
+}
+
+func TestShoutBegin_NeedsSustainedLoudness(t *testing.T) {
+	effects := &Effects{}
+	settings := shoutTestSettings()
+	settings.ShoutEnabled = true
+	settings.ShoutThresholdDB = -12
+	settings.ShoutHoldMS = 0
+	quiet, loud := sineFrame(0, 100), sineFrame(0, 20000)
+	// Ráfagas más cortas que AudioShoutEnterFrames, separadas por silencio: nunca entra.
+	for burst := 1; burst < config.AudioShoutEnterFrames; burst++ {
+		for i := 0; i < burst; i++ {
+			if effects.shoutBegin(loud, FrameSamples, settings) {
+				t.Fatalf("a burst of %d loud frames activated shout mode", burst)
+			}
+		}
+		effects.shoutBegin(quiet, FrameSamples, settings)
+	}
+	for i := 1; i <= config.AudioShoutEnterFrames; i++ {
+		if got := effects.shoutBegin(loud, FrameSamples, settings); got != (i == config.AudioShoutEnterFrames) {
+			t.Fatalf("loud frame %d: shout mode %v", i, got)
 		}
 	}
 }
@@ -122,12 +222,17 @@ func TestShoutBegin_HoldCountsFromTheDelayedFrame(t *testing.T) {
 	if effects.shoutBegin(quiet, FrameSamples, settings) {
 		t.Fatal("quiet frame activated shout mode")
 	}
-	// Grito en un frame: activo en ese (rampa), el siguiente (trae el grito) y 2 de hold.
-	got := []bool{effects.shoutBegin(loud, FrameSamples, settings)}
+	// Grito: entra en el último frame fuerte (rampa), sigue en el siguiente (trae ese audio) y 2
+	// de hold.
+	var got, want []bool
+	for i := 1; i <= config.AudioShoutEnterFrames; i++ {
+		got = append(got, effects.shoutBegin(loud, FrameSamples, settings))
+		want = append(want, i == config.AudioShoutEnterFrames)
+	}
 	for i := 0; i < 4; i++ {
 		got = append(got, effects.shoutBegin(quiet, FrameSamples, settings))
 	}
-	want := []bool{true, true, true, true, false}
+	want = append(want, true, true, true, false)
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("shout mode per frame = %v, want %v", got, want)
@@ -138,19 +243,33 @@ func TestShoutBegin_HoldCountsFromTheDelayedFrame(t *testing.T) {
 func TestShoutBegin_ClipTriggersBelowThreshold(t *testing.T) {
 	settings := shoutTestSettings()
 	settings.ShoutEnabled = true
-	settings.ShoutThresholdDB = -3 // un frame que satura de a ratos no llega a este RMS
+	settings.ShoutThresholdDB = -3 // una voz que satura de a ratos no llega a este RMS
 	settings.ShoutHoldMS = 0
-	clippy := sineFrame(0, 3000) // RMS ≈ -23 dBFS
-	clippy[100], clippy[101] = 32767, -32768
+	// Voz fuerte (RMS ≈ -12 dBFS) que toca el tope en cada ciclo.
+	clippy := func(n int) []int16 {
+		frame := sineFrame(n, 12000)
+		for i := 0; i < len(frame); i += 200 {
+			frame[i] = 32767
+		}
+		return frame
+	}
 
+	run := func(settings FilterSettings) bool {
+		effects := &Effects{}
+		shout := false
+		for n := 0; n < config.AudioShoutEnterFrames; n++ {
+			shout = effects.shoutBegin(clippy(n), FrameSamples, settings)
+		}
+		return shout
+	}
 	off := settings
 	off.ShoutOnClip = false
-	if (&Effects{}).shoutBegin(clippy, FrameSamples, off) {
-		t.Fatal("sin ShoutOnClip un pico suelto no activa el modo grito")
+	if run(off) {
+		t.Fatal("sin ShoutOnClip la saturación no activa el modo grito")
 	}
 	settings.ShoutOnClip = true
-	if !(&Effects{}).shoutBegin(clippy, FrameSamples, settings) {
-		t.Fatal("con ShoutOnClip la saturación tiene que activar el modo grito")
+	if !run(settings) {
+		t.Fatal("con ShoutOnClip la voz que satura tiene que activar el modo grito")
 	}
 }
 
@@ -181,11 +300,17 @@ func TestShouting_ReportsLastFrame(t *testing.T) {
 	if _, _, err := PrepareOutgoingFrames(sineFrame(0, 100), denoiser, NoiseGate{}, true, 0.5, settings, effects); err != nil || effects.Shouting() {
 		t.Fatalf("quiet frame: shouting=%v err=%v", effects.Shouting(), err)
 	}
-	if _, _, err := PrepareOutgoingFrames(sineFrame(1, 20000), denoiser, NoiseGate{}, true, 0.5, settings, effects); err != nil || !effects.Shouting() {
-		t.Fatalf("loud frame: shouting=%v err=%v", effects.Shouting(), err)
+	frame := 1
+	for ; frame <= config.AudioShoutEnterFrames; frame++ {
+		if _, _, err := PrepareOutgoingFrames(sineFrame(frame, 20000), denoiser, NoiseGate{}, true, 0.5, settings, effects); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !effects.Shouting() {
+		t.Fatal("sustained loud frames: not shouting")
 	}
 	settings.RNNoiseEnabled = false // sin RNNoise no hay modo grito
-	if _, _, err := PrepareOutgoingFrames(sineFrame(2, 20000), denoiser, NoiseGate{}, true, 0.5, settings, effects); err != nil || effects.Shouting() {
+	if _, _, err := PrepareOutgoingFrames(sineFrame(frame, 20000), denoiser, NoiseGate{}, true, 0.5, settings, effects); err != nil || effects.Shouting() {
 		t.Fatalf("without RNNoise: shouting=%v err=%v", effects.Shouting(), err)
 	}
 }

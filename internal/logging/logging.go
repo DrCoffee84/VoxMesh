@@ -195,9 +195,13 @@ func FormatError(err error) string {
 	return fmt.Sprintf("%T: %v", err, err)
 }
 
-// TracedRWMutex envuelve sync.RWMutex y provee trazabilidad detallada
-// en Nivel 2 (Trace) para detectar bloqueos y deadlocks sin penalizar
-// el rendimiento en Nivel 0 o Nivel 1.
+// slowLockWait es la espera de un TracedRWMutex que vale una línea en el log.
+const slowLockWait = 100 * time.Millisecond
+
+// TracedRWMutex envuelve sync.RWMutex y, con Nivel 2 (Trace), deja en el log las esperas de más de
+// slowLockWait para detectar bloqueos y deadlocks. Los locks sin espera no escriben nada (antes cada
+// Lock/Unlock dejaba tres líneas y un sondeo cada 500 ms llenaba el log). En Nivel 0 o 1 no cuesta
+// nada extra.
 type TracedRWMutex struct {
 	mu   sync.RWMutex
 	name string
@@ -218,12 +222,28 @@ func (m *TracedRWMutex) Name() string {
 	return "RWMutex"
 }
 
-func callerFileAndLine() string {
-	_, file, line, ok := runtime.Caller(2)
+// callerFileAndLine devuelve archivo:línea de quien llamó a Lock/RLock (skip cuenta desde acá).
+func callerFileAndLine(skip int) string {
+	_, file, line, ok := runtime.Caller(skip)
 	if !ok {
 		return "desconocido"
 	}
 	return fmt.Sprintf("%s:%d", filepath.Base(file), line)
+}
+
+// waitLogged bloquea con lock (ya se sabe que el mutex está tomado) y, si pasa slowLockWait sin
+// adquirirlo, escribe "esperando": si nunca se adquiere, esa línea es el rastro del deadlock.
+// Cuando por fin lo adquiere, escribe cuánto tardó.
+func (m *TracedRWMutex) waitLogged(op string, lock func()) {
+	name, caller := m.Name(), callerFileAndLine(3)
+	start := time.Now()
+	timer := time.AfterFunc(slowLockWait, func() {
+		Tracef("[%s] esperando %s en %s hace más de %v...", name, op, caller, slowLockWait)
+	})
+	lock()
+	if !timer.Stop() {
+		Tracef("[%s] adquirido %s en %s tras %v", name, op, caller, time.Since(start))
+	}
 }
 
 func (m *TracedRWMutex) Lock() {
@@ -231,23 +251,14 @@ func (m *TracedRWMutex) Lock() {
 		m.mu.Lock()
 		return
 	}
-	name := m.Name()
-	caller := callerFileAndLine()
-	Tracef("[%s] esperando Lock() en %s...", name, caller)
-	start := time.Now()
-	m.mu.Lock()
-	Tracef("[%s] adquirido Lock() en %s tras %v", name, caller, time.Since(start))
+	if m.mu.TryLock() {
+		return
+	}
+	m.waitLogged("Lock()", m.mu.Lock)
 }
 
 func (m *TracedRWMutex) Unlock() {
-	if !IsTrace() {
-		m.mu.Unlock()
-		return
-	}
-	name := m.Name()
-	caller := callerFileAndLine()
 	m.mu.Unlock()
-	Tracef("[%s] liberado Lock() en %s", name, caller)
 }
 
 func (m *TracedRWMutex) RLock() {
@@ -255,45 +266,22 @@ func (m *TracedRWMutex) RLock() {
 		m.mu.RLock()
 		return
 	}
-	name := m.Name()
-	caller := callerFileAndLine()
-	Tracef("[%s] esperando RLock() en %s...", name, caller)
-	start := time.Now()
-	m.mu.RLock()
-	Tracef("[%s] adquirido RLock() en %s tras %v", name, caller, time.Since(start))
+	if m.mu.TryRLock() {
+		return
+	}
+	m.waitLogged("RLock()", m.mu.RLock)
 }
 
 func (m *TracedRWMutex) RUnlock() {
-	if !IsTrace() {
-		m.mu.RUnlock()
-		return
-	}
-	name := m.Name()
-	caller := callerFileAndLine()
 	m.mu.RUnlock()
-	Tracef("[%s] liberado RUnlock() en %s", name, caller)
 }
 
 func (m *TracedRWMutex) TryLock() bool {
-	if !IsTrace() {
-		return m.mu.TryLock()
-	}
-	name := m.Name()
-	caller := callerFileAndLine()
-	ok := m.mu.TryLock()
-	Tracef("[%s] TryLock() en %s = %v", name, caller, ok)
-	return ok
+	return m.mu.TryLock()
 }
 
 func (m *TracedRWMutex) TryRLock() bool {
-	if !IsTrace() {
-		return m.mu.TryRLock()
-	}
-	name := m.Name()
-	caller := callerFileAndLine()
-	ok := m.mu.TryRLock()
-	Tracef("[%s] TryRLock() en %s = %v", name, caller, ok)
-	return ok
+	return m.mu.TryRLock()
 }
 
 func (m *TracedRWMutex) RLocker() sync.Locker {

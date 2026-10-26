@@ -1,6 +1,8 @@
 # AGENT.md - VoxMesh Technical Architecture & Project Map
 
 > **Context for AI Agents & Developers**: This document is a token-efficient, high-density map of the entire VoxMesh codebase. Read this first to understand the architecture, data structures, threading rules, and pipelines without scanning multiple source files.
+>
+> **Pending work lives in [AGENDA.md](AGENDA.md)**, one task per ID (`S1`…`S9` security, `R1`…`R4` stability, `T1` CI, `F1`…`F3` features, `C1` details). Read its "Cómo usar esta agenda" first: one chat = one task, verify line numbers (they drift), build with CGO, and update this file when a rule, protocol or structure changes. Known security holes are summarized in §K: don't assume the network side is safe.
 
 ---
 
@@ -8,13 +10,13 @@
 
 **VoxMesh** is a low-latency, decentralized peer-to-peer and star-topology voice & text communications app built in Go with native CGO audio filters and a Fyne GUI.
 
-* **Language**: Go 1.24+ (Requires `CGO_ENABLED=1`, see §4 build trap).
+* **Language**: Go 1.26 (`go.mod`; `os.Root`, `testing/synctest`, `runtime/trace.FlightRecorder` are available). Requires `CGO_ENABLED=1`, see §4 build trap. `release.yml` still pins `go-version: '1.24'` and relies on toolchain auto-download (AGENDA T1).
 * **GUI Toolkit**: Fyne v2.6.3.
 * **Audio Engine**: `malgo` (miniaudio wrapper) + `rnnoise-go` (AI neural noise suppression) + `gopkg.in/hraban/opus.v2` (cgo over libopus, build tag `nolibopusfile`, see §4).
 * **Audio Spec**: 48,000 Hz, 16-bit S16LE, Mono, 20 ms frames (960 samples = 1920 bytes) inside the app. **Network audio is always Opus** (one packet per 20 ms frame, ~100–130 bytes). Phone mic frames are PCM of the same size over the LAN; the PC encodes them like its own mic.
 * **Network**: UDP-only direct/mesh with host election and room migration.
 * **Platform**: Primary Windows 10/11 x64, with Android client (`apk/`) for phone mic.
-* **Current release line**: 0.9.7 (first release with the per-sender jitter buffer, see §3.B). The Opus switch breaks the network audio format: **no backward compatibility**, every peer must run the same build.
+* **Releases**: latest tag `v0.17.0` (2026-10-26; `git tag --sort=-v:refname`). 0.9.7 was the first with the per-sender jitter buffer (§3.B). The Opus switch broke the network audio format: **no backward compatibility**, every peer must run the same build (S4 room key will break it again, on purpose).
 
 ---
 
@@ -44,14 +46,15 @@ VoxMesh/
 │   │   ├── gate.go & monitor.go   # RMS noise gate and level monitoring.
 │   │   ├── sound.go               # Soundboard clip structures and serialization.
 │   │   └── *_test.go              # engine_test needs cgo (Opus); jitter_test uses a fake decoder and runs without it. jitter_sim_test: deterministic talk/network simulation (Wi-Fi spikes, capture loss) that measures cuts/min and latency, plus replay of a recorded arrivals CSV (VOXMESH_ARRIVALS).
+│   ├── assets/assets.go           # Chunking of images/sounds into ~1200-byte UDP chunks (Split/Encode/Decode, MaxBytes 8 MiB) and Assembler (reassembly by ID + origin, Sweep → AssetMissing retries). No limits on pending transfers yet (AGENDA S6).
 │   ├── config/
 │   │   ├── config.go              # Persistent configuration struct (voxmesh.json), Default(), Load, AppDir(), default ports/names. Embeds LiveSettings (see §3.I).
 │   │   ├── params.go              # Params: THE table of every numeric/bool setting (default, range, step, unit, label, profile). See §3.I.
 │   │   ├── profiles.go            # Audio profiles: one JSON per profile in <AppDir>/perfiles/<entrada|salida>/, Default built in, migration.
 │   │   └── audio.go               # Internal (not user-tunable) audio constants: send attack, softClip, bus attack, Opus max packet, jitter splice/fade/cooldown/quiet RMS/window/histogram/peaks, network stream eviction.
-│   ├── history/history.go         # Message store for chat and sync between peers; soundboard files, manifest and tombstones.
-│   ├── logging/logging.go         # File and console logger.
-│   ├── netinfo/netinfo.go         # Local IP resolution, public IP, UPnP: MapUDP(candidate external ports → listen port), UnmapUDP(external port).
+│   ├── history/history.go         # Message store for chat and sync between peers (JSON Lines per room), images, soundboard files, manifest and tombstones. Paths = room dir + safeName(id) + ext; ext is NOT validated yet (AGENDA S1, §K).
+│   ├── logging/logging.go         # Daily log file (pruned after 48 h), levels Error/Control/Trace, Guard/Recover, crash output. TracedRWMutex: at level 2 logs only waits > 100 ms (deadlock trail), silent otherwise.
+│   ├── netinfo/netinfo.go         # Local IP resolution, public IP, UPnP: MapUDP(candidate external ports → listen port) returns a *Mapping (keeps the router client); Mapping.Unmap deletes it with one request.
 │   ├── phonemic/server.go         # Phone-as-Mic server (UDP discovery + WebSocket/HTTP). forwardPCM: fixed 20 ms schedule that catches up (never skips), audio-priority thread, frames stamped with their scheduled time.
 │   ├── room/
 │   │   ├── state.go               # Room state, participant list, host candidates in room order (Candidates, NextHost).
@@ -66,6 +69,8 @@ VoxMesh/
 │   │   ├── ui_components.go       # Main layout (content), widgets, panels, lightbox, peer avatars.
 │   │   ├── ui_settings.go         # Settings view (renderSettingsView: live draft + baseline, save/discard dialogs), levelMonitor, mic/output tests (mic and phone recordings go through `processTestRecording`: current config, own RNNoise).
 │   │   ├── ui_audio_params.go     # Controls generated from config.Params (paramControls), accordion sections (inputSections/outputSections), profile bar.
+│   │   ├── level_bar.go           # levelBar widget: horizontal 0–1 bar with color + optional threshold marker line (shout threshold, VAD, gate).
+│   │   ├── logs_windows.go        # openLogsDirectory / openDataDirectory (explorer.exe). logs_other.go: stubs.
 │   │   ├── input_meter.go         # Settings level meter feed: inputMeter (dB, sent, shout, clipped), reportMeter, meterFrame (runs the send chain only for the meter).
 │   │   ├── ui_chat.go             # Chat UI, images, activity log (batched, max 200), room history view.
 │   │   ├── ui_chat_thumbnail.go   # Async chat image thumbnails (decode + downscale off-thread, cached by path).
@@ -92,7 +97,7 @@ VoxMesh/
 │   │   └── headless*.go           # !cgo placeholder App (lets go test build the package without CGO).
 │   ├── winproc/                   # Windows process setup: Configure (ABOVE_NORMAL priority, power throttling/EcoQoS off, DisableProcessWindowsGhosting), KeepSystemAwake (PowerSetRequest SystemRequired while in a room). winproc_other.go: no-op.
 │   ├── updater/
-│   │   ├── updater.go             # GitHub Releases update checker, rename-and-replace, restart.
+│   │   ├── updater.go             # GitHub Releases update checker, rename-and-replace, restart (see §3.F for its current gaps).
 │   │   └── updater_test.go        # Version comparison unit tests (IsNewer).
 │   └── version/version.go         # Current build version string (injected at build time).
 ├── apk/                           # Android mini-app (VoxMesh Mic)
@@ -115,7 +120,7 @@ VoxMesh/
 1. malgo capture callback (`Engine.captureInput`, real-time thread) re-frames into exact 1920-byte frames using a pool of `AudioCaptureQueueFrames` (25 = 500 ms) preallocated buffers: no allocations, never waits. The send goroutine gets `CapturedFrame{PCM, At, Dropped}` and returns the buffer after `onFrame`; it runs on an OS thread with audio priority (`LockAudioThread`: MMCSS "Pro Audio"), so a busy PC (a game) doesn't starve it. Only if all 25 buffers are busy is a frame dropped, and the next one reports it (`Dropped`). Phone mic frames enter the same function with `At` = their slot in the phone server's schedule.
 2. `Effects.ApplySamples` (gain, optional filters). The tanh limiter here only runs if `InputGainDB > 0` (protection; it distorts what RNNoise sees).
 3. **RNNoise always runs** when enabled — there is NO bypass for loud frames. RNNoise has a structural 20 ms delay (`Denoiser.Delay() = 2*480`); skipping it frame-by-frame reorders/duplicates audio. Uses `denoiser.Process` (float32) + `floatToInt16` clamp because `ProcessInt16` wraps around on overflow (the original "cirkci" on shouts). Processes in place.
-   * **Dry mix / shout mode** (`shout.go`, only with `Effects`): before RNNoise the input goes into a delay line of `Denoiser.Delay()` samples (960 = one frame), so the original is sample-aligned with the denoised output (test `TestShoutMix_DryIsAlignedWithRNNoiseDelay`). Shout mode: frame RMS (same dBFS as the settings meter) ≥ `ShoutThresholdDB`, or (`ShoutOnClip`) any input peak ≥ `config.AudioClipPeak` (~ -1 dBFS: a loud talker saturates before reaching the RMS threshold) → active for this frame (ramp) + the next (the one that carries the shout, RNNoise delay) + `ShoutHoldMS`; while active the frame counts as speech (forces VAD) and the mix uses `ShoutDryMix`. Otherwise the mix is `RNNoiseDryMix` (= 1 − `RNNoiseMix`). Mix ramps linearly across the frame; 0 → 0 leaves RNNoise output untouched.
+   * **Dry mix / shout mode** (`shout.go`, only with `Effects`): before RNNoise the input goes into a delay line of `Denoiser.Delay()` samples (960 = one frame), so the original is sample-aligned with the denoised output (test `TestShoutMix_DryIsAlignedWithRNNoiseDelay`). Shout mode: a frame is *loud* if its RMS (same dBFS as the settings meter) ≥ `ShoutThresholdDB`, or (`ShoutOnClip`) an input peak ≥ `config.AudioClipPeak` (~ -1 dBFS: a loud talker saturates before reaching the RMS threshold) **with crest factor** (peak/RMS) ≤ `config.AudioShoutMaxCrestDB` (18 dB). It enters after `config.AudioShoutEnterFrames` (3) loud frames in a row; once active, one loud frame renews it. A table knock is an impulse: one clipped peak over little energy (high crest) and < 60 ms, so it never enters. Before, a single clipped sample entered shout mode, opened the gate with the VAD at 0 and sent the knock raw through `ShoutDryMix`. Once entered → active for this frame (ramp) + the next (RNNoise delay) + `ShoutHoldMS`; while active the frame counts as speech (forces VAD) and the mix uses `ShoutDryMix`. Otherwise the mix is `RNNoiseDryMix` (= 1 − `RNNoiseMix`). Mix ramps linearly across the frame; 0 → 0 leaves RNNoise output untouched.
 4. VAD/gate hold (`KeepVoiceOpen`).
 5. **Single envelope limiter** (`Effects.limitSend`, `peakLimiter` with instant attack / `send_limiter_release_ms` release) on EVERY frame, sent or not. Ceiling = `send_ceiling_db` (-1.7 dBFS) or the user's `limiter_threshold_db` if enabled and lower. No per-frame static gain anymore.
 6. `Effects.gateFrames`: closed gate → nothing sent (DTX), frame kept as **pre-roll** (last `preroll_ms`/20 frames, max `AudioMaxPreRollFrames`). Gate opening → pre-roll frames first, then the current one, with the `fade_in_ms` fade-in on the first of them (the first syllable is no longer clipped; no extra latency, the receiver waits for its cushion anyway).
@@ -139,9 +144,10 @@ VoxMesh/
 * Network streams inactive for > `JitterStreamIdleEvict` (60 s) are evicted, so a sender's measured network (target, peaks) survives the pauses of a conversation; `__sfx__` / `__local__` FIFOs after 2 s.
 * User-tunable values live in the `config.Params` table (§3.I) and reach `audio/` through `settings.go`; fixed internals live in `internal/config/audio.go`. Do not hardcode new ones in `audio/`.
 
-**Measurement** (`ui/audio_monitor.go`, goroutine started in `Run`): every 100 ms marks speaking peers from `Engine.AudibleStreams`; every 2 s reads `Engine.JitterReport()` and publishes per-peer loss % (interval delta) and jitter to the avatar chip (`🟢 45 ms · 2% · ±6 ms`); every 10 s, at level 1 (control):
-* one `Audio de <name>: ...` line per sender that sent something in the interval, with `cortes=N (X ms)` (audio interrupted in the middle of a phrase: what "se corta" means) and `frases=N` (restarts after a sender pause, not cuts). Compare those lines before/after changes.
-* one `Envío: capturados=N (50.0/s) descartados=N enviados=N | cola máx=N frames proc máx=X ms` line from `Engine.TakeCaptureStats` (plus `Envío: hilo de envío con MMCSS Pro Audio` once per Engine): below 50 frames/s means the mic/driver delivers less audio than time (e.g. Bluetooth: not fixable by the queue); dropped frames or a growing queue mean the PC is too busy (dropped ones go out as loss, see §3.A step 8).
+**Measurement** (`ui/audio_monitor.go`, goroutine started in `Run`): every 100 ms marks speaking peers from `Engine.AudibleStreams`; every 2 s reads `Engine.JitterReport()` and publishes per-peer loss % (interval delta) and jitter to the avatar chip (`🟢 45 ms · 2% · ±6 ms`); every 10 s measures one interval (`audioLogState`). **Level 1 only writes intervals with a problem**; level 2 writes every interval as TRACE. Before, both lines went out every 10 s: ~90 % of a day's log (2026-10-26: 1850 of 2060 lines, almost all clean).
+* `Audio de <name>: últimos 10s: ...` per sender that sent something, written at level 1 only if `receiveProblem` (loss, late, drift drops, resets or cuts). `cortes=N (X ms)` = audio interrupted in the middle of a phrase (what "se corta" means); `frases=N` = restarts after a sender pause, not cuts.
+* `Envío: capturados=N (50.0/s) descartados=N enviados=N | cola máx=N frames proc máx=X ms` from `Engine.TakeCaptureStats`, written at level 1 only if `captureInterval.problem` (< `captureMinRate` 48 frames/s, dropped > 0, queue > 1, a frame > 10 ms), plus `Envío: hilo de envío con MMCSS Pro Audio` once per Engine. Below 50 frames/s means the mic/driver delivers less audio than time (e.g. Bluetooth: not fixable by the queue); dropped frames or a growing queue mean the PC is too busy (dropped ones go out as loss, see §3.A step 8).
+* **Summaries** (level 1, always): `Resumen audio de <name> (5m0s): frames, voice time, loss %, late, drops, resets, cortes (ms), frases | jitter/p95/objetivo máx` per sender every `netStatsSummaryInterval` (5 min of activity), when its stream disappears (left, or evicted after 60 s of silence) and when the room audio closes (`flushAudioLog`); `Resumen envío (5m0s): ...` likewise (also when the Engine changes). Compare summaries before/after changes; problem lines say when.
 * At level 2 (trace) every arrival is also recorded to `%AppData%\VoxMesh\llegadas-<fecha>.csv` (one file per connection, pruned after 48 h). Replay it through the jitter buffer: `VOXMESH_ARRIVALS=<csv> go test -run TestJitterReplayArrivals -v ./internal/audio/`.
 
 ### B. Per-Sender Jitter Buffer (`internal/audio/jitter.go`)
@@ -167,7 +173,7 @@ VoxMesh/
 * `Talkspurt`: phrase number of the audio sender (§3.A step 8, §3.B arrival stats and resume rule).
 * **Bulk (assets)**: `SendBulk` / `BroadcastBulk` (block for a queue slot, own goroutines) and `TryBroadcastBulk` (host relay from `receiveLoop`, drops if the queue is full; receivers re-request with `AssetMissing`) go through one queue paced by a token bucket at `BulkRateBytes` (250 KB/s ≈ 2 Mbps total, 16 KB burst). Before, `sendAsset` pushed ~20 Mbps per destination and `handleAssetMissing` had no limit: an 8 MB sound saturated the host's uplink for seconds and delayed the voice it relays. Audio and control (`Send`, `Broadcast`) bypass it. `Close` unblocks waiting senders.
 * No backward compatibility for audio (Opus only). Unknown kinds are still ignored by `receiveLoop`.
-* Kinds: 1 Audio, 2 Hello, 3 Ping, 4 Pong, 5 RoomHello, 6 RoomState, 7 Chat, 8 ChatSync, 9 AssetChunk, 10 AssetMissing, 11 RoomLeave, 12 RoomMute (§3.E2).
+* Kinds: 1 Audio, 2 Hello (legacy: nothing sends it anymore; handled only by `handleLegacyHello`, to be removed in AGENDA R4 — never reuse the number), 3 Ping, 4 Pong, 5 RoomHello, 6 RoomState, 7 Chat, 8 ChatSync, 9 AssetChunk, 10 AssetMissing, 11 RoomLeave, 12 RoomMute (§3.E2).
 * Socket: Windows uses `SO_EXCLUSIVEADDRUSE` (`configureSocket`): a second instance on the same port fails to open instead of splitting the packets (`SO_REUSEADDR` allowed it). Go's `net` already turns off `SIO_UDP_CONNRESET`/`NETRESET` (ICMP port unreachable does not error reads). `Receive` drops non-VoxMesh datagrams itself (`Invalid()` counter: scanners hit the UPnP port) and only returns socket errors; `receiveLoop` exits only on `net.ErrClosed`, logs other errors (one line / 10 s, 50 ms pause) and keeps reading, and runs each packet in `handlePacket` under a recover (a malformed payload loses that packet, not the app). Before, the first junk datagram left the host deaf and the room migrated.
 * Socket: `Listen` asks for 4 MB read/write buffers (`SocketBufferBytes`, best effort). `Receive` reuses one 64 KB read buffer (single reader: `receiveLoop`) and returns an exact-size copy (handlers keep payloads). `receiveLoop` computes `addr.String()` once per packet and only formats the trace line when `logging.IsTrace()`.
 
@@ -181,6 +187,7 @@ VoxMesh/
   * When a participant connects, if their username collides (case-insensitive) with an already connected peer:
   * The host appends `_PUTO` iteratively (`Pepe` -> `Pepe_PUTO` -> `Pepe_PUTO_PUTO`).
   * Propagated via `PacketRoomState`. The client detects the change in `handleRoomState`, updates local config, header label (`selfNameLabel`), and status log.
+  * Planned: replace the suffix with ` (2)`, ` (3)`… via a pure `uniqueName` helper (AGENDA C1).
 
 ### E2. Mic Mute (`isMuted`, `PacketRoomMute = 12`)
 * `App.isMuted atomic.Bool`, runtime only (not persisted), survives reconnects/migration. Toggle button left of "Refresh Audio" (`toggleMute` in `ui_components.go`: flips the atomic + icon on the UI thread, `go publishMuteState()`).
@@ -190,12 +197,12 @@ VoxMesh/
 * **Avatars**: `peerView.muted` (self from `isMuted`, others from `Participant.Muted`). `newMuteBadge` = red `theme.VolumeMuteIcon` on a dark circle, bottom-right of the avatar, 3rd object of the avatar Stack; `refreshPeerAvatars` shows/hides it inside its `fyne.Do`.
 
 ### E3. Hosting: UPnP and public address (`ui_connection.go` `configureHostNetwork`)
-* The socket listens on the configured port (`listen_address`). `netinfo.MapUDP` tries external ports listenPort..listenPort+5, **all pointing to listenPort** (a port taken by another router rule, `ConflictInMappingEntry` 718, moves to the next), and the room advertises `publicIP:<external port that worked>`. The old code retried with listenPort+1 → listenPort+1, where nothing listened, and advertised a dead port.
-* Lease `upnpLeaseSeconds` (1 h), renewed at half (`renewHostPort`) until the room closes or the host steps down (`a.hostRole`). `a.upnpPort` keeps the mapped external port: `stopConnectionAsync` unmaps that one.
+* The socket listens on the configured port (`listen_address`). `netinfo.MapUDP` tries external ports listenPort..listenPort+5, **all pointing to listenPort** (a port taken by another router rule, `ConflictInMappingEntry` 718, moves to the next, unless that rule already points to this PC and port: a leftover of a room that did not unmap, deleted and re-added on the same port so the public address stays stable), and the room advertises `publicIP:<external port that worked>`. The old code retried with listenPort+1 → listenPort+1, where nothing listened, and advertised a dead port.
+* Lease `upnpLeaseSeconds` (8 h), **never renewed**: the host's router answers 718 to re-adding an existing rule, so the old 1 h lease + renewal at half failed and the port closed mid-call (2026-10-26). `a.upnpMapping` keeps the rule; `releaseHostPort` deletes it on room close (first thing in `stopConnectionAsync`'s cleanup, before `stopEngine`, so it fits in `quit`'s 3 s) and on step-down. Before, unmap rediscovered the router with a 2 s budget and never reached it: every rule stayed until its lease ran out.
 * Without UPnP the status asks to open the UDP port by hand and the room advertises `publicIP:listenPort`.
 
 ### E4. Disconnects and host migration (`room/failover.go`, `ui/network_failover.go`)
-* **Lifecycle**: `a.connLife` (stopSignal) stops the connection's goroutines (`failoverLoop`, `sweepAssetLoop`) and is stopped **first thing** in `stopConnectionAsync`; `a.hostRole` stops the host-role ones (`pingPeers`, UPnP renewal) on disconnect or step-down. Before, the client's `monitorHost` was never stopped and, seconds after leaving, became host of a ghost room on the closed socket (UPnP mapping, mic opened, fake messages).
+* **Lifecycle**: `a.connLife` (stopSignal) stops the connection's goroutines (`failoverLoop`, `sweepAssetLoop`) and is stopped **first thing** in `stopConnectionAsync`; `a.hostRole` stops the host-role ones (`pingPeers`) on disconnect or step-down. Before, the client's `monitorHost` was never stopped and, seconds after leaving, became host of a ghost room on the closed socket (UPnP mapping, mic opened, fake messages).
 * **`room.Failover`** is pure (no I/O): events in (`JoinedAsClient`, `Hosting`, `Seen`, `HostState`, `HostLeft`, `StateFrom`, `HelloFrom`, `Tick`), actions out (`ActPing`, `ActHello`, `ActSendState`, `ActBecomeHost`, `ActSwitchHost`, `ActStepDown`, `ActGiveUp`, `ActStatus`). One per connection, passed to `receiveLoop` and `failoverLoop`; `failoverLoop` ticks it every 250 ms and runs the actions in order (role changes never race). Tested with a fake clock in `failover_test.go` (every scenario below).
 * **Client only trusts its host**: `Seen(addr)` says whether a packet comes from the host. Audio, chat, assets, `RoomState` and `RoomLeave` only count from the host; pings from anyone get a Pong (it opens NATs during a migration) but don't keep the host "alive". The first `RoomState` binds the host address (the reply may come from the host's LAN address if you dialed its public IP). `handleAudioPacket` drops our own ID (echo when two hosts relay to each other).
 * **Brief cut**: host silent > 6 s → "Reconectando…", ping + `RoomHello` every 2 s; host back before 20 s (`Grace`) → nothing migrates. The host drops a silent participant after `participantTimeout` (20 s, same grace). `RoomHello` from someone already connected at the same address only gets the state back (no message/sound/broadcast), so retries are free.
@@ -212,7 +219,8 @@ VoxMesh/
   3. Renames `voxmesh.exe.new` -> `voxmesh.exe`.
   4. Launches new `voxmesh.exe` via `exec.Command` and calls `os.Exit(0)`.
   5. At startup (`main.go`), `updater.CleanupOldVersions()` deletes leftover `.old` and `.new` files.
-* **Trigger**: Background goroutine on startup checks GitHub Releases API (`api.github.com/repos/DrCoffee84/VoxMesh/releases/latest`). A popup asks the user for confirmation. Also triggered manually in Settings.
+* **Trigger**: Background goroutine on startup checks GitHub Releases API (`api.github.com/repos/DrCoffee84/VoxMesh/releases/latest`). A popup asks the user for confirmation. Also triggered manually in Settings. Skipped at startup for dev builds (`version.IsDev()`, §4).
+* **Current gaps** (AGENDA S7, R3): `CheckForUpdate` takes `voxmesh.exe` **or any `.exe`** asset; the download is checked only against a minimum size (no hash/signature, `AssetSize` unused); `ApplyUpdate` calls `os.Exit(0)` itself right after starting the new exe, so `quit`'s cleanup (RoomLeave, UPnP unmap, `flushConfig`, log close) never runs.
 
 ### G. UI Threading & Fyne Concurrency
 * **How the Fyne 2.6.3 loop works**: goroutine 1 (locked to the main OS thread) runs widget callbacks, every queued `fyne.Do` (one per `select` iteration) and `glfw.PollEvents` at 60 Hz. Anything slow in any of them stops repainting. ≥ 5 s without pumping messages → Windows swaps in a "Not Responding" ghost window (the taskbar button looks like the app restarted).
@@ -240,7 +248,8 @@ VoxMesh/
 ### H. Known Audio/Network Debt (not yet fixed)
 * The Opus decoder is not reset when a sender restarts (`jitterBuffer.reset`); Opus recovers on its own, but the first frame after a restart may carry state from the previous stream.
 * `DecodeFEC` silently falls back to PLC when the next packet has no FEC data, so `Stats.Recovered` counts "FEC attempted".
-* UI: `a.roomState` is still read/written from several goroutines without sync (`receiveLoop`, `pingPeers`, `failoverLoop`, `configureHostNetwork`, `saveSettings`); the host branch of `receiveLoop` touches it on every packet (LastSeenUTC). `participantID` and `activeRoomName` are plain fields written by connect goroutines. Next step: a single owner goroutine for room state (messages via channel), same copy-on-write snapshot for readers. `thumbCache` is unbounded (~600 KB per image). `refreshChat` still rebuilds all rows on the UI thread (cheap now that thumbnails are async).
+* UI: `a.roomState` is still read/written from several goroutines without sync (`receiveLoop`, `pingPeers`, `failoverLoop`, `configureHostNetwork`, `saveSettings`; readers like `sendAsset`, `addSystemMessage`); the host branch of `receiveLoop` touches it on every packet (LastSeenUTC). `participantID` and `activeRoomName` are plain fields written by connect goroutines. Planned fix in AGENDA R1 (mutex/owner + immutable `atomic.Pointer` snapshot, LastSeen moved out of the State). `room.State.Participants` is never pruned or capped (each reconnect from a new address is a new ID; the state travels in one datagram) — AGENDA S2. `thumbCache` is unbounded (~600 KB per image). `refreshChat` still rebuilds all rows on the UI thread (cheap now that thumbnails are async). The chat lightbox (`showLightbox`, `ui_components.go`) still uses `canvas.Image{File: …}` = full decode on the UI thread (AGENDA S5).
+* Audio: no acoustic echo cancellation (AGENDA F1). `config.MicMode` (push-to-talk) is stored but unused (AGENDA F2).
 
 ### J. Soundboard Sync (`ui/sound_sync.go`, `history.go`)
 * **Storage** (per room, `salas/<sala>/sounds/`): `<id>.pcm` files + append-only `manifest` (last entry per ID wins; entries without a file are dropped by `ListSounds`) + `tombstones` (one deleted ID per line; `DeleteSound` always appends; trimmed to the newest `MaxSoundTombstones` = 500 because the list travels in one UDP packet). `a.sounds` (under `soundMu`) can hold **metadata-only** entries whose audio was never downloaded; they are not persisted and come back on the next sync.
@@ -253,7 +262,7 @@ VoxMesh/
 
 **Single table: `config.Params` (`params.go`).** Every numeric/bool field of `LiveSettings` has exactly one row: json key, label, help, profile (`entrada` / `salida` / none), default, min, max, step, unit, display scale (mixes 0–1 shown as %). From it come `Default()`, `Load`'s range check (out of range → default; `ResetOutOfRange`), profile load/save and every slider/check in Settings (`paramControls`, `ui_audio_params.go`). `TestParamsMatchLiveSettings` fails if a field is missing from the table or a row has no field. **Adding a setting** = field in `LiveSettings` + row in `Params` + (if audio) mapping in `audio/settings.go` + key in one of `inputSections`/`outputSections` (`TestParamSectionsCoverProfiles`). Default values are not written anywhere else.
 
-Strings stay outside the table: `MicMode` (stored only; push-to-talk not implemented and its radio is hidden), `InputDevice`/`OutputDevice` + `InputDeviceID`/`OutputDeviceID` (see **Devices** below), `ActiveInputProfile`/`ActiveOutputProfile` ("" = Default).
+Strings stay outside the table: `MicMode` (stored only; push-to-talk not implemented and its radio is hidden — AGENDA F2), `InputDevice`/`OutputDevice` + `InputDeviceID`/`OutputDeviceID` (see **Devices** below), `ActiveInputProfile`/`ActiveOutputProfile` ("" = Default).
 
 **Devices: no memory, Windows decides.** The choice is stored as name (display) + Windows ID (`audio.Device`). Every open (`NewEngine`, `NewPlayer`, `StartMonitor`, tests) enumerates again and uses `audio.PickDevice`: same ID → that device; config without ID (older version) → by name; otherwise **Windows default** (nil DeviceID: miniaudio follows default changes). A missing device never fails the open. `startAudio` (entering a room) and **Refresh Audio** (`restartAudioInRoom`: also drops the cached soundboard player via `dropSoundPlayer`; outside a room it only runs `audio.ResolveDevices`) call `applyResolvedDevices`: a missing device is **forgotten** (config → `config.DefaultDevice`, ID "", saved, ERROR log line + status "No encontré «X»: uso el predeterminado de Windows"); a found one gets its ID/new name filled in. It only overwrites a choice that did not change while the audio was opening; the phone mic input is never touched. Settings selects map label → `Device` (`deviceOptions`: duplicated names get " (2)"; a saved device that is gone shows as the default without writing the config).
 
@@ -269,7 +278,22 @@ Strings stay outside the table: `MicMode` (stored only; push-to-talk not impleme
 
 **Settings layout.** Input card: device, level meter (RMS dBFS, same scale as the shout threshold; colored by what the chain does, see above) + color legend, "Aplicar filtro de voz" + Configuración avanzada + ↺ → profile bar + accordion: Modo gritos · Supresión de ruido y voz · Ecualización · Dinámica · Envío · Codec Opus · Micrófono del celular. Output card: same pattern with Filtros · Buffer de recepción · Mezcla. Network card: ports + host migration. Interface card: status bar, event sounds, log level.
 
-**Fixed internals** (not exposed on purpose, `internal/config/audio.go`): send limiter attack 0, softClip knee/range/curve, bus limiter attack, Opus max packet, jitter splice / fade-out / drift cooldown / quiet RMS / window / min samples / histogram bucket / peak threshold, count and memory / network stream eviction (60 s); also `antiClickSamples`, FIFO decay 0.8, FIFO stream eviction 2 s (`engine.go`), `talkspurtGap` 60 ms (protocol, `network_audio.go`), speaking-indicator timings.
+**Fixed internals** (not exposed on purpose, `internal/config/audio.go`): send limiter attack 0, shout entry (max crest factor, frames in a row), softClip knee/range/curve, bus limiter attack, Opus max packet, jitter splice / fade-out / drift cooldown / quiet RMS / window / min samples / histogram bucket / peak threshold, count and memory / network stream eviction (60 s); also `antiClickSamples`, FIFO decay 0.8, FIFO stream eviction 2 s (`engine.go`), `talkspurtGap` 60 ms (protocol, `network_audio.go`), speaking-indicator timings.
+
+### K. Security Model (current state — read before touching network code)
+
+Reviewed 2026-10-26. Task details and fixes are in AGENDA §1.1; this is the summary an agent needs so it doesn't build on wrong assumptions.
+
+* **No authentication or encryption.** Datagrams are plain `VM01` packets; whoever knows the host's `IP:port` can talk to it. The room key + AEAD is planned (AGENDA S4, magic `VM02`, breaks compatibility).
+* **Client side is scoped**: a client only processes audio/chat/assets/`RoomState`/`RoomLeave` from its host (`Failover.Seen`, §3.E4). A malicious host is out of scope except for file paths and image decoding.
+* **Host side trusts everyone** (AGENDA S2): `handlePacket`/`handleHostPacket` call `udp.AddPeer` for any sender before any check, so an unknown address joins the broadcast list without appearing as a participant. Chat, history sync, asset requests, soundboard sync and leaves are handled regardless of origin. Non-participant peers are never removed.
+* **Identity is taken from payloads** (AGENDA S3): participant IDs in `RoomHello`, audio, chat (`SenderID`/`Username`/`System`) and `RoomLeave` are not bound to the sender address; `Failover.StateFrom` switches/steps down toward the packet's source address without checking it is the `HostID`'s address. The pattern to copy is `State.SetMuted(id, addr, …)`, which only accepts from the registered address.
+* **File paths**: `history` joins network-supplied extensions without validation (AGENDA S1). Any new code that turns a network string into a path must validate it (whitelist) — don't add new callers until S1 lands.
+* **Resource limits**: `assets.Assembler` (S6), image dimensions before decode (S5) and the participant list (S2) have no caps.
+* **Privacy**: chat image messages carry the sender's absolute local path in `Message.ImagePath` (S8). `RoomState` carries every participant's public `IP:port` (needed for migration; accepted).
+* **Updater**: HTTPS only, no hash/signature check, any `.exe` asset accepted (S7).
+* **Phone mic**: TLS + random token (UDP path compares in constant time; HTTP paths don't yet, S9). LAN only.
+* **Rules for new network code**: (1) decide who may send it (participant address check on the host); (2) derive identity from the address, never from the payload; (3) bound every allocation driven by a packet; (4) never turn packet strings into paths without validation; (5) log rejected traffic rate-limited (≤ 1 line / 10 s).
 
 ---
 
@@ -293,7 +317,8 @@ Strings stay outside the table: `MicMode` (stored only; push-to-talk not impleme
   First cgo build/vet takes several minutes (Fyne + malgo).
 * **Create a Release**:
   ```powershell
-  .\release.ps1 v0.9.7 "Notas del release"
+  .\release.ps1 v0.17.1 "Notas del release"
   # Creates git tag, pushes to GitHub, triggers .github/workflows/release.yml
   # Automatically builds and publishes voxmesh.exe + voxmesh-mic.apk to GitHub Releases.
   ```
+  `release.yml` only builds (no tests run in CI yet — AGENDA T1); run `go test -tags nolibopusfile ./...` with CGO locally before tagging.

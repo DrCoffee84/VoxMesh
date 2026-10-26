@@ -81,6 +81,9 @@ func (a *App) stopConnectionAsync() <-chan struct{} {
 	go func() {
 		defer close(done)
 		a.playEventSound(audio.SFXDisconnect)
+		// La regla del router primero: es un pedido rápido y al cerrar la app quit no espera
+		// más de 3 s (stopEngine solo ya tarda ~2 s).
+		a.releaseHostPort()
 		time.Sleep(150 * time.Millisecond)
 		a.stopEngine()
 		a.dropSoundPlayer()
@@ -94,12 +97,6 @@ func (a *App) stopConnectionAsync() <-chan struct{} {
 				sendRepeated(func() { _ = udp.Send(peer, leave) })
 			}
 		} else if a.hostMode.Load() {
-			// El puerto externo que quedó mapeado (puede no ser el del socket).
-			if external := a.upnpPort.Swap(0); external != 0 {
-				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				_ = netinfo.UnmapUDP(ctx, uint16(external))
-				cancel()
-			}
 			// Los clientes migran ya, sin esperar el período de gracia.
 			sendRepeated(func() { udp.Broadcast(leave, nil) })
 		}
@@ -306,9 +303,11 @@ func (a *App) openHost(roomName, username string) {
 	}()
 }
 
-// UPnP: el lease se renueva a la mitad, mientras la sala siga abierta.
+// UPnP: lease de 8 h, más que cualquier llamada, y sin renovar (este router rechaza volver a
+// agregar una regla que ya existe: la renovación fallaba y el puerto se cerraba a la hora). La
+// regla se borra al cerrar la sala o la app; si quedó de un cierre forzado, vence sola.
 const (
-	upnpLeaseSeconds = 3600
+	upnpLeaseSeconds = 8 * 3600
 	upnpPortAttempts = 6 // puerto del socket y los 5 siguientes como puerto externo
 )
 
@@ -324,7 +323,7 @@ func (a *App) configureHostNetwork(listenPort int, stop <-chan struct{}) {
 		candidates = append(candidates, uint16(listenPort+offset))
 	}
 	mapContext, cancelMap := context.WithTimeout(context.Background(), 15*time.Second)
-	external, mapErr := netinfo.MapUDP(mapContext, candidates, uint16(listenPort), upnpLeaseSeconds)
+	mapping, mapErr := netinfo.MapUDP(mapContext, candidates, uint16(listenPort), upnpLeaseSeconds)
 	cancelMap()
 	publicPort := listenPort
 	if mapErr != nil {
@@ -332,17 +331,14 @@ func (a *App) configureHostNetwork(listenPort int, stop <-chan struct{}) {
 	} else {
 		select {
 		case <-stop:
-			// La sala se cerró mientras el router respondía: stopConnectionAsync no lo vio mapeado.
-			unmapContext, cancelUnmap := context.WithTimeout(context.Background(), 2*time.Second)
-			_ = netinfo.UnmapUDP(unmapContext, external)
-			cancelUnmap()
+			// La sala se cerró mientras el router respondía: stopConnectionAsync no la vio.
+			unmapHostPort(mapping)
 			return
 		default:
 		}
-		publicPort = int(external)
-		a.upnpPort.Store(uint32(external))
-		logging.Infof("UPnP UDP activo: puerto externo %d → %d (tiempo: %v)", external, listenPort, time.Since(start))
-		go a.renewHostPort(external, uint16(listenPort), stop)
+		publicPort = int(mapping.External)
+		a.upnpMapping.Store(mapping)
+		logging.Infof("UPnP UDP activo: puerto externo %d → %d (tiempo: %v)", mapping.External, listenPort, time.Since(start))
 	}
 
 	ipContext, cancelIP := context.WithTimeout(context.Background(), 4*time.Second)
@@ -382,24 +378,21 @@ func (a *App) configureHostNetwork(listenPort int, stop <-chan struct{}) {
 	a.publishRoomCloudFlare()
 }
 
-// renewHostPort renueva el mapeo UPnP a mitad del lease hasta que se cierre la sala. Sin esto el
-// puerto se cerraba a la hora y nadie nuevo podía entrar.
-func (a *App) renewHostPort(external, listenPort uint16, stop <-chan struct{}) {
-	ticker := time.NewTicker(upnpLeaseSeconds * time.Second / 2)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-stop:
-			return
-		case <-ticker.C:
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		_, err := netinfo.MapUDP(ctx, []uint16{external}, listenPort, upnpLeaseSeconds)
-		cancel()
-		if err != nil {
-			logging.Errorf("renovar UPnP del puerto %d: %s", external, logging.FormatError(err))
-		}
+// releaseHostPort borra la regla UPnP de la sala, si hay (al cerrar la sala o al dejar de ser host).
+func (a *App) releaseHostPort() {
+	if mapping := a.upnpMapping.Swap(nil); mapping != nil {
+		unmapHostPort(mapping)
 	}
+}
+
+func unmapHostPort(mapping *netinfo.Mapping) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := mapping.Unmap(ctx); err != nil {
+		logging.Errorf("borrar UPnP del puerto %d: %s", mapping.External, logging.FormatError(err))
+		return
+	}
+	logging.Infof("UPnP UDP cerrado: puerto externo %d", mapping.External)
 }
 
 func (a *App) publishRoomCloudFlare() {

@@ -77,6 +77,7 @@ type Effects struct {
 	dry         []int16 // entrada alineada con la salida de RNNoise del bloque actual
 	dryMix      float64 // proporción de original aplicada al final del bloque anterior
 	shoutFrames int     // frames que le quedan al modo grito
+	loudFrames  int     // frames de entrada fuertes seguidos (para entrar al modo grito)
 	shouting    bool    // el último frame procesado estaba en modo grito (Shouting)
 	vad         float32 // probabilidad de voz del último frame (VAD); -1 sin RNNoise
 }
@@ -90,7 +91,7 @@ func (e *Effects) Reset() {
 	e.vadHoldFrames, e.gateHoldFrames, e.wasOpen = 0, 0, false
 	e.sendLimiterReady, e.preRollCount = false, 0
 	clear(e.dryDelay)
-	e.dryPos, e.dryMix, e.shoutFrames = 0, 0, 0
+	e.dryPos, e.dryMix, e.shoutFrames, e.loudFrames = 0, 0, 0, 0
 	e.shouting, e.vad = false, 0
 }
 

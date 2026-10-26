@@ -13,6 +13,14 @@ const (
 	// AudioClipPeak es el pico de entrada (S16, ~ -1 dBFS) a partir del cual la voz se considera
 	// saturada: el modo grito entra (shout_on_clip) y el medidor y el avatar se ponen rojos.
 	AudioClipPeak = 29204
+	// AudioShoutMaxCrestDB es el factor de cresta (pico / RMS del frame) máximo para que la
+	// saturación active el modo grito. La voz fuerte que satura tiene energía (7–13 dB); un golpe
+	// en la mesa es un pico al tope sobre casi nada (> 20 dB) y no tiene que abrir el envío.
+	AudioShoutMaxCrestDB = 18.0
+	// AudioShoutEnterFrames son los frames fuertes seguidos que hacen falta para entrar al modo
+	// grito (ya activo, uno solo lo renueva). Un golpe que cae en el borde de dos frames puede
+	// dejar los dos fuertes; el tercero ya es la cola. Un grito dura mucho más que 60 ms.
+	AudioShoutEnterFrames = 3
 	// AudioMaxPreRollFrames es el tope del pre-roll (Params: preroll_ms, máximo 100 ms).
 	AudioMaxPreRollFrames = 5
 	// AudioCaptureQueueFrames son los frames del micrófono (500 ms) que pueden esperar a la

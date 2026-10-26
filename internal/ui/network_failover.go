@@ -3,7 +3,6 @@
 package ui
 
 import (
-	"context"
 	"net"
 	"time"
 
@@ -11,7 +10,6 @@ import (
 
 	"voxmesh/internal/config"
 	"voxmesh/internal/logging"
-	"voxmesh/internal/netinfo"
 	"voxmesh/internal/room"
 	"voxmesh/internal/transport"
 )
@@ -146,14 +144,8 @@ func (a *App) stepDown(udp *transport.UDP, address *net.UDPAddr, state room.Stat
 		udp.Broadcast(transport.Packet{Kind: transport.PacketRoomState, Sequence: a.sequence.Add(1), Payload: payload}, address)
 	}
 	a.hostMode.Store(false)
-	a.hostRole.stop() // pingPeers y la renovación UPnP
-	if external := a.upnpPort.Swap(0); external != 0 {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			_ = netinfo.UnmapUDP(ctx, uint16(external))
-		}()
-	}
+	a.hostRole.stop() // pingPeers
+	go a.releaseHostPort()
 	for _, peer := range udp.Peers() {
 		udp.RemovePeer(peer) // como cliente no reenvía nada a nadie
 	}

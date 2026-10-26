@@ -1,111 +1,118 @@
 # VoxMesh
 
-VoxMesh es un chat de voz + texto host-cliente en Go para Windows, organizado en **salas** con failover automático de host. Usa UDP, una puerta de ruido configurable y una interfaz Fyne (`v2.6.3`) en un único ejecutable.
+Chat de voz y texto para grupos chicos de amigos, en **Windows**, en un único `voxmesh.exe` sin instalador. Uno abre una **sala**, los demás se conectan con su dirección y, si el host se va o se le corta internet, la sala **pasa sola a otro participante** sin que nadie tenga que reconectarse a mano.
 
-## Stack técnico
+> ⚠️ **Seguridad: leer antes de usar por internet.** Todavía no hay clave de sala ni cifrado: cualquiera que conozca la dirección `IP:puerto` del host puede comunicarse con la sala. Pasá la dirección solo a gente de confianza y cerrá la sala cuando no la uses (al cerrarla se borra el puerto abierto en el router). Las correcciones están en curso: ver [AGENDA.md](AGENDA.md) §1.1.
 
-- **Lenguaje:** Go 1.26.
-- **GUI:** `fyne.io/fyne/v2` `v2.6.3` (requiere CGO + GLFW/OpenGL en Windows).
-- **Transporte:** UDP puro (`net.UDPConn`), sin TCP. Paquetes propios con cabecera binaria (magic `VM01`, 16 bytes: kind, sequence, payload length).
-- **Audio:** `github.com/gen2brain/malgo` (miniaudio) para captura/reproducción, `github.com/VoiceBlender/rnnoise-go` para supresión de ruido + VAD, Noise Gate por RMS propio, PCM mono 48 kHz.
-- **Red/NAT:** `github.com/huin/goupnp` para mapeo UPnP automático de una hora; `api.ipify.org` para IP pública.
-- **Diálogo de archivos:** nativo de Windows vía `comdlg32.dll` / `GetOpenFileNameW` (no usa el file picker de Fyne).
-- **Persistencia de config:** `voxmesh.json` junto al ejecutable (JSON plano).
-- **Persistencia de historial:** JSON Lines (un mensaje por línea) en `%AppData%\VoxMesh\salas\<sala>\history`, imágenes en `.../images/`.
-- **Logging de errores:** `%AppData%\VoxMesh\log-YYYY-MM-DD.log`, con `recover()` sobre panics y poda automática (>48h) al iniciar.
-- **Serialización de protocolo de sala/chat:** JSON (`room.Envelope`), no binario.
+## Qué tiene
 
-## Modelo de red y salas
+**Voz**
+- Opus a 48 kHz mono (40 kbps por defecto, con FEC), un paquete cada 20 ms.
+- Filtro de voz: supresión de ruido con IA (RNNoise) + detector de voz (VAD), "modo grito" (deja pasar la voz fuerte sin aplastarla), y opcionales: puerta de ruido, ecualizador, compresor/expansor y limitador.
+- Perfiles de **entrada** y **salida** guardables ("Default" se actualiza solo con cada versión).
+- Buffer de recepción adaptativo por participante: se agranda solo si la red de alguien es inestable y oculta los paquetes perdidos.
+- Medidor en Ajustes que muestra qué pasa con tu voz: gris = silencio, amarillo = hay sonido pero no se manda, verde = se manda, rojo = modo grito. Avisa si el micrófono satura.
+- Volumen por participante (se recuerda por nombre), botón de mute e indicador de quién habla, con ping, pérdida y jitter de cada uno.
+- **Celular como micrófono**: por la página web que abre el QR (misma red Wi-Fi) o con la app Android *VoxMesh Mic* (`voxmesh-mic.apk` en cada release).
+- Si se desenchufa un dispositivo o la PC vuelve de suspender, el audio se reabre solo. Si el dispositivo guardado ya no existe, se usa el predeterminado de Windows.
 
-- **Sala (`internal/room`):** identificada por nombre, con `Epoch` (versión de host), `HostID` y una lista ordenada de `Participant{ID, Username, Address, Order, Connected, LastSeenUTC}`. `ParticipantID` es `sha256(username|address)` truncado, no la IP sola.
-- **Descubrimiento:** el cliente conecta por `IP:puerto` UDP directo (`PacketRoomHello`); no hay servidor de rendezvous ni STUN todavía. Depende de que el puerto del host sea alcanzable (UPnP o port-forward manual).
-- **Failover de host:** si el cliente no recibe ping del host en 6s, marca al host desconectado, calcula el siguiente `Participant` conectado por `Order` (`NextHost`/`ElectNextHost`), espera 6s a que ese candidato asuma, y si no lo hace pasa al siguiente. Solo el candidato elegido crea la sala de nuevo con el mismo nombre e incrementa `Epoch`. Todo el proceso se loguea como mensajes `[SISTEMA]` en el chat.
-- **Protocolo (`internal/room/protocol.go`):** `Envelope` JSON con `Kind` (`hello`, `state`, `chat`, `sync_request`, `sync_response`, `system`, `host_claim`, `reconnect`), llevado sobre paquetes UDP tipados (`PacketRoomHello`, `PacketRoomState`, `PacketChat`, `PacketChatSync`, `PacketAudio`, `PacketPing`/`PacketPong`).
-- **Historial (`internal/history`):** por sala, deduplicado por ID de mensaje. Al reconectar, cada peer intercambia `KnownIDs` y solo recibe los mensajes/imágenes que le faltan (`MessagesMissingFrom`); nunca se reenvía el historial completo. Las imágenes viajan embebidas en el mismo paquete UDP (límite práctico ~48 KiB por imagen, sin fragmentación).
+**Texto y sonidos**
+- Chat con imágenes (botón 📎 o pegar con Ctrl+V; PNG, JPG, GIF o WebP, hasta 8 MiB) e historial por sala que se sincroniza al reconectar.
+- Botonera de sonidos (MP3/WAV, con recorte de hasta ~87 s) con atajos de teclado globales, que también funcionan con un juego en primer plano. Se sincroniza con la sala: los audios se bajan cuando alguien los usa.
 
-## Estado de esta base
+**App**
+- Se actualiza sola desde GitHub Releases (pregunta antes).
+- Logs diarios en `%AppData%\VoxMesh` (botón 📄), pensados para poder mandarlos cuando algo falla.
 
-- Host: abre un puerto UDP efímero, consulta la IP pública mediante `api.ipify.org` y ofrece copiar `IP:puerto`.
-- Cliente: pega `IP:puerto`, entra a la sala por nombre y se sincroniza con el estado y el historial existente.
-- Host: aprende los participantes por UDP, retransmite voz, chat y estado de sala a todos.
-- Audio: incluye RNNoise con VAD, Noise Gate, PCM mono de 48 kHz, enumeración de dispositivos Windows y pruebas de grabación/reproducción mediante `malgo`. Un indicador circular junto al nombre propio se enciende en verde (`#80EF80`) cuando un frame de voz válido se transmite.
-- Chat: texto (Enter o botón Enviar) e imágenes (botón 📎, diálogo nativo de Windows), con eventos de sistema (conexión, desconexión, migración de host) intercalados.
-- Configuración: `voxmesh.json` junto al ejecutable guarda nombre, modo de micrófono, umbral, dispositivos y último peer. `phone_mic_buffer_enabled` activa el buffer del micrófono de celular y `phone_mic_buffer_ms` define su duración (100 ms por defecto; entre 40 y 1000 ms). El enlace del celular conserva token, puerto TCP `47831` y certificado local en `%AppData%\VoxMesh`, para que una pestaña ya vinculada reconecte al reiniciar la app mientras no cambie la IP local.
-- UPnP: intenta crear un mapeo UDP de una hora; si falla, la sala sigue funcionando en red local y se puede hacer port-forwarding manual.
+**Todavía no tiene**: cancelación de eco (con parlantes, los demás pueden escucharse a sí mismos: usá auriculares), push-to-talk, link de invitación ni cifrado. Están planificados en [AGENDA.md](AGENDA.md).
 
-La pantalla principal se centra en la sala y los usuarios conectados. El engranaje concentra nombre, modo de micrófono, sensibilidad, dispositivos, medidor en dBFS y pruebas de grabación/reproducción. Al crear o conectar una sala se abre el micrófono y la salida: la captura pasa por RNNoise + VAD + Noise Gate, se descartan frames sin voz y los demás viajan por UDP para reproducirse en los participantes. `Aplicar filtro de voz` permite conservar PCM crudo. Para producción conviene usar Opus, autenticación y cifrado de los datagramas.
+## Cómo se usa
 
-El filtro de voz usa RNNoise para supresión espectral y una probabilidad VAD. Después aplica el Noise Gate por RMS; solo los frames con voz superando el umbral VAD se consideran transmisibles. Todavía no hay cancelación de eco ni compresor/limitador.
+1. **Host**: "Iniciar sala" → elegí un nombre (o una sala anterior, con su historial) → "Copiar dirección" y pasásela a tus amigos.
+2. **Los demás**: pegan la dirección (`IP:puerto`) y aprietan "Conectar". El nombre de la sala lo manda el host.
+3. Ajustes (engranaje): nombre, dispositivos, filtro de voz, perfiles, volumen máximo por usuario, celular como micrófono, puertos, migración de host y nivel de log. Los cambios se escuchan en vivo, pero se guardan recién con **Guardar**.
+
+### Red
+
+- UDP puro, puerto **47830** por defecto (configurable). El micrófono del celular usa el **47831** (TCP + UDP, solo red local).
+- Al abrir la sala, la app intenta abrir el puerto en el router por **UPnP** (8 horas, se borra al cerrar la sala o la app) y averigua la IP pública con `api.ipify.org`. Si el router no tiene UPnP, hay que reenviar a mano el puerto UDP hacia la PC del host. En red local funciona sin nada de esto.
+- Todo pasa por el host: cada cliente le manda su voz y el host la reenvía a los demás.
+- **Si el host se corta**: a los 6 s los clientes muestran "Reconectando…"; si vuelve antes de 20 s, no pasa nada. Si se fue (o pasan los 20 s), el siguiente participante de la lista se vuelve host y los demás se pasan solos. Quien no quiera ser host de respaldo puede destildar "Permitir ser Host de respaldo si el Host se desconecta" en Ajustes.
+- Limitación: si los dos lados están detrás de NAT simétrico o CGNAT (algunos proveedores móviles o de fibra), la conexión directa no funciona y la app avisa.
+- **Todos tienen que usar la misma versión**: el formato de audio no es compatible entre versiones viejas y nuevas.
+
+### Dónde guarda cosas
+
+| Qué | Dónde |
+|-----|-------|
+| Configuración | `voxmesh.json` junto al `.exe` |
+| Historial, imágenes y sonidos por sala | `%AppData%\VoxMesh\salas\<sala>\` |
+| Perfiles de audio | `%AppData%\VoxMesh\perfiles\entrada\` y `...\salida\` |
+| Logs (se borran a las 48 h) | `%AppData%\VoxMesh\log-AAAA-MM-DD.log` |
+| Certificado y token del celular | `%AppData%\VoxMesh\` |
+
+Nivel de log (Ajustes → Interfaz): **1 Normal** (por defecto) registra eventos, errores y, del audio, solo los intervalos con problemas, más un resumen cada 5 minutos por participante. **2 Avanzado** agrega cada intervalo de 10 s, las esperas largas de locks y un CSV con la llegada de cada paquete de audio (`llegadas-*.csv`), que se puede reproducir en los tests del buffer.
+
+## Compilar
+
+Requisitos: **Go 1.26+** y **MSYS2 UCRT64** (gcc, libopus y pkg-config). Fyne y malgo necesitan CGO. El `.exe` resultante es estático: tus amigos no necesitan instalar nada.
+
+1. Instalar MSYS2 (PowerShell): `winget install --id MSYS2.MSYS2`
+2. En la terminal **MSYS2 UCRT64**:
+   ```bash
+   pacman -Syu
+   pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-opus mingw-w64-ucrt-x86_64-pkgconf
+   ```
+   (Si `pacman -Syu` pide cerrar la terminal, cerrala, abrila de nuevo y corré el segundo comando.)
+3. Compilar desde PowerShell, en la carpeta del proyecto:
+   ```powershell
+   .\build.ps1
+   # → dist\voxmesh.exe, con versión "<último tag>-dev.<fecha>" (los builds dev no buscan actualizaciones al arrancar)
+   ```
+
+A mano, o para correr los tests:
+
+```powershell
+$env:CGO_ENABLED = "1"
+$env:CC = "C:\msys64\ucrt64\bin\gcc.exe"
+$env:Path = "C:\msys64\ucrt64\bin;$env:Path"
+go build -tags nolibopusfile -o bin/voxmesh.exe ./cmd/voxmesh
+go test -tags nolibopusfile ./...
+go test -race -tags nolibopusfile ./internal/audio/
+```
+
+- **`-tags nolibopusfile` va siempre** (build, test y vet), si no la librería de Opus pide también libopusfile. En VS Code: `"go.buildTags": "nolibopusfile"`.
+- **Ojo con `CGO_ENABLED=0`**: `go build` y `go test` "andan", pero sin la interfaz ni el motor de audio (los archivos con CGO se saltean en silencio). Ese `.exe` solo muestra un aviso. Verificá `go env CGO_ENABLED` = `1`.
+- El primer build con CGO tarda varios minutos.
+
+### Publicar una versión
+
+```powershell
+.\release.ps1 v0.17.1 "Notas del release"
+```
+
+Crea el tag y lo pushea. GitHub Actions ([release.yml](.github/workflows/release.yml)) compila `voxmesh.exe` y `voxmesh-mic.apk` y los publica en Releases, y las apps instaladas ofrecen la actualización. El CI todavía no corre tests: correlos localmente antes de publicar.
 
 ## Estructura
 
 ```text
-cmd/voxmesh/main.go       Entrada del ejecutable
-internal/config           Configuración JSON persistente (voxmesh.json)
-internal/netinfo          IP pública, IP local y UPnP
-internal/audio            Noise gate, PCM, dispositivos y pruebas de audio
-internal/transport        Paquetes binarios y socket UDP
-internal/room             Estado de sala, participantes, elección de host, protocolo (Envelope)
-internal/history          Historial local por sala (JSON Lines) + imágenes, deduplicación y sync incremental
-internal/logging          Logger de errores/panics en %AppData%\VoxMesh con poda de logs viejos
-internal/ui               Ventana Fyne host/cliente, selector nativo de Windows, chat
+cmd/voxmesh/        Entrada del ejecutable (limpia restos del updater y arranca la UI)
+internal/audio/     Captura/reproducción (malgo), filtros, RNNoise, Opus, buffer de recepción, mezclador
+internal/ui/        Interfaz Fyne, red de la sala, chat, botonera, ajustes
+internal/room/      Estado de la sala, protocolo y migración de host (máquina de estados pura)
+internal/transport/ Socket UDP, cabecera de 16 bytes, cola con ritmo para archivos
+internal/assets/    Partir y rearmar archivos en chunks UDP
+internal/history/   Historial, imágenes y sonidos por sala
+internal/config/    voxmesh.json, tabla de parámetros de audio, perfiles
+internal/netinfo/   IP local/pública y UPnP
+internal/phonemic/  Servidor del celular como micrófono
+internal/updater/   Actualización desde GitHub Releases
+internal/logging/   Log diario, niveles, recuperación de panics
+internal/winproc/   Prioridad del proceso y evitar suspensión en sala (Windows)
+apk/                App Android "VoxMesh Mic"
 ```
 
-## Preparar y ejecutar
+## Documentación
 
-Instala Go 1.26 o superior. En Windows, la GUI de Fyne necesita también GCC/MinGW-w64.
-
-Para instalarlo en Windows:
-
-1. Ejecuta en **PowerShell**:
-
-```powershell
-winget install --id MSYS2.MSYS2
-```
-
-2. Abre desde el menú Inicio la aplicación **MSYS2 UCRT64** y ejecuta allí:
-
-```bash
-pacman -Syu
-pacman -S --needed mingw-w64-ucrt-x86_64-gcc
-```
-
-Si `pacman -Syu` pide cerrar la terminal, ciérrala, abre otra vez **MSYS2 UCRT64** y ejecuta el segundo comando.
-
-Después vuelve a **PowerShell**, situado en la carpeta del proyecto:
-
-```powershell
-go mod tidy
-$env:CGO_ENABLED = "0"
-go test ./...
-```
-
-El test headless anterior evita depender de OpenGL/GLFW y de un compilador C. Para ejecutar la GUI real, instala MinGW-w64 y usa CGO habilitado:
-
-```powershell
-$env:CGO_ENABLED = "1"
-$env:CC = "C:\msys64\ucrt64\bin\gcc.exe"
-$env:Path = "C:\msys64\ucrt64\bin;$env:Path"
-go run ./cmd/voxmesh
-```
-
-El ejecutable producido con `CGO_ENABLED=0` solo sirve para validar los paquetes sin GUI; al abrirlo muestra un aviso explicando cómo generar la versión gráfica.
-
-Para generar el `.exe` gráfico final, elimina el binario anterior y compila con CGO. MinGW solo es necesario en el PC que compila; tus amigos no necesitan Go, MSYS2 ni DLLs adicionales:
-
-```powershell
-$ErrorActionPreference = "Stop"
-Remove-Item .\dist\voxmesh.exe -ErrorAction SilentlyContinue
-$env:CGO_ENABLED = "1"
-$env:CC = "C:\msys64\ucrt64\bin\gcc.exe"
-$env:Path = "C:\msys64\ucrt64\bin;$env:Path"
-$build = 2
-go build -trimpath -ldflags "-s -w -H windowsgui -linkmode external -extldflags -static -X voxmesh/internal/version.Value=0.9.0-build_$build" -o dist/voxmesh.exe ./cmd/voxmesh
-```
-
-El archivo para compartir es `dist\voxmesh.exe`. Incrementa `$build` en cada compilación para identificarla en la esquina inferior derecha y en el log de inicio. No compartas el ejecutable generado con `CGO_ENABLED=0`, porque es la variante de tests sin interfaz.
-
-## Red doméstica y seguridad
-
-La IP pública no implica que el router acepte tráfico entrante. UPnP puede estar deshabilitado; en ese caso hay que reenviar el puerto UDP mostrado por la app hacia el PC host. La versión de producción debería añadir una clave de sala, autenticación de paquetes, cifrado AEAD y límites de tamaño antes de exponerla a Internet.
-
+- [AGENT.md](AGENT.md): mapa técnico detallado (cadena de audio, protocolo, hilos, reglas para tocar el código). Es lo primero que hay que leer antes de cambiar algo.
+- [AGENDA.md](AGENDA.md): pendientes, uno por ID, con el problema, el arreglo y los tests de cada uno.

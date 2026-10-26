@@ -24,6 +24,7 @@ import (
 	"voxmesh/internal/config"
 	"voxmesh/internal/history"
 	"voxmesh/internal/logging"
+	"voxmesh/internal/netinfo"
 	"voxmesh/internal/phonemic"
 	"voxmesh/internal/room"
 	"voxmesh/internal/transport"
@@ -54,7 +55,7 @@ type App struct {
 	arrivalRec      *audio.ArrivalRecorder // grabación de llegadas con nivel de log 2 (solo audioMonitorLoop)
 	arrivalEngine   *audio.Engine          // Engine al que está enganchada arrivalRec
 	endpoint        atomic.Pointer[endpointInfo]
-	upnpPort        atomic.Uint32 // puerto externo mapeado por UPnP (0 = ninguno), para borrarlo al cerrar
+	upnpMapping     atomic.Pointer[netinfo.Mapping] // regla UPnP de la sala (nil = ninguna), para borrarla al cerrar
 	status          *widget.Label
 	peerHBox        *fyne.Container
 	hostPanel       *fyne.Container
@@ -69,7 +70,7 @@ type App struct {
 	recordingMu     logging.TracedRWMutex
 	recordedInput   []byte
 	connLife        stopSignal // goroutines de la conexión (failoverLoop, sweepAssetLoop)
-	hostRole        stopSignal // goroutines del rol de host (pingPeers, renovación UPnP)
+	hostRole        stopSignal // goroutines del rol de host (pingPeers)
 	voiceProcessor  *audio.RNNoise
 	effects         *audio.Effects
 	audioEngine     atomic.Pointer[audio.Engine]

@@ -1,12 +1,15 @@
 package logging
 
 import (
+	"bytes"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestLogLevels(t *testing.T) {
@@ -84,6 +87,56 @@ func TestTracedRWMutex(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// TestTracedRWMutexLogsOnlySlowWaits: sin espera no escribe nada; una espera de más de
+// slowLockWait deja "esperando" y "adquirido".
+func TestTracedRWMutexLogsOnlySlowWaits(t *testing.T) {
+	var buf bytes.Buffer
+	state.Lock()
+	state.logger = log.New(&buf, "", 0)
+	state.Unlock()
+	defer func() {
+		state.Lock()
+		state.logger = nil
+		state.Unlock()
+	}()
+	SetLevel(LevelTrace)
+	defer SetLevel(LevelControl)
+	mu := NewTracedRWMutex("testMu")
+
+	for i := 0; i < 5; i++ {
+		mu.Lock()
+		mu.Unlock()
+		mu.RLock()
+		mu.RUnlock()
+	}
+	if got := logged(&buf); got != "" {
+		t.Fatalf("locks sin espera escribieron:\n%s", got)
+	}
+
+	mu.Lock()
+	done := make(chan struct{})
+	go func() {
+		mu.RLock()
+		mu.RUnlock()
+		close(done)
+	}()
+	time.Sleep(slowLockWait + 100*time.Millisecond)
+	mu.Unlock()
+	<-done
+	got := logged(&buf)
+	for _, want := range []string{"[testMu] esperando RLock()", "[testMu] adquirido RLock()", "logging_test.go:"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("falta %q en:\n%s", want, got)
+		}
+	}
+}
+
+func logged(buf *bytes.Buffer) string {
+	state.Lock()
+	defer state.Unlock()
+	return buf.String()
 }
 
 // TestCrashOutput relanza el binario de test como subproceso que hace panic en una goroutine
