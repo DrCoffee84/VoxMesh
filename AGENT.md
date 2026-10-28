@@ -24,7 +24,7 @@
 
 ```
 VoxMesh/
-├── cmd/voxmesh/main.go            # Entrypoint. Cleans up old update binaries & starts UI.
+├── cmd/voxmesh/main.go            # Entrypoint. Waits for the old process after an update (--wait-pid), cleans up old update binaries & starts UI.
 ├── internal/
 │   ├── audio/                     # Real-time DSP and sound capture/playback
 │   │   ├── engine.go              # [cgo] malgo capture & playback. Capture pool (captureInput → CapturedFrame, no allocations), send goroutine with audio priority, TakeCaptureStats. Mixer (PlayStreamSeq for network, PlayStream FIFO for SFX/local), per-stream volume + output chain, JitterReport, AudibleStreams.
@@ -97,8 +97,8 @@ VoxMesh/
 │   │   └── headless*.go           # !cgo placeholder App (lets go test build the package without CGO).
 │   ├── winproc/                   # Windows process setup: Configure (ABOVE_NORMAL priority, power throttling/EcoQoS off, DisableProcessWindowsGhosting), KeepSystemAwake (PowerSetRequest SystemRequired while in a room). winproc_other.go: no-op.
 │   ├── updater/
-│   │   ├── updater.go             # GitHub Releases update checker, rename-and-replace, restart (see §3.F for its current gaps).
-│   │   └── updater_test.go        # Version comparison unit tests (IsNewer).
+│   │   ├── updater.go             # GitHub Releases update checker, SHA-256 + size check, rename-and-replace, Relaunch / WaitForParent (§3.F).
+│   │   └── updater_test.go        # IsNewer, asset selection, install against httptest (bad hash/size, missing .sha256), --wait-pid parsing.
 │   └── version/version.go         # Current build version string (injected at build time).
 ├── apk/                           # Android mini-app (VoxMesh Mic)
 │   ├── app/src/main/              # Android foreground service, UDP streamer, QR scanner.
@@ -213,14 +213,15 @@ VoxMesh/
 
 ### F. Self-Updating on Windows (`internal/updater/updater.go`)
 * **Windows Lock Workaround**: Windows blocks modifying/deleting running `.exe` files, but **allows renaming** them on NTFS.
-* **Process**:
-  1. Downloads `voxmesh.exe.new` into the application directory.
-  2. Renames running `voxmesh.exe` -> `voxmesh.exe.old`.
-  3. Renames `voxmesh.exe.new` -> `voxmesh.exe`.
-  4. Launches new `voxmesh.exe` via `exec.Command` and calls `os.Exit(0)`.
-  5. At startup (`main.go`), `updater.CleanupOldVersions()` deletes leftover `.old` and `.new` files.
+* **Release assets** (`pickRelease`): only the asset named exactly `voxmesh.exe` (≥ 1 MB) and its `voxmesh.exe.sha256` (`<hex>  voxmesh.exe`, written by `release.yml`). A release without the `.sha256` is an error, never installed. Releases before the one that introduced it lack the file; old updaters ignore it, so the transition needs both changes in the same release.
+* **Process** (`ApplyUpdate` → `install`, never exits):
+  1. Downloads `voxmesh.exe.sha256` (max 1 KiB, first field must be 64 hex).
+  2. Downloads `voxmesh.exe.new` into the application directory, hashing while writing, read limited to `AssetSize`+1. Size ≠ `AssetSize` or hash ≠ published → `.new` deleted, error, nothing replaced.
+  3. Renames running `voxmesh.exe` -> `voxmesh.exe.old`, then `voxmesh.exe.new` -> `voxmesh.exe` (rollback on failure).
+  4. The UI (`executeAutoUpdate`) leaves through `a.quit(cleanup, after)` like any close (§3.G Shutdown): `RoomLeave`, UPnP unmap, `flushConfig`, then `after` = `updater.Relaunch()` (starts the new exe with `--wait-pid <old pid>`), Fyne `Quit`, `Run`'s defer (phone mic, `logging.Close` → `=== cierre`).
+  5. The new process: first line of `main` is `updater.WaitForParent(os.Args[1:])` (waits for that pid, max 15 s) so the config, log, UDP port (`SO_EXCLUSIVEADDRUSE`) and phone-mic port are free; then `updater.CleanupOldVersions()` deletes leftover `.old` and `.new` files.
 * **Trigger**: Background goroutine on startup checks GitHub Releases API (`api.github.com/repos/DrCoffee84/VoxMesh/releases/latest`). A popup asks the user for confirmation. Also triggered manually in Settings. Skipped at startup for dev builds (`version.IsDev()`, §4).
-* **Current gaps** (AGENDA S7, R3): `CheckForUpdate` takes `voxmesh.exe` **or any `.exe`** asset; the download is checked only against a minimum size (no hash/signature, `AssetSize` unused); `ApplyUpdate` calls `os.Exit(0)` itself right after starting the new exe, so `quit`'s cleanup (RoomLeave, UPnP unmap, `flushConfig`, log close) never runs.
+* **Not done on purpose**: no ed25519 signature (protects against a compromised repo/CI; HTTPS + published hash is enough here), no download retries.
 
 ### G. UI Threading & Fyne Concurrency
 * **How the Fyne 2.6.3 loop works**: goroutine 1 (locked to the main OS thread) runs widget callbacks, every queued `fyne.Do` (one per `select` iteration) and `glfw.PollEvents` at 60 Hz. Anything slow in any of them stops repainting. ≥ 5 s without pumping messages → Windows swaps in a "Not Responding" ghost window (the taskbar button looks like the app restarted).
@@ -237,7 +238,7 @@ VoxMesh/
   * `transport.UDP` peers are a copy-on-write slice: `Broadcast`/`AddPeer` (every packet on the host) read with no lock; only real list changes take `peersMu` (writers only).
 * **Shared maps**: `cfg.SoundBinds` belongs to the config snapshot, so it is never mutated in place. Use `updateSoundBinds` (goes through `updateConfig`, then `publishHotkeys` + `saveConfig`). After changing `StopSoundBind`, call `publishHotkeys()`. `SoundBinds` is keyed by sound **ID**, not name: renaming (`renameSound`, propagated as `sound_add` with the same ID; `addSound` persists it with `UpdateSoundMeta`) never touches it; replacing the audio (`replaceSoundAudio`) saves under a new ID (peers already cached the old asset) and moves the bind old ID → new ID.
 * **Soundboard filter**: `a.soundFilter` (atomic, lowercase) is read by `rebuildSoundboard` from any goroutine; its `fyne.Do` drops a build made with a stale filter. A concurrent map write is a fatal runtime error: no `recover`, and with `-H windowsgui` nothing reaches the log.
-* **Shutdown**: never `window.Close()`. Fyne 2.6.3 sets `closing` (so `view()` returns nil) while events keep arriving; a mouse move then panics in `processMouseMoved → SetInputMode` on goroutine 1. Use `a.quit(cleanup)`: Hide + `fyne.CurrentApp().Quit()` after `stopConnectionAsync()` finishes (max 3 s) so the Leave packet/UPnP unmap are sent.
+* **Shutdown**: never `window.Close()`. Fyne 2.6.3 sets `closing` (so `view()` returns nil) while events keep arriving; a mouse move then panics in `processMouseMoved → SetInputMode` on goroutine 1. Use `a.quit(cleanup, after)`: Hide + `fyne.CurrentApp().Quit()` after `stopConnectionAsync()` finishes (max 3 s) so the Leave packet/UPnP unmap are sent, then `flushConfig` and the optional `after` (the updater's `Relaunch`, §3.F). Never `os.Exit` from a feature: it skips all of this.
 * **Diagnosing freezes**: `watchdog.go` logs `hilo de UI bloqueado` with the goroutine 1 stack (ERROR level, always on) — check the log before guessing.
 * **Never block the malgo callbacks**: no allocations-heavy work, no I/O, keep `playbackMu` held only to pull chunks (that includes the Opus decode of each stream, ~tens of µs). Never `fyne.Do` from them: UI state derived from playback (speaking indicator) is polled by `audioMonitorLoop` through `Engine.AudibleStreams`. The own-voice indicator works the same way: `flashVoiceIndicator` (per sent frame) only stores the time and turns it on once; `sweepVoiceIndicator` (monitor loop) turns it off after `voiceHold`. No timers per frame.
 * **Always on (Windows)**: `Run` calls `winproc.Configure()` before creating the window (logged as `Proceso: ...`): ABOVE_NORMAL priority class (network/UI/failover beat normal processes when a game runs; not HIGH), power throttling off (EcoQoS / efficiency mode when minimized), no ghost window. `KeepSystemAwake(a.connected())` runs every health check: no idle sleep while in a room (display can still turn off).
@@ -294,7 +295,7 @@ Reviewed 2026-10-26, scope updated 2026-10-28. Task details and fixes are in AGE
 * **Other network strings stored by `history`** (S10, S11, done): sound tombstones accept only `history.ValidID` (store and `a.netSoundIDsOK` on both soundboard syncs). Room names are capped at `history.MaxRoomNameRunes` (64) with `history.ClampRoomName` when creating a room, on every received `RoomState`, and inside `safeName`.
 * **Resource limits**: `assets.Assembler` (S6), image dimensions before decode (S5) and the participant list (S2) have no caps.
 * **Privacy**: chat image messages carry the sender's absolute local path in `Message.ImagePath` (S8). `RoomState` carries every participant's public `IP:port` (needed for migration; accepted).
-* **Updater**: HTTPS only, no hash/signature check, any `.exe` asset accepted (S7).
+* **Updater** (S7, done): HTTPS + exact asset name `voxmesh.exe` + size equal to `AssetSize` + SHA-256 equal to the published `voxmesh.exe.sha256`; any mismatch deletes the `.new` and replaces nothing (§3.F). No signature: a compromised repo or CI is out of scope.
 * **Phone mic**: TLS + random token (UDP path compares in constant time; HTTP paths don't yet, S9). LAN only.
 * **Rules for new network code**: (1) decide who may send it (participant address check on the host); (2) derive identity from the address, never from the payload; (3) bound every allocation driven by a packet; (4) never turn packet strings into paths without validation; (5) log rejected traffic rate-limited (≤ 1 line / 10 s).
 
@@ -322,6 +323,7 @@ Reviewed 2026-10-26, scope updated 2026-10-28. Task details and fixes are in AGE
   ```powershell
   .\release.ps1 v0.17.1 "Notas del release"
   # Creates git tag, pushes to GitHub, triggers .github/workflows/release.yml
-  # Automatically builds and publishes voxmesh.exe + voxmesh-mic.apk to GitHub Releases.
+  # Automatically builds and publishes voxmesh.exe + voxmesh.exe.sha256 + voxmesh-mic.apk to GitHub Releases.
   ```
+  The updater refuses a release without `voxmesh.exe.sha256` (§3.F): never upload or replace `voxmesh.exe` by hand without regenerating it.
   `release.yml` only builds (no tests run in CI yet — AGENDA T1); run `go test -tags nolibopusfile ./...` with CGO locally before tagging.

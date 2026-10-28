@@ -21,7 +21,7 @@ Chat de voz y texto para grupos chicos de amigos, en **Windows**, en un único `
 - Botonera de sonidos (MP3/WAV, con recorte de hasta ~87 s) con atajos de teclado globales, que también funcionan con un juego en primer plano. Se sincroniza con la sala: los audios se bajan cuando alguien los usa.
 
 **App**
-- Se actualiza sola desde GitHub Releases (pregunta antes).
+- Se actualiza sola desde GitHub Releases (pregunta antes, verifica el SHA-256 publicado y cierra bien la sala antes de reiniciar).
 - Logs diarios en `%AppData%\VoxMesh` (botón 📄), pensados para poder mandarlos cuando algo falla.
 
 **Todavía no tiene**: cancelación de eco (con parlantes, los demás pueden escucharse a sí mismos: usá auriculares), push-to-talk, link de invitación ni cifrado. Están planificados en [AGENDA.md](AGENDA.md).
@@ -91,7 +91,7 @@ go test -race -tags nolibopusfile ./internal/audio/
 .\release.ps1 v0.17.1 "Notas del release"
 ```
 
-Crea el tag y lo pushea. GitHub Actions ([release.yml](.github/workflows/release.yml)) compila `voxmesh.exe` y `voxmesh-mic.apk` y los publica en Releases, y las apps instaladas ofrecen la actualización. El CI todavía no corre tests: correlos localmente antes de publicar.
+Crea el tag y lo pushea. GitHub Actions ([release.yml](.github/workflows/release.yml)) compila `voxmesh.exe` (con su `voxmesh.exe.sha256`) y `voxmesh-mic.apk` y los publica en Releases, y las apps instaladas ofrecen la actualización. El CI todavía no corre tests: correlos localmente antes de publicar.
 
 ## Estructura
 

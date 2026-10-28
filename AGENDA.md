@@ -71,13 +71,14 @@ Solo si aparece el problema: **R1** (data race del estado de la sala, ver "Si ap
 
 # 1. Tareas (en el orden de la tabla)
 
-**Situación de seguridad (2026-10-28).** El host expone un puerto UDP a internet (UPnP) y no autentica nada. El lado cliente ya está acotado: solo acepta audio, chat, archivos y estado de **su host** (`handleClientPacket` + `Failover.Seen`). Ya está cerrado lo peor, que alguien de afuera escriba, lea o borre archivos (S1, S10, S11). Falta el updater (S7) y que sin invitación no se pueda hacer nada (S4). Con S4, los filtros contra desconocidos de S2/S3 dejan de hacer falta.
+**Situación de seguridad (2026-10-28).** El host expone un puerto UDP a internet (UPnP) y no autentica nada. El lado cliente ya está acotado: solo acepta audio, chat, archivos y estado de **su host** (`handleClientPacket` + `Failover.Seen`). Ya está cerrado lo peor, que alguien de afuera escriba, lea o borre archivos (S1, S10, S11), y el updater solo instala el exe publicado (S7). Falta que sin invitación no se pueda hacer nada (S4). Con S4, los filtros contra desconocidos de S2/S3 dejan de hacer falta.
 
 Sobre el puerto UPnP: la app borra el mapeo al cerrar la sala o la app. Si se cierra mal, el lease dura 8 h, pero con la app cerrada el puerto no lleva a nada, y con S4 tampoco sirve sin la clave. **No hace falta tarea.**
 
 ### S7. Updater: verificar lo que se descarga
 
-- [ ] **Problema** ([updater.go](internal/updater/updater.go)). `CheckForUpdate` elige `voxmesh.exe` **o cualquier `.exe`** del release. `ApplyUpdate` solo verifica un tamaño mínimo: ni hash, ni que el tamaño coincida con `AssetSize` (se lee y no se usa). HTTPS protege el camino; falta verificar que el archivo sea el publicado.
+- [x] **Hecho** (2026-10-28): [updater.go](internal/updater/updater.go) `pickRelease` (nombre exacto `voxmesh.exe`, exige `voxmesh.exe.sha256`, tamaño ≥ 1 MB) e `install` (baja primero el `.sha256`, hash y tamaño exacto contra `AssetSize` mientras escribe; si no coincide borra el `.new`). [release.yml](.github/workflows/release.yml) publica `voxmesh.exe.sha256`. Tests con `httptest` en [updater_test.go](internal/updater/updater_test.go). Afuera: firma ed25519, reintentos de descarga. **El próximo release tiene que salir con los dos cambios juntos.**
+- **Problema** ([updater.go](internal/updater/updater.go)). `CheckForUpdate` elige `voxmesh.exe` **o cualquier `.exe`** del release. `ApplyUpdate` solo verifica un tamaño mínimo: ni hash, ni que el tamaño coincida con `AssetSize` (se lee y no se usa). HTTPS protege el camino; falta verificar que el archivo sea el publicado.
 - **Arreglo (versión simple, sin firma):**
   - Exigir el nombre exacto `voxmesh.exe`.
   - [release.yml](.github/workflows/release.yml) publica `voxmesh.exe.sha256`. El updater lo baja, compara el hash y el tamaño contra `AssetSize`, y si algo no coincide borra el `.new` y no reemplaza nada.
@@ -87,7 +88,8 @@ Sobre el puerto UPnP: la app borra el mapeo al cerrar la sala o la app. Si se ci
 
 ### R3. El updater sale sin cerrar la sala
 
-- [ ] **Problema.** `ApplyUpdate` lanza el exe nuevo y hace `os.Exit(0)` ahí mismo. Se saltea todo `quit` (AGENT.md §3.G "Shutdown"): no sale el `RoomLeave` (los demás esperan 20 s y migran), no se borra el mapeo UPnP, no corre `flushConfig` y el log no tiene `=== cierre`. Además el proceso nuevo arranca mientras el viejo todavía tiene el puerto UDP (`SO_EXCLUSIVEADDRUSE`) y el del celular.
+- [x] **Hecho** (2026-10-28): `ApplyUpdate` solo baja, verifica y renombra; `updater.Relaunch` lanza el exe con `--wait-pid`; `updater.WaitForParent` (primera línea de [main.go](cmd/voxmesh/main.go), tope 15 s). `executeAutoUpdate` sale por `a.quit(cleanup, relaunch)` ([ui_main.go](internal/ui/ui_main.go)), y `quit` ganó el parámetro `after`. Afuera: la prueba manual (ver "Pruebas manuales pendientes").
+- **Problema.** `ApplyUpdate` lanza el exe nuevo y hace `os.Exit(0)` ahí mismo. Se saltea todo `quit` (AGENT.md §3.G "Shutdown"): no sale el `RoomLeave` (los demás esperan 20 s y migran), no se borra el mapeo UPnP, no corre `flushConfig` y el log no tiene `=== cierre`. Además el proceso nuevo arranca mientras el viejo todavía tiene el puerto UDP (`SO_EXCLUSIVEADDRUSE`) y el del celular.
 - **Arreglo.** Separar en `ApplyUpdate` (bajar, verificar y renombrar; devuelve error) y `Relaunch()`. La UI llama a `a.quit(func() { updater.Relaunch() })` para que la limpieza corra antes. El proceso nuevo recibe `--wait-pid <pid>` y espera a que termine el viejo antes de abrir puertos.
 - **Tests**: a mano, actualizar estando en una sala con otra instancia: la otra ve "se desconectó" enseguida y el router no queda con la regla.
 
@@ -201,6 +203,7 @@ Sobre el puerto UPnP: la app borra el mapeo al cerrar la sala o la app. Si se ci
 ## Pruebas manuales pendientes
 
 - [ ] **Smoke test de S1/S10/S11** (antes del próximo release), con 2 instancias: imagen con 📎 y pegada con Ctrl+V; en la botonera, agregar, reproducir, renombrar y borrar un sonido; abrir "Mi sala" y ver el historial y los sonidos; que la otra instancia reciba la imagen y los sonidos.
+- [ ] **Actualización estando en sala (S7 + R3)**, con el primer release que traiga `voxmesh.exe.sha256` y el siguiente: actualizar desde Ajustes estando en una sala con otra instancia. La otra ve "se desconectó" enseguida (no espera 20 s), el router no queda con la regla, el log viejo termina en `=== cierre` y la versión nueva arranca sola.
 - [ ] **Migración de host** (nivel de log 1), LAN con 3 instancias en puertos distintos y por internet con los pibes: (a) el host sale; (b) el host corta el Wi-Fi 10 s; (c) el host corta el Wi-Fi 40 s y vuelve; (d) un cliente sale y vuelve a entrar; (e) un cliente corta el Wi-Fi 15 s. Nadie en una sala fantasma ni con dos hosts. Repetir después de S2 y de S4.
 - [ ] **Dispositivos**: probar con el amigo que desconecta el Bluetooth y enchufa HDMI + auriculares (la salida ahora se guarda por ID y cae al predeterminado; Refresh Audio también fuera de la sala).
 - [ ] **Voz fuerte**: el amigo que habla fuerte elige el perfil **Default**. Si en Ajustes le aparece seguido "SATURA" en rojo, que baje el volumen del micrófono en Windows. (El aro rojo del avatar es modo grito, no saturación.)

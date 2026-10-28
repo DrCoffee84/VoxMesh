@@ -227,11 +227,11 @@ func (a *App) Run() {
 		if a.connected() {
 			dialog.ShowConfirm("Salir de VoxMesh", "Estás en una sala activa. ¿Deseas salir y cerrar VoxMesh?", func(confirmed bool) {
 				if confirmed {
-					a.quit(a.stopConnectionAsync())
+					a.quit(a.stopConnectionAsync(), nil)
 				}
 			}, a.window)
 		} else {
-			a.quit(nil)
+			a.quit(nil, nil)
 		}
 	})
 	a.window.SetContent(a.content())
@@ -285,7 +285,9 @@ func (a *App) rememberWindowState() {
 // SetInputMode(nil) (está en los logs, goroutine 1). Ese panic lo atrapa el recover de Run, que
 // sale "limpio" pero mata en el acto la goroutine que mandaba el Leave. Ocultar + Quit no deja
 // ese estado intermedio, y Quit se demora hasta que termina la limpieza (máx. 3 s).
-func (a *App) quit(cleanup <-chan struct{}) {
+// after (opcional) corre después de la limpieza y de guardar la config, antes de Quit: lo usa la
+// actualización para lanzar la versión nueva.
+func (a *App) quit(cleanup <-chan struct{}, after func()) {
 	a.rememberWindowState() // antes de Hide: oculta, el placement ya no es el que vio el usuario
 	a.window.Hide()
 	go func() {
@@ -296,6 +298,9 @@ func (a *App) quit(cleanup <-chan struct{}) {
 			}
 		}
 		a.flushConfig()
+		if after != nil {
+			after()
+		}
 		fyne.Do(fyne.CurrentApp().Quit)
 	}()
 }
@@ -361,16 +366,33 @@ func (a *App) executeAutoUpdate(info *updater.ReleaseInfo) {
 	updateDialog.Show()
 
 	go func() {
-		err := updater.ApplyUpdate(info.DownloadURL, func(fraction float64) {
+		err := updater.ApplyUpdate(info, func(fraction float64) {
 			fyne.Do(func() {
 				progress.SetValue(fraction)
 			})
 		})
 		if err != nil {
+			logging.Errorf("actualizar a %s: %s", info.Version, logging.FormatError(err))
 			fyne.Do(func() {
 				updateDialog.Hide()
 				dialog.ShowError(fmt.Errorf("no se pudo completar la actualización: %w", err), a.window)
 			})
+			return
 		}
+		logging.Infof("Actualización %s instalada: cerrando para reiniciar", info.Version)
+		// Sale por quit como cualquier cierre (Leave, UPnP, config, "=== cierre" en el log); el
+		// proceso nuevo espera con --wait-pid a que este termine.
+		fyne.Do(func() {
+			updateDialog.Hide()
+			var cleanup <-chan struct{}
+			if a.connected() {
+				cleanup = a.stopConnectionAsync()
+			}
+			a.quit(cleanup, func() {
+				if err := updater.Relaunch(); err != nil {
+					logging.Errorf("reiniciar después de actualizar: %s", logging.FormatError(err))
+				}
+			})
+		})
 	}()
 }

@@ -55,6 +55,9 @@ jobs:
           $tag = "${{ github.ref_name }}"
           go build -trimpath -tags nolibopusfile -ldflags "-s -w -H windowsgui -linkmode external -extldflags -static -X voxmesh/internal/version.Value=$tag" -o dist/voxmesh.exe ./cmd/voxmesh
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # El updater compara el exe bajado contra este hash (formato sha256sum, ASCII sin BOM).
+          $hash = (Get-FileHash dist/voxmesh.exe -Algorithm SHA256).Hash.ToLower()
+          [System.IO.File]::WriteAllText("$PWD\dist\voxmesh.exe.sha256", "$hash  voxmesh.exe`n", [System.Text.Encoding]::ASCII)
           Compress-Archive -Path dist/voxmesh.exe -DestinationPath dist/voxmesh-windows-x64.zip -Force
 
       - name: Upload Windows Artifact
@@ -63,6 +66,7 @@ jobs:
           name: voxmesh-windows
           path: |
             dist/voxmesh.exe
+            dist/voxmesh.exe.sha256
             dist/voxmesh-windows-x64.zip
           if-no-files-found: error
 
@@ -86,6 +90,7 @@ jobs:
         with:
           files: |
             release-assets/voxmesh.exe
+            release-assets/voxmesh.exe.sha256
             release-assets/voxmesh-windows-x64.zip
           name: "VoxMesh ${{ github.ref_name }}"
           generate_release_notes: true
