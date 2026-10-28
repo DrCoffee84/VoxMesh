@@ -9,6 +9,7 @@ VoxMesh es **un Discord simple para jugar con los pibes**, no una plataforma pú
 Criterios para decidir qué se hace:
 - **Seguro contra desconocidos de internet**: alguien que leyó el código y conoce o escanea la `IP:puerto` no tiene que poder ejecutar nada en la PC, tocar archivos, escuchar la sala ni meterse. No hace falta protegerse de los propios amigos.
 - **Simple y que funcione**: nada de features "por las dudas". Cada cosa de más es un lugar más donde aparecen errores. Lo que no aporta al flujo de arriba va a "Descartado / quizás".
+- **Sin compatibilidad hacia atrás**: una versión nueva no tiene que hablar con la anterior ni leer datos viejos (salas, historial, manifests, config, perfiles). Hoy existe una sola sala real. Se borra lo viejo sin transición, sin shims y sin migraciones; si un dato viejo no carga, se ignora. **Única excepción**: el updater de la versión instalada tiene que poder bajar e instalar la nueva.
 - Principalmente por internet. LAN/VPN (Tailscale, ZeroTier, Radmin) también tiene que funcionar, porque es la forma de usarla sin abrir puertos.
 
 ## Cómo usar esta agenda (leer antes de tomar una tarea)
@@ -34,10 +35,10 @@ Cada tarea tiene un **ID** (`S7`, `F1`...) y está escrita para que un chat nuev
 | # | ID | Qué, en simple | Tamaño |
 |---|----|----------------|--------|
 | 1 | **S7 + R3** | La actualización solo instala el exe publicado (hash y tamaño) y antes cierra bien la sala | Chico |
-| 2 | **R4 + S8** | Borrar el `PacketHello` viejo y no mandar la ruta local (usuario de Windows) en las imágenes | Muy chico |
+| 2 | **R4 + S8 + R5** | Borrar el `PacketHello` viejo, no mandar la ruta local (usuario de Windows) en las imágenes y sacar los shims de compatibilidad con versiones o datos viejos | Chico |
 | 3 | **S5** | Una imagen trucada no cuelga la app y abrir una grande no congela la ventana | Chico |
 | 4 | **S2** (reducido) | Sacar de la lista a los desconectados viejos (hoy crece con cada reconexión) | Chico |
-| 5 | **S4 + F3** | Clave por sesión + código de invitación para pegar. Sin el código no entra nadie | Grande. **Rompe compatibilidad**: todos actualizan juntos |
+| 5 | **S4 + F3** | Clave por sesión + código de invitación para pegar. Sin el código no entra nadie | Grande. Rompe compatibilidad (no importa: todos actualizan) |
 | 6 | **F1** | Cancelación de eco (AEC3) para el que usa parlantes o la tele | Grande. Primero comprobar que se puede linkear |
 | 7 | **T1** (mínimo) | GitHub corre vet + tests en cada push | Chico. Se puede adelantar |
 
@@ -95,11 +96,21 @@ Sobre el puerto UPnP: la app borra el mapeo al cerrar la sala o la app. Si se ci
 
 ### R4. Sacar el `PacketHello` viejo (kind 2)
 
-- [ ] Desde Opus no hay compatibilidad con versiones viejas y nadie manda `PacketHello` (`grep -rn "PacketHello\b"` solo encuentra los `case`). Borrar `handleLegacyHello` ([network.go](internal/ui/network.go)) y los dos `case transport.PacketHello`. Revisar si `a.peerNames`/`addPeer` quedan sin uso. Dejar la constante en [udp.go](internal/transport/udp.go) comentada como reservada (no reusar el número).
+- [ ] Desde Opus no hay compatibilidad con versiones viejas y nadie manda `PacketHello` (`grep -rn "PacketHello\b"` solo encuentra los `case`). Borrar `handleLegacyHello` ([network.go](internal/ui/network.go)), los dos `case transport.PacketHello` y la constante en [udp.go](internal/transport/udp.go) (sin compatibilidad no hace falta reservar el número). Borrar también `a.peerNames`/`addPeer` si quedan sin uso.
 
 ### S8. No mandar la ruta local de las imágenes
 
-- [ ] `history.Message.ImagePath` (`json:"image_path"`) lleva la ruta absoluta local (`C:\Users\<usuario de Windows>\AppData\…`) y viaja a la sala con cada imagen ([ui_chat.go](internal/ui/ui_chat.go), los dos envíos). Nadie la lee: el receptor la recalcula con `ImagePath(id, ext)`. Arreglo: `json:"-"` o sacar el campo (verificar con `grep -rn "\.ImagePath\b"`). Los historiales viejos que lo tengan se dejan así.
+- [ ] `history.Message.ImagePath` (`json:"image_path"`) lleva la ruta absoluta local (`C:\Users\<usuario de Windows>\AppData\…`) y viaja a la sala con cada imagen ([ui_chat.go](internal/ui/ui_chat.go), los dos envíos). Nadie la lee: el receptor la recalcula con `ImagePath(id, ext)`. Arreglo: **sacar el campo** de `Message` y de los dos envíos (verificar con `grep -rn "\.ImagePath\b"` que nada lo lea; ojo, `Store.ImagePath(id, ext)` es otra cosa y sí se usa). Los historiales viejos que lo tengan no necesitan nada: `encoding/json` ignora campos desconocidos.
+
+### R5. Sacar los shims de compatibilidad con versiones o datos viejos
+
+- [ ] **Por qué**: criterio "Sin compatibilidad hacia atrás" de la Visión. Cada shim es código que nadie prueba.
+- **Primero relevar, después borrar**: buscar (`grep -rni "viejo\|legacy\|migra\|compat\|antes"` en `internal/` y `cmd/`, más lo que diga AGENT.md) y listar cada shim con archivo/función antes de tocar nada. Conocidos:
+  - `config.MigrateToProfiles` (crea "Mi configuración" desde un `voxmesh.json` anterior a los perfiles, `ui.New`) y la lógica de "había config" que lo acompaña.
+  - Sonidos sin extensión = `.wav` (`defaultSoundExtension` en [history.go](internal/history/history.go)) y `.wav` en la lista blanca, que existen por manifests viejos y por el default de `SaveSound`. La app solo produce `.pcm`: dejar solo `.pcm` y exigir la extensión.
+  - Lo que cubren R4 (`PacketHello`) y S8 (`image_path`).
+- **No es shim (no tocar)**: lo que protege contra datos inválidos de la red (S1/S10/S11), la tolerancia de los perfiles a claves faltantes o fuera de rango (sirve entre versiones nuevas, AGENT.md §3.I) y lo que necesita el updater para instalar la versión nueva.
+- **Tests**: ajustar los que cubrían los shims (por ejemplo `TestStoreNormalizesExtensions` con `.wav`) en vez de dejarlos pasando con código muerto.
 
 ### S5. Imágenes: límite de dimensiones y nada de decodificar en el hilo de UI
 
@@ -119,7 +130,7 @@ Sobre el puerto UPnP: la app borra el mapeo al cerrar la sala o la app. Si se ci
 
 ### S4. Clave por sesión + cifrado de los datagramas
 
-- [ ] **Dependencias**: va **en el mismo chat y el mismo release que F3** (la clave viaja en la invitación). **Rompe compatibilidad**, como el cambio a Opus: todos actualizan a la vez.
+- [ ] **Dependencias**: va **en el mismo chat y el mismo release que F3** (la clave viaja en la invitación). Rompe compatibilidad con versiones anteriores: no importa (Visión), sin transición.
 - **Qué logra**: sin la invitación nadie puede escuchar, mandar paquetes válidos, echar gente ni robar el host, aunque sepa la `IP:puerto` y haya leído el código.
 - **Diseño (simple):**
   - **Clave por sesión**: 32 bytes aleatorios (`crypto/rand`) generados en cada "Iniciar sala", solo en memoria. No se guarda en disco: como la IP pública cambia, la invitación se vuelve a pasar en cada sesión igual. Nueva sesión = clave nueva, así que no hace falta "regenerar si se filtra".
@@ -225,7 +236,7 @@ No suman al flujo "crear sala → pasar invitación → hablar y jugar", o S4 ya
 - **S7 con firma ed25519**: alcanza con HTTPS + hash.
 - **F3 completo** (esquema `voxmesh://`, registro en `HKCU`, instancia única, QR): WhatsApp no hace clickeable un esquema propio, y la instancia única es lo más propenso a fallar.
 - **Rendezvous / STUN / TURN** (CGNAT o NAT simétrico de los dos lados): hoy la app avisa. Alternativa sin servidor: la opción LAN/VPN de F3 (Tailscale/ZeroTier).
-- **Mover `voxmesh.json` a `%AppData%\VoxMesh\`**: riesgo de perder la config en la migración a cambio de poco. Si se hace: migrar si existe al lado del exe y no en AppData; el updater no toca el json; la migración de perfiles de `ui.New` mira las dos rutas.
+- **Mover `voxmesh.json` a `%AppData%\VoxMesh\`**: aporta poco. Si se hace, sin migración (Visión): la ruta nueva y listo; el updater no toca el json.
 - **Flight recorder en el watchdog** (`runtime/trace.FlightRecorder`): solo si vuelven los cuelgues y el log no alcanza.
 - **Audio: compensar el déficit del emisor** (menos de 50 frames/s, típico del Bluetooth), **time-stretching** y **P2P directo entre clientes**: el audio quedó muy bien. Retomar solo si los logs muestran cortes ("Cortes de audio" en §0). Mientras tanto, sugerirle al que usa Bluetooth el micrófono de la PC o del celular.
 - **Herramientas**: `golangci-lint`, `govulncheck`, tests de cero asignaciones extra, `testing/synctest`, PGO, perfiles bajo demanda, `go fix`, `log/slog`, manifiesto DPI / `longPathAware`, firmar el binario (SmartScreen).
