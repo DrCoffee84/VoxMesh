@@ -290,7 +290,7 @@ func outputChoice(cfg *config.Config) audio.Device {
 
 // applyResolvedDevices guarda lo que se abrió para cada elección: si el elegido ya no estaba queda
 // el predeterminado de Windows (no se recuerda: el próximo cambio de dispositivo lo resuelve
-// Windows); si estaba, se completa su ID (config de una versión anterior) o su nombre nuevo. Solo
+// Windows); si estaba, se actualiza su nombre si Windows lo cambió. Solo
 // pisa una elección que no cambió mientras se abría el audio. Devuelve el aviso para la barra de
 // estado ("" si no faltó ninguno).
 func (a *App) applyResolvedDevices(inputWant, outputWant audio.Device, input, output audio.Resolved) string {

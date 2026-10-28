@@ -15,7 +15,6 @@ const (
 	magic              = "VM01"
 	HeaderSize         = 16
 	PacketAudio        = 1
-	PacketHello        = 2
 	PacketPing         = 3
 	PacketPong         = 4
 	PacketRoomHello    = 5
@@ -32,8 +31,6 @@ func PacketKindName(kind byte) string {
 	switch kind {
 	case PacketAudio:
 		return "Audio"
-	case PacketHello:
-		return "Hello"
 	case PacketPing:
 		return "Ping"
 	case PacketPong:

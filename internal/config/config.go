@@ -19,7 +19,7 @@ const (
 //     (LastPeer, token del celular, soundboard), que la vista de ajustes nunca revierte.
 //
 // Al agregar un campo, decidir en cuál de los dos va. LiveSettings está embebido sin tag, así
-// que encoding/json aplana sus campos: el archivo queda igual que antes de la división.
+// que encoding/json aplana sus campos: el archivo es un solo objeto plano.
 type Config struct {
 	LiveSettings
 	RoomName         string            `json:"room_name"`
@@ -60,8 +60,8 @@ type LiveSettings struct {
 	MicMode      MicMode `json:"mic_mode"`
 	InputDevice  string  `json:"input_device"`
 	OutputDevice string  `json:"output_device"`
-	// ID de Windows del dispositivo elegido (vacío = predeterminado o config vieja, que se busca
-	// por nombre). Si al abrir el audio ya no está, se vuelve al predeterminado y se olvida.
+	// ID de Windows del dispositivo elegido (vacío = predeterminado o celular). Si al abrir el
+	// audio ya no está, se vuelve al predeterminado y se olvida.
 	InputDeviceID  string `json:"input_device_id,omitempty"`
 	OutputDeviceID string `json:"output_device_id,omitempty"`
 	// Perfil cargado ("" = Default). Ver profiles.go.

@@ -143,18 +143,12 @@ const memoryLimit = 512 << 20
 
 func New(executable string) *App {
 	cfgPath := config.Path(executable)
-	_, statErr := os.Stat(cfgPath)
 	cfg, _ := config.Load(cfgPath)
 	logging.SetLevel(cfg.LogLevel)
-	// Primera vez con perfiles: la configuración que había queda guardada como "Mi configuración".
 	var profiles config.Profiles
-	migrated := false
-	profilesDir, err := config.ProfilesDir()
-	if err == nil {
+	if profilesDir, err := config.ProfilesDir(); err == nil {
 		profiles.Dir = profilesDir
-		migrated, err = profiles.MigrateToProfiles(&cfg.LiveSettings, statErr == nil)
-	}
-	if err != nil {
+	} else {
 		logging.Errorf("perfiles de audio: %s", logging.FormatError(err))
 	}
 	// Default no se guarda: el que lo usa recibe los valores de fábrica de esta versión.
@@ -177,7 +171,7 @@ func New(executable string) *App {
 	}
 	a.cfg.Store(&cfg)
 	go a.configSaver()
-	if migrated || defaultsApplied {
+	if defaultsApplied {
 		a.saveConfig()
 	}
 	return a

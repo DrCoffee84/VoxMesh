@@ -95,27 +95,10 @@ func (a *App) setSelfMuted(muted bool) {
 	}
 }
 
-func (a *App) addPeer(name, address string) bool {
-	a.peerMu.Lock()
-	defer a.peerMu.Unlock()
-	for index, peer := range a.peerNames {
-		if (address != "" && peer.address == address) || peer.name == name {
-			a.peerNames[index].name = name
-			if address != "" {
-				a.peerNames[index].address = address
-			}
-			return false
-		}
-	}
-	a.peerNames = append(a.peerNames, peerView{name: name, address: address})
-	a.refreshPeerAvatars()
-	return true
-}
-
 func (a *App) updatePeerLag(address string, lag time.Duration) {
 	a.peerMu.Lock()
 	for index := range a.peerNames {
-		if a.peerNames[index].address == address || strings.Contains(a.peerNames[index].name, "("+address+")") {
+		if a.peerNames[index].address == address {
 			a.peerNames[index].lag = lag
 			break
 		}

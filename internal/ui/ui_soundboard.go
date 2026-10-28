@@ -240,7 +240,7 @@ func (a *App) renameSound(soundID, name string) {
 			logging.Errorf("renombrar sonido %q: %s", renamed.ID, logging.FormatError(err))
 		}
 	}
-	// sound_add con un ID existente reemplaza la entrada en addSound (también en versiones viejas).
+	// sound_add con un ID existente reemplaza la entrada en addSound.
 	a.sendSoundEnvelope(room.SoundAddMessage, renamed)
 	a.setStatus("Sonido renombrado: " + name)
 }

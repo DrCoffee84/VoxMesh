@@ -117,32 +117,6 @@ func TestProfileFileIsReadable(t *testing.T) {
 	}
 }
 
-func TestMigrateToProfiles(t *testing.T) {
-	profiles := Profiles{Dir: filepath.Join(t.TempDir(), "perfiles")}
-	settings := Default().LiveSettings
-	settings.OutputGainDB = 2
-	changed, err := profiles.MigrateToProfiles(&settings, true)
-	if err != nil || !changed {
-		t.Fatalf("primera migración: %v, %v", changed, err)
-	}
-	if settings.ActiveInputProfile != MigratedProfileName || settings.ActiveOutputProfile != MigratedProfileName {
-		t.Fatal("la configuración migrada tiene que quedar activa")
-	}
-	loaded, _ := profiles.Values(OutputProfile, MigratedProfileName, Default().LiveSettings)
-	if loaded.OutputGainDB != 2 {
-		t.Fatal("la migración no guardó la configuración actual")
-	}
-	if changed, _ := profiles.MigrateToProfiles(&settings, true); changed {
-		t.Fatal("la migración corre una sola vez")
-	}
-
-	fresh := Profiles{Dir: filepath.Join(t.TempDir(), "perfiles")}
-	clean := Default().LiveSettings
-	if changed, _ := fresh.MigrateToProfiles(&clean, false); changed || clean.ActiveInputProfile != "" {
-		t.Fatal("instalación nueva: sin voxmesh.json no hay nada que migrar")
-	}
-}
-
 func TestApplyDefaultProfilesOnlyTouchesDefault(t *testing.T) {
 	settings := Default().LiveSettings
 	settings.ShoutThresholdDB = -5 // valor viejo guardado estando en Default

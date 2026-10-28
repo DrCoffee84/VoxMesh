@@ -120,8 +120,7 @@ func (a *App) sendChatImageBytes(ext string, data []byte, caption string) {
 		a.setStatus(unsupportedImageStatus)
 		return
 	}
-	filePath, saveErr := a.historyStore.SaveImage(imageID, ext, data)
-	if saveErr != nil {
+	if _, saveErr := a.historyStore.SaveImage(imageID, ext, data); saveErr != nil {
 		logging.Errorf("guardar imagen %q: %s", imageID, logging.FormatError(saveErr))
 		a.setStatus("No se pudo guardar la imagen: " + saveErr.Error())
 		return
@@ -134,7 +133,6 @@ func (a *App) sendChatImageBytes(ext string, data []byte, caption string) {
 		Kind:      "image",
 		ImageID:   imageID,
 		ImageExt:  ext,
-		ImagePath: filePath,
 		Text:      caption,
 	}
 	a.addChatMessage(message)
@@ -583,13 +581,12 @@ func (a *App) sendImageFile(path string) {
 		a.setStatus(fmt.Sprintf("El archivo supera el límite de %d MiB.", assets.MaxBytes/1024/1024))
 		return
 	}
-	path, saveErr := a.historyStore.SaveImage(imageID, extension, data)
-	if saveErr != nil {
-		logging.Errorf("guardar imagen %q: %s", path, logging.FormatError(saveErr))
+	if _, saveErr := a.historyStore.SaveImage(imageID, extension, data); saveErr != nil {
+		logging.Errorf("guardar imagen %q: %s", imageID, logging.FormatError(saveErr))
 		a.setStatus("No se pudo guardar la imagen: " + saveErr.Error())
 		return
 	}
-	message := history.Message{ID: history.NewID(a.participantID), Timestamp: time.Now().UTC(), SenderID: a.participantID, Username: a.conf().Username, Kind: "image", ImageID: imageID, ImageExt: extension, ImagePath: path}
+	message := history.Message{ID: history.NewID(a.participantID), Timestamp: time.Now().UTC(), SenderID: a.participantID, Username: a.conf().Username, Kind: "image", ImageID: imageID, ImageExt: extension}
 	a.addChatMessage(message)
 	a.playEventSound(audio.SFXMessage)
 	payload, encodeErr := room.Encode(room.Envelope{Kind: room.ChatMessage, Message: &message})

@@ -1,6 +1,7 @@
 package history
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -106,16 +107,27 @@ func TestStoreNormalizesExtensions(t *testing.T) {
 	if _, err := store.SaveSound(SoundMeta{ID: soundID, Ext: ".PCM", Name: "a"}, []byte("pcm")); err != nil {
 		t.Fatal(err)
 	}
-	const wavID = "0123456789abcdef0123456789abcdef"
-	if _, err := store.SaveSound(SoundMeta{ID: wavID, Name: "b"}, []byte("wav")); err != nil {
-		t.Fatal(err)
-	}
-	if data, err := store.ReadSound(wavID, ""); err != nil || string(data) != "wav" {
-		t.Fatalf("ReadSound sin extensión: %q, %v", data, err)
+	// Solo .pcm, y la extensión es obligatoria.
+	const otherID = "0123456789abcdef0123456789abcdef"
+	for _, ext := range []string{"", ".wav", ".WAV"} {
+		if _, err := store.SaveSound(SoundMeta{ID: otherID, Ext: ext, Name: "b"}, []byte("x")); err == nil {
+			t.Errorf("SaveSound con extensión %q: se esperaba error", ext)
+		}
 	}
 	sounds, err := store.ListSounds()
-	if err != nil || len(sounds) != 2 || sounds[0].Ext != ".pcm" || sounds[1].Ext != ".wav" {
+	if err != nil || len(sounds) != 1 || sounds[0].Ext != ".pcm" {
 		t.Fatalf("manifest inesperado: %#v, %v", sounds, err)
+	}
+}
+
+// La ruta local de la imagen (con el usuario de Windows) no viaja con el mensaje (AGENDA S8).
+func TestImageMessageHasNoLocalPath(t *testing.T) {
+	data, err := json.Marshal(Message{ID: "m", SenderID: "p", Username: "Coffee", Kind: "image", ImageID: imageID, ImageExt: ".png"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "image_path") {
+		t.Fatalf("el mensaje lleva la ruta local: %s", data)
 	}
 }
 

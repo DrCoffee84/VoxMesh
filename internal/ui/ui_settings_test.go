@@ -39,8 +39,8 @@ func TestDeviceOptions(t *testing.T) {
 	if _, _, selected := deviceOptions(devices, audio.Device{Name: phoneMicInput}, phoneMicInput); selected != phoneMicInput {
 		t.Fatalf("celular: elegido %q", selected)
 	}
-	// Config vieja sin ID: por nombre (el primero que se llama así).
-	if _, byLabel, selected := deviceOptions(devices, audio.Device{Name: "Auriculares (USB)"}); byLabel[selected].ID != "a1" {
-		t.Fatalf("config vieja: elegido %q (%+v)", selected, byLabel[selected])
+	// Sin ID solo valen las opciones fijas: un nombre suelto se muestra como el predeterminado.
+	if _, _, selected := deviceOptions(devices, audio.Device{Name: "Auriculares (USB)"}); selected != config.DefaultDevice {
+		t.Fatalf("sin ID: elegido %q, quería el predeterminado", selected)
 	}
 }

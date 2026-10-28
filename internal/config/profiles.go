@@ -21,9 +21,6 @@ import (
 // DefaultProfileName es el perfil fijo con los valores de fábrica.
 const DefaultProfileName = "Default"
 
-// MigratedProfileName es el perfil donde se guarda la configuración que había al actualizar.
-const MigratedProfileName = "Mi configuración"
-
 // CustomProfileName es el nombre base del perfil que se crea solo al guardar cambios hechos
 // sobre Default ("Personalizado", "Personalizado 2", ...).
 const CustomProfileName = "Personalizado"
@@ -200,7 +197,7 @@ func SameProfileValues(kind ProfileKind, a, b LiveSettings) bool {
 }
 
 // ApplyDefaultProfiles pone los valores de fábrica en cada tipo cuyo perfil activo es Default.
-// Se corre al arrancar (después de MigrateToProfiles): Default no se guarda, así un cambio de
+// Se corre al arrancar: Default no se guarda, así un cambio de
 // defaults en una actualización le llega a todos los que lo usan. Devuelve si cambió algo.
 func ApplyDefaultProfiles(settings *LiveSettings) bool {
 	changed := false
@@ -234,29 +231,6 @@ func NextCustomProfileName(existing []string) string {
 		name = fmt.Sprintf("%s %d", CustomProfileName, n)
 	}
 	return name
-}
-
-// MigrateToProfiles se corre al arrancar: si todavía no existe la carpeta de perfiles (primera
-// vez con esta versión) y había un voxmesh.json, guarda la configuración actual como "Mi
-// configuración" de entrada y de salida y la deja activa. Devuelve si cambió settings.
-func (p Profiles) MigrateToProfiles(settings *LiveSettings, hadConfigFile bool) (bool, error) {
-	if _, err := os.Stat(p.Dir); err == nil || !os.IsNotExist(err) {
-		return false, err
-	}
-	if err := os.MkdirAll(p.Dir, 0700); err != nil {
-		return false, err
-	}
-	if !hadConfigFile {
-		return false, nil
-	}
-	for _, kind := range []ProfileKind{InputProfile, OutputProfile} {
-		if err := p.Save(kind, MigratedProfileName, *settings); err != nil {
-			return false, err
-		}
-	}
-	settings.ActiveInputProfile = MigratedProfileName
-	settings.ActiveOutputProfile = MigratedProfileName
-	return true, nil
 }
 
 func encodeProfile(kind ProfileKind, name string, settings LiveSettings) ([]byte, error) {

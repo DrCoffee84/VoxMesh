@@ -792,8 +792,8 @@ func (m *levelMonitor) Stop() {
 
 // deviceOptions arma las opciones de un select de dispositivos: el predeterminado, las fijas
 // (fixed: el celular) y los que da Windows por nombre (si dos se llaman igual, el segundo lleva
-// " (2)"). Devuelve de qué dispositivo es cada etiqueta y cuál mostrar elegida: la guardada (por ID,
-// o por nombre en una config vieja) o, si ya no está, el predeterminado. No escribe la config.
+// " (2)"). Devuelve de qué dispositivo es cada etiqueta y cuál mostrar elegida: la guardada (por ID; las
+// fijas, por nombre) o, si ya no está, el predeterminado. No escribe la config.
 func deviceOptions(devices []audio.Device, want audio.Device, fixed ...string) ([]string, map[string]audio.Device, string) {
 	options := append([]string{config.DefaultDevice}, fixed...)
 	byLabel := make(map[string]audio.Device, len(options)+len(devices))

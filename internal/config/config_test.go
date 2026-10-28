@@ -7,8 +7,7 @@ import (
 	"testing"
 )
 
-// LiveSettings va embebido sin tag: el JSON tiene que seguir plano, igual que antes de la división,
-// para que los voxmesh.json existentes carguen sin migración.
+// LiveSettings va embebido sin tag: el JSON es plano, con las mismas claves que la tabla Params.
 func TestLiveSettingsJSONIsFlat(t *testing.T) {
 	data, err := json.Marshal(Default())
 	if err != nil {

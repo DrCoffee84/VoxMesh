@@ -109,8 +109,6 @@ func (a *App) handleHostPacket(udp *transport.UDP, fo *room.Failover, packet tra
 			participantID = envelope.Participant.ID
 		}
 		a.handleParticipantLeave(participantID, username, addr, udp)
-	case transport.PacketHello:
-		a.handleLegacyHello(packet.Payload, addrStr)
 	case transport.PacketPing:
 		if len(packet.Payload) == 8 {
 			_ = udp.Send(addr, transport.Packet{Kind: transport.PacketPong, Sequence: packet.Sequence, Payload: packet.Payload})
@@ -174,8 +172,6 @@ func (a *App) handleClientPacket(udp *transport.UDP, fo *room.Failover, packet t
 		if fromHost {
 			a.handleHostLeave(packet.Payload, fo, now)
 		}
-	case transport.PacketHello:
-		a.setStatus("Conectado a " + addrStr)
 	case transport.PacketAudio:
 		if fromHost {
 			a.handleAudioPacket(packet)
@@ -277,37 +273,6 @@ func (a *App) handleRoomHello(udp *transport.UDP, fo *room.Failover, payload []b
 	go a.addSystemMessage(joinedUser + " se conectó.")
 	a.playEventSound(audio.SFXConnect)
 	a.broadcastRoomState(udp, addr)
-}
-
-// handleLegacyHello (host): PacketHello de versiones viejas, solo para mostrar el nombre.
-func (a *App) handleLegacyHello(payload []byte, addrStr string) {
-	username := strings.TrimSpace(string(payload))
-	if username == "" {
-		username = config.DefaultUsername
-	}
-	candidate := username
-	selfName := a.conf().Username
-	a.peerMu.Lock()
-	for {
-		taken := false
-		for _, p := range a.peerNames {
-			if p.address != addrStr && strings.EqualFold(p.name, candidate) {
-				taken = true
-				break
-			}
-		}
-		if !taken && strings.EqualFold(selfName, candidate) {
-			taken = true
-		}
-		if !taken {
-			break
-		}
-		candidate += "_PUTO"
-	}
-	a.peerMu.Unlock()
-	if a.addPeer(candidate, addrStr) {
-		a.playEventSound(audio.SFXConnect)
-	}
 }
 
 func (a *App) handleParticipantLeave(participantID, username string, addr *net.UDPAddr, udp *transport.UDP) {

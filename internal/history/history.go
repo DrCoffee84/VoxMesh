@@ -24,7 +24,6 @@ type Message struct {
 	Text      string    `json:"text,omitempty"`
 	ImageID   string    `json:"image_id,omitempty"`
 	ImageExt  string    `json:"image_ext,omitempty"`
-	ImagePath string    `json:"image_path,omitempty"`
 	System    bool      `json:"system,omitempty"`
 }
 
@@ -156,12 +155,9 @@ func (s *Store) loadSeen() error {
 var (
 	// Las del selector de imágenes (file_windows.go).
 	imageExtensions = map[string]struct{}{".png": {}, ".jpg": {}, ".jpeg": {}, ".gif": {}, ".webp": {}}
-	// .pcm es lo que produce el recorte; .wav, el default de SaveSound y de manifests viejos.
-	soundExtensions = map[string]struct{}{".pcm": {}, ".wav": {}}
+	// .pcm es lo único que produce el recorte.
+	soundExtensions = map[string]struct{}{".pcm": {}}
 )
-
-// defaultSoundExtension es la que se supone para un sonido sin extensión (manifests viejos).
-const defaultSoundExtension = ".wav"
 
 // CheckImage dice si el ID y la extensión de una imagen se pueden guardar (para descartar
 // temprano lo que llega por red).
@@ -170,7 +166,7 @@ func CheckImage(id, extension string) error {
 	return err
 }
 
-// CheckSound es CheckImage para sonidos (extensión vacía = defaultSoundExtension).
+// CheckSound es CheckImage para sonidos.
 func CheckSound(id, extension string) error {
 	_, _, err := soundName(id, extension)
 	return err
@@ -182,9 +178,6 @@ func imageName(id, extension string) (string, string, error) {
 }
 
 func soundName(id, extension string) (string, string, error) {
-	if strings.TrimSpace(extension) == "" {
-		extension = defaultSoundExtension
-	}
 	return assetName("sounds", soundExtensions, id, extension)
 }
 

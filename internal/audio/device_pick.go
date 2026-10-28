@@ -30,18 +30,15 @@ func IsDefaultDevice(name string) bool {
 	return strings.TrimSpace(name) == "" || name == config.DefaultDevice
 }
 
-// PickDevice busca want en la lista que da Windows ahora: por ID, o por nombre si la elección no
-// tiene ID (config de una versión anterior). Devuelve -1 si hay que abrir el predeterminado y
-// missing si fue porque el elegido ya no está. No recuerda nada más: si no está, el predeterminado.
+// PickDevice busca want por ID en la lista que da Windows ahora. Devuelve -1 si hay que abrir el
+// predeterminado y missing si fue porque el elegido ya no está. No recuerda nada más: si no está,
+// el predeterminado.
 func PickDevice(list []Device, want Device) (index int, missing bool) {
-	if IsDefaultDevice(want.Name) && want.ID == "" {
-		return -1, false
+	if want.ID == "" {
+		return -1, !IsDefaultDevice(want.Name)
 	}
 	for i, device := range list {
-		if want.ID != "" && device.ID == want.ID {
-			return i, false
-		}
-		if want.ID == "" && device.Name == want.Name {
+		if device.ID == want.ID {
 			return i, false
 		}
 	}
