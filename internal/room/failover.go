@@ -232,6 +232,18 @@ func (f *Failover) HostLeft(now time.Time) {
 	f.startMigration(now, f.state.Candidates(), true, "El host se fue. Buscando host nuevo…")
 }
 
+// Refused: el host no me dejó entrar (sala llena). Solo cuenta antes del primer estado de la sala:
+// ya adentro, un rechazo no tiene sentido y se ignora.
+func (f *Failover) Refused(text string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.stopped || f.phase != phaseClient || f.hostID != "" {
+		return
+	}
+	f.phase = phaseIdle
+	f.emit(Action{Kind: ActGiveUp, Text: text})
+}
+
 // StateFrom: llegó el estado de sala de from, que no es mi host. Como cliente me paso si es el
 // candidato al que le pedí entrar, o una sala con más autoridad (epoch mayor). Como host me bajo si
 // el otro host tiene más autoridad: nunca quedan dos hosts. Solo cuenta si el host que nombra es

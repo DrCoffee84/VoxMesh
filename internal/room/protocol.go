@@ -25,6 +25,9 @@ const (
 	SoundSyncResponseMessage = "sound_sync_response"
 	LeaveMessage             = "leave"
 	MuteMessage              = "mute"
+	// RoomFullMessage (host → cliente, PacketRoomLeave): la sala llegó a MaxParticipants y no hay
+	// desconectados viejos para podar; el cliente deja de intentar (Failover.Refused).
+	RoomFullMessage = "room_full"
 )
 
 type Envelope struct {

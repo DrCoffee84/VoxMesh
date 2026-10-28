@@ -52,9 +52,21 @@ func (s *State) Upsert(participant Participant) {
 			return
 		}
 	}
-	participant.Order = len(s.Participants)
+	participant.Order = s.NextOrder()
 	s.Participants = append(s.Participants, participant)
 	s.Sort()
+}
+
+// NextOrder es el Order para el que entra: uno más que el mayor. Con la poda la lista tiene
+// huecos, así que len(Participants) puede repetir un Order (y Validate lo rechaza).
+func (s State) NextOrder() int {
+	next := 0
+	for _, participant := range s.Participants {
+		if participant.Order >= next {
+			next = participant.Order + 1
+		}
+	}
+	return next
 }
 
 // SetMuted cambia el mute del participante id. Si address no es vacío también tiene que
@@ -84,6 +96,67 @@ func (s *State) MarkDisconnected(id string) {
 			s.Participants[index].LastSeenUTC = time.Now().UTC()
 		}
 	}
+}
+
+// DisconnectedTTL es cuánto queda en la lista un desconectado: más que el aviso del host nuevo
+// tras una migración (FailoverTimings.Announce), así el host viejo que vuelve sigue siendo de la sala.
+const DisconnectedTTL = 10 * time.Minute
+
+// MaxParticipants es el tope de la lista (red de seguridad: el RoomState viaja en un datagrama).
+const MaxParticipants = 16
+
+// PruneDisconnected saca a los desconectados hace más de olderThan. Nunca al host ni a un
+// conectado. Reemplaza el slice (como SetMuted) y devuelve los que sacó.
+func (s *State) PruneDisconnected(now time.Time, olderThan time.Duration) []Participant {
+	var kept, removed []Participant
+	for _, participant := range s.Participants {
+		if s.prunable(participant, now, olderThan) {
+			removed = append(removed, participant)
+		} else {
+			kept = append(kept, participant)
+		}
+	}
+	if len(removed) > 0 {
+		s.Participants = kept
+	}
+	return removed
+}
+
+// MakeRoom deja lugar para uno más: con la lista llena (max) saca a los desconectados hace más
+// de minAge, del más viejo al más nuevo, hasta que entre uno. Devuelve los que sacó y si hay lugar.
+func (s *State) MakeRoom(now time.Time, max int, minAge time.Duration) ([]Participant, bool) {
+	excess := len(s.Participants) - max + 1
+	if excess <= 0 {
+		return nil, true
+	}
+	var oldest []Participant
+	for _, participant := range s.Participants {
+		if s.prunable(participant, now, minAge) {
+			oldest = append(oldest, participant)
+		}
+	}
+	sort.SliceStable(oldest, func(left, right int) bool { return oldest[left].LastSeenUTC.Before(oldest[right].LastSeenUTC) })
+	if len(oldest) > excess {
+		oldest = oldest[:excess]
+	}
+	if len(oldest) > 0 {
+		drop := make(map[string]bool, len(oldest))
+		for _, participant := range oldest {
+			drop[participant.ID] = true
+		}
+		kept := make([]Participant, 0, len(s.Participants)-len(oldest))
+		for _, participant := range s.Participants {
+			if !drop[participant.ID] {
+				kept = append(kept, participant)
+			}
+		}
+		s.Participants = kept
+	}
+	return oldest, len(s.Participants) < max
+}
+
+func (s State) prunable(participant Participant, now time.Time, olderThan time.Duration) bool {
+	return !participant.Connected && participant.ID != s.HostID && now.Sub(participant.LastSeenUTC) > olderThan
 }
 
 func (s *State) Sort() {

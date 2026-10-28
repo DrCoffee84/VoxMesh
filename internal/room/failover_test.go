@@ -319,3 +319,27 @@ func TestFailover_StopSilencesEverything(t *testing.T) {
 		t.Fatalf("a stopped failover must not act (the user left the room): %+v", actions)
 	}
 }
+
+func TestFailover_RefusedBeforeJoiningGivesUp(t *testing.T) {
+	f := NewFailover("A", DefaultFailoverTimings())
+	f.JoinedAsClient(hostAddr, foT0)
+	f.Refused("La sala está llena.")
+	actions := f.Drain()
+	if giveUp := find(t, actions, ActGiveUp); giveUp.Text != "La sala está llena." {
+		t.Fatalf("unexpected give up text %q", giveUp.Text)
+	}
+	if actions := run(f, 0, 30*time.Second, nil); len(actions) != 0 {
+		t.Fatalf("a refused client must stop trying, got %+v", actions)
+	}
+}
+
+func TestFailover_RefusedAfterJoiningIsIgnored(t *testing.T) {
+	f := newClient("A", testRoom(false))
+	f.Refused("La sala está llena.")
+	if actions := f.Drain(); len(actions) != 0 {
+		t.Fatalf("a refusal once in the room must be ignored, got %+v", actions)
+	}
+	if source := f.Seen(hostAddr, foT0); source != FromHost {
+		t.Fatal("the client must still follow its host")
+	}
+}

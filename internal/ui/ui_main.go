@@ -106,6 +106,7 @@ type App struct {
 	settingsStatus  *widget.Label
 	assetAssembler  *assets.Assembler
 	assetRejects    rejectedAssets
+	roomFullLogged  time.Time // último "Sala llena" en el log; solo receiveLoop
 	clientPanel     *fyne.Container
 	connectionPanel *fyne.Container
 	bottomBar       *fyne.Container

@@ -5,6 +5,7 @@ package ui
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 	"runtime/debug"
 	"strings"
@@ -170,6 +171,10 @@ func (a *App) handleClientPacket(udp *transport.UDP, fo *room.Failover, packet t
 		}
 	case transport.PacketRoomLeave:
 		if fromHost {
+			if envelope, err := room.Decode(packet.Payload); err == nil && envelope.Kind == room.RoomFullMessage {
+				fo.Refused(fmt.Sprintf("La sala está llena (máximo %d participantes).", room.MaxParticipants))
+				return
+			}
 			a.handleHostLeave(packet.Payload, fo, now)
 		}
 	case transport.PacketAudio:
@@ -240,14 +245,33 @@ func (a *App) handleRoomHello(udp *transport.UDP, fo *room.Failover, payload []b
 	known := false
 	for index := range a.roomState.Participants {
 		if a.roomState.Participants[index].ID == joining.ID {
+			previous := a.roomState.Participants[index].Address
 			joining.Order = a.roomState.Participants[index].Order
 			a.roomState.Participants[index] = *joining
 			known = true
+			// Volvió desde otra dirección (el router le cambió el puerto): la vieja no recibe más.
+			if previous != addrStr {
+				a.removePeerAddress(udp, previous)
+			}
 			break
 		}
 	}
 	if !known {
-		joining.Order = len(a.roomState.Participants)
+		// Lista llena: se podan los desconectados más viejos; uno de menos de participantTimeout
+		// puede estar volviendo y no se toca. Si aun así no hay lugar, se le avisa y no entra.
+		pruned, ok := a.roomState.MakeRoom(now, room.MaxParticipants, participantTimeout)
+		for _, participant := range pruned {
+			a.removePeerAddress(udp, participant.Address)
+			logging.Infof("Sala llena: sale de la lista %s (%s), desconectado desde %s", participant.Username, participant.Address, participant.LastSeenUTC.Format(time.RFC3339))
+		}
+		if !ok {
+			a.rejectRoomFull(udp, addr, joining.Username, now)
+			if len(pruned) > 0 {
+				a.broadcastRoomState(udp, nil)
+			}
+			return
+		}
+		joining.Order = a.roomState.NextOrder()
 		a.roomState.Participants = append(a.roomState.Participants, *joining)
 	}
 	if a.roomStore != nil {
@@ -273,6 +297,31 @@ func (a *App) handleRoomHello(udp *transport.UDP, fo *room.Failover, payload []b
 	go a.addSystemMessage(joinedUser + " se conectó.")
 	a.playEventSound(audio.SFXConnect)
 	a.broadcastRoomState(udp, addr)
+}
+
+// rejectRoomFull (host) le avisa a quien pidió entrar que la sala está llena y lo saca de la
+// difusión (receiveLoop lo agregó al recibir el RoomHello).
+func (a *App) rejectRoomFull(udp *transport.UDP, addr *net.UDPAddr, username string, now time.Time) {
+	payload, _ := room.Encode(room.Envelope{Kind: room.RoomFullMessage})
+	_ = udp.Send(addr, transport.Packet{Kind: transport.PacketRoomLeave, Sequence: a.sequence.Add(1), Payload: payload})
+	udp.RemovePeer(addr)
+	if now.Sub(a.roomFullLogged) >= receiveErrorLogEvery {
+		a.roomFullLogged = now
+		logging.Infof("Sala llena (%d): no entra %s (%s)", room.MaxParticipants, username, addr)
+	}
+}
+
+// removePeerAddress saca de la difusión la dirección "IP:puerto" de un registro que ya no la usa,
+// salvo que la tenga un participante conectado (mismo socket con otro ID).
+func (a *App) removePeerAddress(udp *transport.UDP, address string) {
+	for _, participant := range a.roomState.Participants {
+		if participant.Connected && participant.Address == address {
+			return
+		}
+	}
+	if peer, err := net.ResolveUDPAddr("udp", address); err == nil { // literal: sin DNS
+		udp.RemovePeer(peer)
+	}
 }
 
 func (a *App) handleParticipantLeave(participantID, username string, addr *net.UDPAddr, udp *transport.UDP) {
@@ -511,8 +560,8 @@ func (a *App) broadcastRoomState(udp *transport.UDP, except *net.UDPAddr) {
 	udp.Broadcast(transport.Packet{Kind: transport.PacketRoomState, Sequence: a.sequence.Add(1), Payload: statePayload}, except)
 }
 
-// pingPeers (host) mide el lag de cada peer y da de baja a los que se callaron más de
-// participantTimeout.
+// pingPeers (host) mide el lag de cada peer, da de baja a los que se callaron más de
+// participantTimeout y saca de la lista a los desconectados hace más de room.DisconnectedTTL.
 func (a *App) pingPeers(udp *transport.UDP, stop <-chan struct{}) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -535,6 +584,21 @@ func (a *App) pingPeers(udp *transport.UDP, stop <-chan struct{}) {
 					a.handleParticipantLeave(p.ID, p.Username, peerAddr, udp)
 				}
 			}
+			a.pruneDisconnected(udp, now)
 		}
 	}
+}
+
+// pruneDisconnected (host, desde pingPeers) saca de la lista a los desconectados viejos: cada
+// reconexión desde otro puerto es un ID nuevo y el viejo quedaba para siempre.
+func (a *App) pruneDisconnected(udp *transport.UDP, now time.Time) {
+	pruned := a.roomState.PruneDisconnected(now, room.DisconnectedTTL)
+	if len(pruned) == 0 {
+		return
+	}
+	for _, participant := range pruned {
+		a.removePeerAddress(udp, participant.Address)
+		logging.Infof("Sale de la lista %s (%s): desconectado desde %s", participant.Username, participant.Address, participant.LastSeenUTC.Format(time.RFC3339))
+	}
+	a.broadcastRoomState(udp, nil)
 }
