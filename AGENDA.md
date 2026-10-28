@@ -250,8 +250,30 @@ Sobre el puerto UPnP: la app borra el mapeo al cerrar la sala o la app. Si se ci
   - El host publica `{dirección(es), sal, vence}` firmado con `HMAC(secreto, …)`. El cliente verifica la firma: un servidor comprometido no puede mandar a nadie a otra dirección (y un host falso no sabría la clave igual).
   - **Migración**: el host nuevo también conoce el secreto, así que republica su dirección y el servidor apunta al host actual.
   - En la app: la sala queda guardada ("Mis salas") y entrar es un clic. Para sacar a alguien: secreto nuevo = invitación nueva.
-  - Servidor mínimo: `PUT /salas/{id}` (con la firma) y `GET /salas/{id}`, en memoria con vencimiento, HTTPS, límite de pedidos. Sirve un VPS chico o algo tipo Cloudflare Worker.
-- **Qué no resuelve**: CGNAT / NAT simétrico de los dos lados (sigue siendo UDP directo; ver STUN/TURN en "Descartado / quizás"). Agrega algo que mantener: el servidor.
+- **Hole punching coordinado por el mismo servidor** (para hostear detrás de CGNAT o sin UPnP, sin VPN de terceros como Radmin o Tailscale):
+  - **Host con IP propia y UPnP**: igual que hoy. El servidor solo publica dónde está la sala.
+  - **Host detrás de CGNAT o sin UPnP**:
+    1. El host se registra en el servidor **desde el mismo socket UDP de la sala**, y el servidor le contesta con qué IP:puerto pública lo ve (lo que hace STUN, pero propio).
+    2. El cliente hace lo mismo y pide la sala: obtiene la dirección del host y deja anotada la suya para el host.
+    3. Los dos se mandan paquetes a la vez: cada NAT ve tráfico saliente hacia el otro, abre el paso y quedan conectados **directo**. Cada cliente hace lo suyo con el host y queda la estrella de hoy (cliente ↔ host).
+  - **Mismo socket para todo**: si el registro sale por otro puerto, la dirección que vio el servidor no sirve.
+  - **Mantener el camino abierto**: los NAT cierran el paso con unos 30 s sin tráfico. Los pings de 2 s de VoxMesh ya lo cubren. Mientras espera a alguien, el host repite el registro cada pocos segundos (también mantiene abierto el camino al servidor).
+  - **Migración**: si el host nuevo también está detrás de CGNAT, se registra y los clientes vuelven a hacer el paso 2 con él. VoxMesh ya tiene la mitad: en la migración los clientes le mandan `RoomHello` al candidato cada 500 ms para abrir camino (AGENT.md §3.E4).
+  - **Cuándo falla**: NAT simétrico de los dos lados (algunos CGNAT y datos móviles). Ahí queda el relay (abajo) o una VPN.
+- **El servidor no piensa** (decisión de Coffee): la inteligencia vive en VoxMesh. El servidor es un programa mínimo (por ejemplo unas decenas de líneas de Node.js con `dgram`) que solo:
+  1. contesta "te veo desde tal IP:puerto" (reflejo de dirección);
+  2. guarda y devuelve blobs opacos por ID de sala, con vencimiento corto: el registro firmado del host y las "notas" de los clientes que quieren entrar;
+  3. aplica un límite de pedidos por IP.
+  - No verifica firmas, no conoce el secreto, no decide cuándo ni cómo conectar, no reintenta nada. VoxMesh hace todo eso: verifica la firma, decide cuándo hacer el hole punching, reintenta, sigue la migración.
+  - **Todo en UDP** (también el directorio): así un solo puerto sirve para el reflejo y para los blobs, y no hacen falta HTTPS ni certificados. Lo que viaja ya va firmado o es opaco. Si algún día se prefiere HTTPS para el directorio, el reflejo igual tiene que ser UDP.
+- **Dónde correrlo gratis** (tiene que aceptar **UDP entrante** con IP pública):
+  - **Oracle Cloud "Always Free"**: VMs gratis para siempre con IP pública y UDP. La opción más sólida.
+  - **Google Cloud free tier** (e2-micro): también sirve con UDP; revisar los límites de tráfico del plan gratis.
+  - **Tu propia PC o una Raspberry Pi en tu casa**: tu conexión tiene IP pública. Gratis, pero si se corta tu internet, se cae el directorio (la sala ya conectada sigue andando).
+  - **No sirven** Cloudflare Workers, Vercel ni Netlify: son solo HTTP y no reciben UDP, así que no pueden hacer el reflejo de dirección. Un STUN público (Google) lo resolvería, pero es un tercero.
+  - Dominio: uno propio, o un subdominio gratis (DuckDNS u otro DNS dinámico) para que la dirección del servidor no cambie.
+- **Relay (muy opcional, solo si el hole punching falla seguido)**: el mismo servidor reenvía los paquetes de la sala cuando no hay camino directo. Con S4 van cifrados y el relay no lee nada. Pero pasa el audio de verdad (tráfico y latencia) y es justo la parte "con inteligencia" que se quiere evitar. No hacerlo hasta que haga falta; mientras tanto, para ese caso queda una VPN.
+- **Seguridad del conjunto**: el servidor solo ve IPs y blobs. No puede entrar a la sala (no tiene el secreto) ni redirigir a nadie (los clientes verifican la firma del host). Si lo apagan o lo hackean, lo peor que pasa es que hay que volver a pasar la invitación por WhatsApp como hoy.
 - **Relación con S4 + F3**: compatible. El código de invitación de F3 ya lleva versión, así que más adelante puede pasar a llevar el secreto de largo plazo en vez de la clave de sesión. No hay que cambiar nada de S4 + F3 ahora.
 
 ---
@@ -268,7 +290,7 @@ No suman al flujo "crear sala → pasar invitación → hablar y jugar", o S4 ya
 - **F2. Push-to-talk**: solo si lo piden los pibes. El diseño está pensado: `MicMode` + `PushToTalkKey` en `LiveSettings`, el poller de [hotkey_windows.go](internal/ui/hotkey_windows.go) reporta la tecla mantenida (`a.pttHeld atomic.Bool`, ignorada mientras se escribe en la app), en `sendOutgoingPCM` "tecla suelta" = mute (la cadena sigue, el frame no sale; el mute tiene prioridad), radio de vuelta en Ajustes, medidor amarillo "no se envía (mantené <tecla>)". Test: `shouldSend(muted, mode, held, releasedAt, now)` como función pura.
 - **S7 con firma ed25519**: alcanza con HTTPS + hash.
 - **F3 completo** (esquema `voxmesh://`, registro en `HKCU`, instancia única, QR): WhatsApp no hace clickeable un esquema propio, y la instancia única es lo más propenso a fallar.
-- **Rendezvous / STUN / TURN** (CGNAT o NAT simétrico de los dos lados): hoy la app avisa. Alternativa sin servidor: la opción LAN/VPN de F3 (Tailscale/ZeroTier).
+- **Rendezvous / STUN / TURN** (CGNAT o NAT simétrico de los dos lados): hoy la app avisa. Alternativa sin servidor: la opción LAN/VPN de F3 (Tailscale/ZeroTier). El plan propio está en **F4** (directorio + hole punching con un servidor mínimo; relay muy opcional).
 - **Mover `voxmesh.json` a `%AppData%\VoxMesh\`**: aporta poco. Si se hace, sin migración (Visión): la ruta nueva y listo; el updater no toca el json.
 - **Flight recorder en el watchdog** (`runtime/trace.FlightRecorder`): solo si vuelven los cuelgues y el log no alcanza.
 - **Audio: compensar el déficit del emisor** (menos de 50 frames/s, típico del Bluetooth), **time-stretching** y **P2P directo entre clientes**: el audio quedó muy bien. Retomar solo si los logs muestran cortes ("Cortes de audio" en §0). Mientras tanto, sugerirle al que usa Bluetooth el micrófono de la PC o del celular.
