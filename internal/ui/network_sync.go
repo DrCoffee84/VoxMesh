@@ -5,6 +5,7 @@ package ui
 import (
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"voxmesh/internal/assets"
@@ -37,7 +38,7 @@ func (a *App) handleChatPacket(payload []byte) {
 			a.addActivity(envelope.Message.Text)
 		}
 	case room.SoundAddMessage:
-		if envelope.Sound != nil {
+		if envelope.Sound != nil && a.netAssetOK(assets.KindSound, envelope.Sound.ID, envelope.Sound.Ext, "") {
 			a.addSound(*envelope.Sound)
 		}
 	case room.SoundRemoveMessage:
@@ -48,15 +49,58 @@ func (a *App) handleChatPacket(payload []byte) {
 			}
 		}
 	case room.SoundPlayMessage:
-		if envelope.Sound != nil {
+		if envelope.Sound != nil && a.netAssetOK(assets.KindSound, envelope.Sound.ID, envelope.Sound.Ext, "") {
 			a.playIncomingSound(*envelope.Sound)
 		}
 	}
 }
 
+// rejectedAssets cuenta los archivos que llegan por red con un ID o una extensión que el Store no
+// acepta (AGENDA S1). Se descartan antes de armar o tocar nada y se loguea como máximo una línea
+// cada receiveErrorLogEvery.
+type rejectedAssets struct {
+	mu    sync.Mutex
+	last  time.Time
+	count int
+}
+
+// netAssetOK dice si un archivo de red (imagen o sonido) tiene un ID y una extensión válidos.
+// from es solo para el log (vacío si no se conoce).
+func (a *App) netAssetOK(kind byte, id, ext, from string) bool {
+	var err error
+	if kind == assets.KindSound {
+		err = history.CheckSound(id, ext)
+	} else {
+		err = history.CheckImage(id, ext)
+	}
+	if err == nil {
+		return true
+	}
+	r := &a.assetRejects
+	r.mu.Lock()
+	r.count++
+	if time.Since(r.last) >= receiveErrorLogEvery {
+		logging.Infof("archivos de red descartados (%d): %s (de %q)", r.count, logging.FormatError(err), from)
+		r.last, r.count = time.Now(), 0
+	}
+	r.mu.Unlock()
+	return false
+}
+
+// netSoundsOK filtra los sonidos de la botonera que llegan por red con ID o extensión inválidos.
+func (a *App) netSoundsOK(sounds []room.Sound, from string) []room.Sound {
+	valid := sounds[:0:0]
+	for _, sound := range sounds {
+		if a.netAssetOK(assets.KindSound, sound.ID, sound.Ext, from) {
+			valid = append(valid, sound)
+		}
+	}
+	return valid
+}
+
 func (a *App) handleAssetChunk(payload []byte, origin string) {
 	chunk, err := assets.Decode(payload)
-	if err != nil || a.assetAssembler == nil {
+	if err != nil || a.assetAssembler == nil || !a.netAssetOK(chunk.Kind, chunk.ID, chunk.Ext, origin) {
 		return
 	}
 	data, complete := a.assetAssembler.Ingest(chunk, origin)
@@ -106,7 +150,7 @@ func (a *App) handleAssetChunk(payload []byte, origin string) {
 
 func (a *App) handleAssetMissing(udp *transport.UDP, addr *net.UDPAddr, payload []byte) {
 	request, err := assets.DecodeMissing(payload)
-	if err != nil || a.historyStore == nil || addr == nil {
+	if err != nil || a.historyStore == nil || addr == nil || !a.netAssetOK(request.Kind, request.ID, request.Ext, addr.String()) {
 		return
 	}
 	go func() {
@@ -267,7 +311,7 @@ func (a *App) handleSyncPacket(udp *transport.UDP, addr *net.UDPAddr, payload []
 	if envelope.Kind == room.SyncResponseMessage {
 		for _, message := range envelope.Messages {
 			a.addChatMessage(message)
-			if message.ImageID == "" || a.historyStore == nil {
+			if message.ImageID == "" || a.historyStore == nil || !a.netAssetOK(assets.KindImage, message.ImageID, message.ImageExt, addr.String()) {
 				continue
 			}
 			if _, readErr := a.historyStore.ReadImage(message.ImageID, message.ImageExt); readErr == nil {

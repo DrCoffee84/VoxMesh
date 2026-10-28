@@ -69,7 +69,15 @@ Cada tarea pendiente tiene un **ID** (`S1`, `R2`, `F3`...) y está escrita para 
 
 ### S1. Validar la extensión (y el ID) de los archivos que llegan por red
 
-- [ ] **Problema.** [history.go](internal/history/history.go) arma rutas con `filepath.Join(s.root, "images"|"sounds", safeName(id)+extension)` (`ImagePath` ~152, `SoundPath` ~163). `safeName` (~469) limpia `/` y `\` del ID, pero **la extensión no se valida** y viene de la red (`assets.Chunk.Ext`, `assets.MissingRequest.Ext`, `history.Message.ImageExt`, `room.Sound.Ext`). Como `filepath.Join` resuelve `..`, las operaciones de `SaveImage`, `ReadImage`, `SaveSound`, `ReadSound` y `DeleteSound` pueden terminar **fuera de la carpeta de la sala** (escritura, lectura y borrado). Entradas afectadas: `handleAssetChunk` y `handleAssetMissing` ([network_sync.go](internal/ui/network_sync.go)), `dropSounds` ([sound_sync.go](internal/ui/sound_sync.go)), la fila de imagen del chat ([ui_chat.go](internal/ui/ui_chat.go) ~302).
+- [x] **Hecho (2026-10-28):**
+  - [history.go](internal/history/history.go): `imageName`/`soundName`/`assetName` (ID `[0-9a-f]{32}`, porque los manifests existentes cumplen; extensión en minúsculas y en lista blanca; sonido sin extensión = `.wav`), `CheckImage`/`CheckSound` exportadas, y `ImagePath`/`SoundPath` devuelven `(string, error)`.
+  - Toda la E/S de imágenes y sonidos pasa por `os.OpenRoot` sobre la carpeta de la sala. Las entradas del manifest inválidas cuentan como huérfanas. `SaveImage` ya no usa `.bin` por defecto.
+  - `safeName`: saca `<>:"|?*`, los caracteres de control y los puntos o espacios del final, y les agrega `_` a los nombres reservados.
+  - UI: `netAssetOK`/`netSoundsOK` ([network_sync.go](internal/ui/network_sync.go)) descartan antes de `Ingest`/leer en chunks, `AssetMissing`, las imágenes del sync de historial, `sound_add`/`sound_play` y los dos syncs de la botonera ([sound_sync.go](internal/ui/sound_sync.go)), con log de nivel 1 como máximo cada 10 s.
+  - Los dos envíos locales de imágenes ([ui_chat.go](internal/ui/ui_chat.go)) rechazan las extensiones fuera de la lista antes de leer el archivo.
+  - Tests en `history_test.go`.
+  - Quedó afuera, anotado como S10 y S11: lápidas sin validar y nombre de sala sin tope de largo.
+- **Problema (original).** [history.go](internal/history/history.go) arma rutas con `filepath.Join(s.root, "images"|"sounds", safeName(id)+extension)` (`ImagePath` ~152, `SoundPath` ~163). `safeName` (~469) limpia `/` y `\` del ID, pero **la extensión no se valida** y viene de la red (`assets.Chunk.Ext`, `assets.MissingRequest.Ext`, `history.Message.ImageExt`, `room.Sound.Ext`). Como `filepath.Join` resuelve `..`, las operaciones de `SaveImage`, `ReadImage`, `SaveSound`, `ReadSound` y `DeleteSound` pueden terminar **fuera de la carpeta de la sala** (escritura, lectura y borrado). Entradas afectadas: `handleAssetChunk` y `handleAssetMissing` ([network_sync.go](internal/ui/network_sync.go)), `dropSounds` ([sound_sync.go](internal/ui/sound_sync.go)), la fila de imagen del chat ([ui_chat.go](internal/ui/ui_chat.go) ~302).
   - `safeName` tampoco filtra `:` ni los nombres reservados de Windows (`CON`, `NUL`, `COM1`…), y también se aplica al **nombre de la sala**, que al cliente se lo manda el host.
 - **Arreglo.**
   - Una única función de validación en `internal/history`, usada por todos los helpers de ruta y por `Save*`/`Read*`/`HasImage`/`DeleteSound`/`UpdateSoundMeta` (devuelven error si no pasa):
@@ -160,6 +168,14 @@ Cada tarea pendiente tiene un **ID** (`S1`, `R2`, `F3`...) y está escrita para 
 ### S9. Micrófono del celular: detalles menores
 
 - [ ] `handlePage`/`handleWebSocket` ([server.go](internal/phonemic/server.go) ~257/266) comparan el token con `!=`: usar `subtle.ConstantTimeCompare` como ya hace la ruta UDP. `websocket.Accept` usa `InsecureSkipVerify: true` (no chequea el `Origin`): limitarlo al host propio si no rompe la página. Prioridad baja (LAN y con token).
+
+### S10. Validar los IDs de las lápidas de sonidos
+
+- [ ] Visto en S1. `AddSoundTombstones` ([history.go](internal/history/history.go)) guarda tal cual los `DeletedIDs` que llegan por red (sync de la botonera). No arman rutas, pero un ID con `\n` mete líneas en `sounds\tombstones`, y basura de cualquier largo ocupa los 500 lugares (`MaxSoundTombstones`) y viaja en cada sync. Arreglo: aceptar solo `validID` (32 hex) en `AddSoundTombstones` y en `dropSounds`/`handleSoundSync*`. Test: IDs inválidos o con salto de línea → se ignoran.
+
+### S11. Tope de largo del nombre de sala
+
+- [ ] Visto en S1. El nombre de sala que manda el host (`RoomState`) no tiene tope. Con `safeName` ya no sale de `salas\`, pero un nombre muy largo hace fallar `history.New` (MAX_PATH) y el cliente queda sin historial ni botonera. Arreglo: recortarlo (por ejemplo a 64 runas) donde se recibe y en `safeName`, sin cambiar la carpeta de las salas existentes con nombres cortos.
 
 ## 1.2 Rendimiento y estabilidad
 

@@ -105,6 +105,7 @@ type App struct {
 	mainView        fyne.CanvasObject
 	settingsStatus  *widget.Label
 	assetAssembler  *assets.Assembler
+	assetRejects    rejectedAssets
 	clientPanel     *fyne.Container
 	connectionPanel *fyne.Container
 	bottomBar       *fyne.Container

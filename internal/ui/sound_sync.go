@@ -87,7 +87,7 @@ func (a *App) handleSoundSyncRequest(udp *transport.UDP, addr *net.UDPAddr, enve
 	for _, sound := range a.sounds {
 		known[sound.ID] = struct{}{}
 	}
-	for _, sound := range envelope.Sounds {
+	for _, sound := range a.netSoundsOK(envelope.Sounds, addr.String()) {
 		if _, gone := deleted[sound.ID]; gone {
 			continue
 		}
@@ -144,9 +144,10 @@ func (a *App) handleSoundSyncResponse(envelope room.Envelope) {
 	for _, sound := range a.sounds {
 		current[sound.ID] = sound
 	}
-	merged := make([]room.Sound, 0, len(envelope.Sounds)+len(a.sounds))
-	inRoom := make(map[string]struct{}, len(envelope.Sounds))
-	for _, sound := range envelope.Sounds {
+	hostSounds := a.netSoundsOK(envelope.Sounds, "host")
+	merged := make([]room.Sound, 0, len(hostSounds)+len(a.sounds))
+	inRoom := make(map[string]struct{}, len(hostSounds))
+	for _, sound := range hostSounds {
 		if _, gone := deleted[sound.ID]; gone {
 			continue
 		}

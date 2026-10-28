@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 type Message struct {
@@ -149,8 +150,104 @@ func (s *Store) loadSeen() error {
 	return err
 }
 
-func (s *Store) ImagePath(id, extension string) string {
-	return filepath.Join(s.root, "images", safeName(id)+extension)
+// Extensiones que se guardan en disco. Todo lo que arma una ruta con un ID o una extensión que
+// viene de la red pasa por imageName/soundName: sin esto, una extensión como `\..\..\x` sacaba
+// la escritura, la lectura o el borrado fuera de la carpeta de la sala (AGENDA S1).
+var (
+	// Las del selector de imágenes (file_windows.go).
+	imageExtensions = map[string]struct{}{".png": {}, ".jpg": {}, ".jpeg": {}, ".gif": {}, ".webp": {}}
+	// .pcm es lo que produce el recorte; .wav, el default de SaveSound y de manifests viejos.
+	soundExtensions = map[string]struct{}{".pcm": {}, ".wav": {}}
+)
+
+// defaultSoundExtension es la que se supone para un sonido sin extensión (manifests viejos).
+const defaultSoundExtension = ".wav"
+
+// CheckImage dice si el ID y la extensión de una imagen se pueden guardar (para descartar
+// temprano lo que llega por red).
+func CheckImage(id, extension string) error {
+	_, _, err := imageName(id, extension)
+	return err
+}
+
+// CheckSound es CheckImage para sonidos (extensión vacía = defaultSoundExtension).
+func CheckSound(id, extension string) error {
+	_, _, err := soundName(id, extension)
+	return err
+}
+
+// imageName devuelve la ruta relativa a la carpeta de la sala y la extensión normalizada.
+func imageName(id, extension string) (string, string, error) {
+	return assetName("images", imageExtensions, id, extension)
+}
+
+func soundName(id, extension string) (string, string, error) {
+	if strings.TrimSpace(extension) == "" {
+		extension = defaultSoundExtension
+	}
+	return assetName("sounds", soundExtensions, id, extension)
+}
+
+func assetName(dir string, allowed map[string]struct{}, id, extension string) (string, string, error) {
+	if !validID(id) {
+		return "", "", fmt.Errorf("identificador de archivo inválido: %q", id)
+	}
+	extension = strings.ToLower(extension)
+	if _, ok := allowed[extension]; !ok {
+		return "", "", fmt.Errorf("extensión de archivo no permitida: %q", extension)
+	}
+	return filepath.Join(dir, id+extension), extension, nil
+}
+
+// validID acepta solo lo que genera NewID: 32 caracteres hex en minúsculas.
+func validID(id string) bool {
+	if len(id) != 32 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		if c := id[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// inRoom abre la carpeta de la sala como os.Root: aunque una ruta se escapara de la validación,
+// el SO no deja salir de ahí.
+func (s *Store) inRoom(fn func(root *os.Root) error) error {
+	root, err := os.OpenRoot(s.root)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return fn(root)
+}
+
+// readInRoom lee un archivo de la sala (name ya validado).
+func (s *Store) readInRoom(name string) ([]byte, error) {
+	var data []byte
+	err := s.inRoom(func(root *os.Root) error {
+		var readErr error
+		data, readErr = root.ReadFile(name)
+		return readErr
+	})
+	return data, err
+}
+
+func (s *Store) existsInRoom(name string) error {
+	return s.inRoom(func(root *os.Root) error {
+		_, err := root.Stat(name)
+		return err
+	})
+}
+
+// ImagePath devuelve la ruta absoluta de una imagen, o error si el ID o la extensión no son válidos.
+func (s *Store) ImagePath(id, extension string) (string, error) {
+	name, _, err := imageName(id, extension)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(s.root, name), nil
 }
 
 // SoundMeta describes a soundboard clip shared in a room.
@@ -160,43 +257,71 @@ type SoundMeta struct {
 	Name string `json:"name"`
 }
 
-func (s *Store) SoundPath(id, extension string) string {
-	return filepath.Join(s.root, "sounds", safeName(id)+extension)
+// SoundPath devuelve la ruta absoluta de un sonido, o error si el ID o la extensión no son válidos.
+func (s *Store) SoundPath(id, extension string) (string, error) {
+	name, _, err := soundName(id, extension)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(s.root, name), nil
 }
 
 func (s *Store) SaveSound(meta SoundMeta, data []byte) (string, error) {
-	if strings.TrimSpace(meta.ID) == "" {
-		return "", fmt.Errorf("sonido sin identificador")
+	name, extension, err := soundName(meta.ID, meta.Ext)
+	if err != nil {
+		return "", err
 	}
-	if strings.TrimSpace(meta.Ext) == "" {
-		meta.Ext = ".wav"
-	}
-	path := s.SoundPath(meta.ID, meta.Ext)
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	meta.Ext = extension
+	if err := s.inRoom(func(root *os.Root) error { return root.WriteFile(name, data, 0600) }); err != nil {
 		return "", err
 	}
 	if err := s.appendSoundMeta(meta); err != nil {
 		return "", err
 	}
-	return path, nil
+	return filepath.Join(s.root, name), nil
 }
 
 // UpdateSoundMeta records new metadata (e.g. a rename) for a clip that is already on disk.
 // ListSounds keeps the last manifest entry per ID, so appending is enough.
 func (s *Store) UpdateSoundMeta(meta SoundMeta) error {
-	if _, err := os.Stat(s.SoundPath(meta.ID, meta.Ext)); err != nil {
+	name, extension, err := soundName(meta.ID, meta.Ext)
+	if err != nil {
+		return err
+	}
+	meta.Ext = extension
+	if err := s.existsInRoom(name); err != nil {
 		return err
 	}
 	return s.appendSoundMeta(meta)
 }
 
+// soundOnDisk dice si el audio de una entrada del manifest existe (una entrada inválida cuenta
+// como huérfana).
+func soundOnDisk(root *os.Root, meta SoundMeta) bool {
+	name, _, err := soundName(meta.ID, meta.Ext)
+	if err != nil {
+		return false
+	}
+	_, err = root.Stat(name)
+	return err == nil
+}
+
 // DeleteSound removes the clip and leaves a tombstone, so a peer that was offline when it was
 // deleted does not bring it back on its next soundboard sync.
 func (s *Store) DeleteSound(id, extension string) error {
+	name, _, err := soundName(id, extension)
+	if err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(s.root)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	_ = os.Remove(s.SoundPath(id, extension))
+	_ = root.Remove(name)
 	if err := s.appendTombstonesLocked([]string{id}); err != nil {
 		return err
 	}
@@ -218,10 +343,7 @@ func (s *Store) DeleteSound(id, extension string) error {
 		if json.Unmarshal(scanner.Bytes(), &meta) != nil {
 			continue
 		}
-		if meta.ID == id {
-			continue
-		}
-		if _, statErr := os.Stat(s.SoundPath(meta.ID, meta.Ext)); statErr != nil {
+		if meta.ID == id || !soundOnDisk(root, meta) {
 			continue
 		}
 		if _, exists := seen[meta.ID]; exists {
@@ -256,7 +378,11 @@ func (s *Store) DeleteSound(id, extension string) error {
 }
 
 func (s *Store) ReadSound(id, extension string) ([]byte, error) {
-	return os.ReadFile(s.SoundPath(id, extension))
+	name, _, err := soundName(id, extension)
+	if err != nil {
+		return nil, err
+	}
+	return s.readInRoom(name)
 }
 
 func (s *Store) appendSoundMeta(meta SoundMeta) error {
@@ -356,6 +482,11 @@ func (s *Store) appendTombstonesLocked(ids []string) error {
 
 // ListSounds returns the soundboard clips known for this room, deduplicated by ID.
 func (s *Store) ListSounds() ([]SoundMeta, error) {
+	root, err := os.OpenRoot(s.root)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	manifestPath := filepath.Join(s.root, "sounds", "manifest")
@@ -376,7 +507,7 @@ func (s *Store) ListSounds() ([]SoundMeta, error) {
 		if json.Unmarshal(scanner.Bytes(), &meta) != nil {
 			continue
 		}
-		if _, statErr := os.Stat(s.SoundPath(meta.ID, meta.Ext)); statErr != nil {
+		if !soundOnDisk(root, meta) {
 			hasOrphans = true
 			continue
 		}
@@ -426,39 +557,37 @@ func ListRooms(root string) ([]string, error) {
 }
 
 func (s *Store) SaveImage(id, extension string, data []byte) (string, error) {
-	if strings.TrimSpace(id) == "" {
-		return "", fmt.Errorf("imagen sin identificador")
+	name, _, err := imageName(id, extension)
+	if err != nil {
+		return "", err
 	}
-	if strings.TrimSpace(extension) == "" {
-		extension = ".bin"
-	}
-	path := s.ImagePath(id, extension)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, err := os.Stat(path); err == nil {
-		return path, nil
-	} else if !os.IsNotExist(err) {
+	err = s.inRoom(func(root *os.Root) error {
+		if _, statErr := root.Stat(name); statErr == nil {
+			return nil
+		} else if !os.IsNotExist(statErr) {
+			return statErr
+		}
+		return root.WriteFile(name, data, 0600)
+	})
+	if err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		return "", err
-	}
-	return path, nil
+	return filepath.Join(s.root, name), nil
 }
 
 func (s *Store) HasImage(id, extension string) bool {
-	if strings.TrimSpace(id) == "" {
-		return false
-	}
-	_, err := os.Stat(s.ImagePath(id, extension))
-	return err == nil
+	name, _, err := imageName(id, extension)
+	return err == nil && s.existsInRoom(name) == nil
 }
 
 func (s *Store) ReadImage(id, extension string) ([]byte, error) {
-	if strings.TrimSpace(id) == "" {
-		return nil, fmt.Errorf("imagen sin identificador")
+	name, _, err := imageName(id, extension)
+	if err != nil {
+		return nil, err
 	}
-	return os.ReadFile(s.ImagePath(id, extension))
+	return s.readInRoom(name)
 }
 
 func NewID(senderID string) string {
@@ -466,12 +595,38 @@ func NewID(senderID string) string {
 	return hex.EncodeToString(hash[:16])
 }
 
+// safeName convierte el nombre de la sala (que al cliente se lo manda el host) en un nombre de
+// carpeta de Windows: sin separadores, `<>:"|?*` ni caracteres de control, sin puntos o espacios
+// al final (Windows los borra) y con `_` en los nombres reservados (CON, NUL, COM1...).
 func safeName(value string) string {
-	value = strings.TrimSpace(value)
-	value = strings.ReplaceAll(value, "\\", "_")
-	value = strings.ReplaceAll(value, "/", "_")
-	if value == "" || value == "." || value == ".." {
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || strings.ContainsRune(`\/<>:"|?*`, r) {
+			return '_'
+		}
+		return r
+	}, value)
+	value = strings.TrimRight(strings.TrimSpace(value), ". ")
+	if value == "" {
 		return "sala"
 	}
+	stem, rest := value, ""
+	if i := strings.IndexByte(value, '.'); i >= 0 {
+		stem, rest = value[:i], value[i:]
+	}
+	if reservedName(strings.TrimRight(stem, " ")) {
+		value = stem + "_" + rest
+	}
 	return value
+}
+
+func reservedName(name string) bool {
+	switch strings.ToUpper(name) {
+	case "CON", "PRN", "AUX", "NUL":
+		return true
+	}
+	if len(name) != 4 {
+		return false
+	}
+	prefix := strings.ToUpper(name[:3])
+	return (prefix == "COM" || prefix == "LPT") && name[3] >= '0' && name[3] <= '9'
 }

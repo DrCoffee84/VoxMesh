@@ -2,7 +2,7 @@
 
 > **Context for AI Agents & Developers**: This document is a token-efficient, high-density map of the entire VoxMesh codebase. Read this first to understand the architecture, data structures, threading rules, and pipelines without scanning multiple source files.
 >
-> **Pending work lives in [AGENDA.md](AGENDA.md)**, one task per ID (`S1`…`S9` security, `R1`…`R4` stability, `T1` CI, `F1`…`F3` features, `C1` details). Read its "Cómo usar esta agenda" first: one chat = one task, verify line numbers (they drift), build with CGO, and update this file when a rule, protocol or structure changes. Known security holes are summarized in §K: don't assume the network side is safe.
+> **Pending work lives in [AGENDA.md](AGENDA.md)**, one task per ID (`S1`…`S11` security, `R1`…`R4` stability, `T1` CI, `F1`…`F3` features, `C1` details). Read its "Cómo usar esta agenda" first: one chat = one task, verify line numbers (they drift), build with CGO, and update this file when a rule, protocol or structure changes. Known security holes are summarized in §K: don't assume the network side is safe.
 
 ---
 
@@ -52,7 +52,7 @@ VoxMesh/
 │   │   ├── params.go              # Params: THE table of every numeric/bool setting (default, range, step, unit, label, profile). See §3.I.
 │   │   ├── profiles.go            # Audio profiles: one JSON per profile in <AppDir>/perfiles/<entrada|salida>/, Default built in, migration.
 │   │   └── audio.go               # Internal (not user-tunable) audio constants: send attack, softClip, bus attack, Opus max packet, jitter splice/fade/cooldown/quiet RMS/window/histogram/peaks, network stream eviction.
-│   ├── history/history.go         # Message store for chat and sync between peers (JSON Lines per room), images, soundboard files, manifest and tombstones. Paths = room dir + safeName(id) + ext; ext is NOT validated yet (AGENDA S1, §K).
+│   ├── history/history.go         # Message store for chat and sync between peers (JSON Lines per room), images, soundboard files, manifest and tombstones. Asset paths are validated (32-hex ID + whitelisted ext) and opened through os.Root (§K).
 │   ├── logging/logging.go         # Daily log file (pruned after 48 h), levels Error/Control/Trace, Guard/Recover, crash output. TracedRWMutex: at level 2 logs only waits > 100 ms (deadlock trail), silent otherwise.
 │   ├── netinfo/netinfo.go         # Local IP resolution, public IP, UPnP: MapUDP(candidate external ports → listen port) returns a *Mapping (keeps the router client); Mapping.Unmap deletes it with one request.
 │   ├── phonemic/server.go         # Phone-as-Mic server (UDP discovery + WebSocket/HTTP). forwardPCM: fixed 20 ms schedule that catches up (never skips), audio-priority thread, frames stamped with their scheduled time.
@@ -288,7 +288,7 @@ Reviewed 2026-10-26. Task details and fixes are in AGENDA §1.1; this is the sum
 * **Client side is scoped**: a client only processes audio/chat/assets/`RoomState`/`RoomLeave` from its host (`Failover.Seen`, §3.E4). A malicious host is out of scope except for file paths and image decoding.
 * **Host side trusts everyone** (AGENDA S2): `handlePacket`/`handleHostPacket` call `udp.AddPeer` for any sender before any check, so an unknown address joins the broadcast list without appearing as a participant. Chat, history sync, asset requests, soundboard sync and leaves are handled regardless of origin. Non-participant peers are never removed.
 * **Identity is taken from payloads** (AGENDA S3): participant IDs in `RoomHello`, audio, chat (`SenderID`/`Username`/`System`) and `RoomLeave` are not bound to the sender address; `Failover.StateFrom` switches/steps down toward the packet's source address without checking it is the `HostID`'s address. The pattern to copy is `State.SetMuted(id, addr, …)`, which only accepts from the registered address.
-* **File paths**: `history` joins network-supplied extensions without validation (AGENDA S1). Any new code that turns a network string into a path must validate it (whitelist) — don't add new callers until S1 lands.
+* **File paths** (S1, done): every `history.Store` asset path goes through `imageName`/`soundName`: ID must be `NewID`'s 32 lowercase hex, extension lower-cased and whitelisted (images `.png .jpg .jpeg .gif .webp`, sounds `.pcm .wav`; empty sound ext = `.wav`), and file I/O runs inside `os.OpenRoot(roomDir)`. `ImagePath`/`SoundPath` return an error. The UI drops invalid network assets early with `a.netAssetOK`/`a.netSoundsOK` (`network_sync.go`; chunks, missing requests, history-sync images, `sound_add`/`sound_play`, both soundboard syncs), logged at level 1 rate-limited. `safeName` (room folder) strips separators, `<>:"|?*`, control chars and trailing dots/spaces, and suffixes Windows reserved names with `_`. New asset kinds or extensions: add them to the whitelist, never bypass it.
 * **Resource limits**: `assets.Assembler` (S6), image dimensions before decode (S5) and the participant list (S2) have no caps.
 * **Privacy**: chat image messages carry the sender's absolute local path in `Message.ImagePath` (S8). `RoomState` carries every participant's public `IP:port` (needed for migration; accepted).
 * **Updater**: HTTPS only, no hash/signature check, any `.exe` asset accepted (S7).

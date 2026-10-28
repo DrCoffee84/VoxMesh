@@ -105,6 +105,8 @@ func (a *App) submitChat() {
 	}
 }
 
+const unsupportedImageStatus = "Formato de imagen no soportado (PNG, JPG, GIF o WebP)."
+
 func (a *App) sendChatImageBytes(ext string, data []byte, caption string) {
 	if a.historyStore == nil || !a.connected() {
 		return
@@ -112,6 +114,11 @@ func (a *App) sendChatImageBytes(ext string, data []byte, caption string) {
 	imageID := history.NewID(a.participantID)
 	if ext == "" {
 		ext = ".png"
+	}
+	ext = strings.ToLower(ext)
+	if history.CheckImage(imageID, ext) != nil {
+		a.setStatus(unsupportedImageStatus)
+		return
 	}
 	filePath, saveErr := a.historyStore.SaveImage(imageID, ext, data)
 	if saveErr != nil {
@@ -299,7 +306,8 @@ func (a *App) buildChatMessageObject(m history.Message, isMatch bool) fyne.Canva
 
 	imagePath := ""
 	if m.Kind == "image" && a.historyStore != nil {
-		imagePath = a.historyStore.ImagePath(m.ImageID, m.ImageExt)
+		// Con un ID o extensión inválidos (mensaje de red) queda la fila sin imagen.
+		imagePath, _ = a.historyStore.ImagePath(m.ImageID, m.ImageExt)
 	}
 	if imagePath != "" && fileExists(imagePath) {
 		img := newChatThumbnail(imagePath)
@@ -558,6 +566,13 @@ func (a *App) sendImageFile(path string) {
 	if a.historyStore == nil || !a.connected() {
 		return
 	}
+	// El selector permite "Todos los archivos": se rechaza antes de leerlo.
+	imageID := history.NewID(a.participantID)
+	extension := strings.ToLower(filepath.Ext(path))
+	if history.CheckImage(imageID, extension) != nil {
+		a.setStatus(unsupportedImageStatus)
+		return
+	}
 	data, readErr := os.ReadFile(path)
 	if readErr != nil {
 		logging.Errorf("leer imagen %q: %s", path, logging.FormatError(readErr))
@@ -567,11 +582,6 @@ func (a *App) sendImageFile(path string) {
 	if len(data) > assets.MaxBytes {
 		a.setStatus(fmt.Sprintf("El archivo supera el límite de %d MiB.", assets.MaxBytes/1024/1024))
 		return
-	}
-	imageID := history.NewID(a.participantID)
-	extension := filepath.Ext(path)
-	if extension == "" {
-		extension = ".bin"
 	}
 	path, saveErr := a.historyStore.SaveImage(imageID, extension, data)
 	if saveErr != nil {
