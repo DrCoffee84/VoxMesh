@@ -74,7 +74,7 @@ func TestWriteConfigPersistsBaselineWhileSettingsOpen(t *testing.T) {
 	a.cfgBaseline.Store(&baseline)
 	a.updateConfig(func(c *config.Config) {
 		c.VADThreshold = 0.9
-		c.LastPeer = "10.0.0.2:47830"
+		c.PhoneMicToken = "nuevo"
 	})
 	if err := a.writeConfig(); err != nil {
 		t.Fatal(err)
@@ -86,8 +86,8 @@ func TestWriteConfigPersistsBaselineWhileSettingsOpen(t *testing.T) {
 	if saved.VADThreshold != baseline.VADThreshold {
 		t.Fatalf("se persistió el borrador: vad_threshold=%v", saved.VADThreshold)
 	}
-	if saved.LastPeer != "10.0.0.2:47830" {
-		t.Fatalf("no se persistió el campo de segundo plano: last_peer=%q", saved.LastPeer)
+	if saved.PhoneMicToken != "nuevo" {
+		t.Fatalf("no se persistió el campo de segundo plano: phone_mic_token=%q", saved.PhoneMicToken)
 	}
 
 	a.cfgBaseline.Store(nil) // Guardar

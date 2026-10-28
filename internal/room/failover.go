@@ -24,6 +24,8 @@ import (
 //     por si vuelve) cada Retry y después cada Ping, hasta Announce.
 //   - Un host que recibe el estado de otro host con más autoridad (epoch mayor, o igual con ID
 //     menor) se baja y se pasa a esa sala. Un cliente se pasa a la sala de epoch mayor.
+//   - Al entrar, antes del primer estado de la sala: RoomHello cada Ping y, si el host no contesta
+//     en Join, se rinde (con una invitación equivocada el host descarta todo en silencio).
 type Failover struct {
 	mu      sync.Mutex
 	timings FailoverTimings
@@ -31,8 +33,9 @@ type Failover struct {
 	phase   failoverPhase
 	stopped bool
 
-	hostID   string
+	hostID   string // "" hasta el primer estado del host: todavía entrando
 	hostAddr string
+	joinedAt time.Time
 	lastHost time.Time // último paquete del host
 	lastPing time.Time
 	epoch    uint64
@@ -62,6 +65,7 @@ type FailoverTimings struct {
 	Retry         time.Duration // ritmo de RoomHello, estado y pings durante la migración
 	Ping          time.Duration // ping al host
 	Announce      time.Duration // cuánto sigue avisando el host nuevo a los que no entraron
+	Join          time.Duration // al entrar: sin respuesta del host, invitación equivocada o host caído
 }
 
 // DefaultFailoverTimings son los tiempos de la app.
@@ -73,6 +77,7 @@ func DefaultFailoverTimings() FailoverTimings {
 		Retry:         500 * time.Millisecond,
 		Ping:          2 * time.Second,
 		Announce:      2 * time.Minute,
+		Join:          10 * time.Second,
 	}
 }
 
@@ -142,7 +147,7 @@ func (f *Failover) Stop() {
 	f.actions = nil
 }
 
-// JoinedAsClient arranca como cliente del host en hostAddr.
+// JoinedAsClient arranca como cliente del host en hostAddr (ya se le mandó el RoomHello).
 func (f *Failover) JoinedAsClient(hostAddr string, now time.Time) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -152,8 +157,10 @@ func (f *Failover) JoinedAsClient(hostAddr string, now time.Time) {
 	f.phase = phaseClient
 	f.hostID = ""
 	f.hostAddr = hostAddr
+	f.joinedAt = now
 	f.lastHost = now
 	f.lastPing = now
+	f.lastHello = now
 }
 
 // Hosting dice que soy el host de state (al abrir la sala y cada vez que entra alguien): sirve para
@@ -314,6 +321,10 @@ func (f *Failover) Tick(now time.Time) {
 	}
 	switch f.phase {
 	case phaseClient:
+		if f.hostID == "" {
+			f.tickJoining(now)
+			return
+		}
 		f.pingHost(now)
 		if now.Sub(f.lastHost) > f.timings.HostSilence {
 			f.phase = phaseReconnecting
@@ -363,6 +374,24 @@ func (f *Failover) Tick(now time.Time) {
 		}
 	}
 }
+
+// tickJoining: todavía no llegó el estado de la sala. No hay a quién migrar: se reintenta el
+// RoomHello y, pasado Join, se rinde.
+func (f *Failover) tickJoining(now time.Time) {
+	if now.Sub(f.joinedAt) > f.timings.Join {
+		f.phase = phaseIdle
+		f.emit(Action{Kind: ActGiveUp, Text: JoinFailedMessage})
+		return
+	}
+	if now.Sub(f.lastHello) >= f.timings.Ping {
+		f.lastHello = now
+		f.emit(Action{Kind: ActHello, Addr: f.hostAddr})
+	}
+}
+
+// JoinFailedMessage es el aviso al cliente que no pudo entrar: el host no contestó nada que se
+// pudiera abrir con la clave de la invitación.
+const JoinFailedMessage = "Código incorrecto o host inalcanzable."
 
 func (f *Failover) startMigration(now time.Time, candidates []Participant, onPurpose bool, text string) {
 	f.phase = phaseMigrating

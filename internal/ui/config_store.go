@@ -57,7 +57,7 @@ func (a *App) configSaver() {
 // writeConfig escribe la instantánea vigente. cfgSaveMu evita que dos escrituras de
 // voxmesh.json se intercalen (configSaver y flushConfig al salir).
 // Con la vista de ajustes abierta, LiveSettings en memoria es un borrador sin confirmar: se
-// escribe la base tomada al abrirla, junto con los campos de segundo plano vigentes (LastPeer,
+// escribe la base tomada al abrirla, junto con los campos de segundo plano vigentes (sala,
 // token del celular...). Así un guardado de receiveLoop, o cerrar la app, no persiste el borrador.
 func (a *App) writeConfig() error {
 	a.cfgSaveMu.Lock()

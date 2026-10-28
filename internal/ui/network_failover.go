@@ -6,9 +6,6 @@ import (
 	"net"
 	"time"
 
-	"fyne.io/fyne/v2"
-
-	"voxmesh/internal/config"
 	"voxmesh/internal/logging"
 	"voxmesh/internal/room"
 	"voxmesh/internal/transport"
@@ -32,6 +29,7 @@ func (a *App) failoverLoop(udp *transport.UDP, fo *room.Failover, stop <-chan st
 	ticker := time.NewTicker(failoverTick)
 	defer ticker.Stop()
 	var lastResync time.Time
+	var rejected rejectedPackets
 	for {
 		select {
 		case <-stop:
@@ -49,6 +47,7 @@ func (a *App) failoverLoop(udp *transport.UDP, fo *room.Failover, stop <-chan st
 			}
 		case <-fo.Wake():
 		}
+		rejected.check(udp)
 		for _, action := range fo.Drain() {
 			if a.transport.Load() != udp {
 				return // la sala se cerró (también por un ActGiveUp de este mismo lote)
@@ -57,6 +56,23 @@ func (a *App) failoverLoop(udp *transport.UDP, fo *room.Failover, stop <-chan st
 			logging.Guard("migración de host", func() { a.runFailoverAction(udp, fo, action) })
 		}
 	}
+}
+
+// rejectedPackets loguea los datagramas que Receive descartó porque no abren con la clave de la
+// sala (un desconocido, una invitación vieja o equivocada, basura de un scanner): como máximo una
+// línea cada receiveErrorLogEvery, a nivel 1.
+type rejectedPackets struct {
+	logged  uint64
+	lastLog time.Time
+}
+
+func (r *rejectedPackets) check(udp *transport.UDP) {
+	total := udp.Invalid()
+	if total == r.logged || time.Since(r.lastLog) < receiveErrorLogEvery {
+		return
+	}
+	logging.Infof("Paquetes descartados (%d): no abren con la clave de la sala (último de %s)", total-r.logged, udp.LastInvalid())
+	r.logged, r.lastLog = total, time.Now()
 }
 
 func (a *App) runFailoverAction(udp *transport.UDP, fo *room.Failover, action room.Action) {
@@ -123,13 +139,7 @@ func (a *App) switchHost(udp *transport.UDP, address *net.UDPAddr, state room.St
 	endpoint := address.String()
 	logging.Infof("Host de la sala en %s (epoch %d)", endpoint, state.Epoch)
 	a.setEndpoint(endpoint)
-	a.updateConfig(func(c *config.Config) { c.LastPeer = endpoint })
-	a.saveConfig()
-	fyne.Do(func() {
-		if a.endpointEntry != nil {
-			a.endpointEntry.SetText(endpoint)
-		}
-	})
+	a.setRejoinInvite(endpoint, udp.Key())
 	a.handleRoomState(state, udp)
 	a.requestSoundSync()
 	a.sendRoomHello(udp, address)

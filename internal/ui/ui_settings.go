@@ -469,7 +469,7 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 			go a.restartAudioInRoom()
 		}
 	}
-	// discardSettings vuelve LiveSettings a la base (CAS: no pisa LastPeer, token, etc. que hayan
+	// discardSettings vuelve LiveSettings a la base (CAS: no pisa la sala, el token, etc. que hayan
 	// cambiado en el medio) y deshace los efectos que los callbacks aplicaron fuera de la config.
 	// El dispositivo de la sala no se toca en vivo (solo Guardar reinicia el audio), así que no hay
 	// nada que reabrir.

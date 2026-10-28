@@ -20,7 +20,7 @@ func TestLiveSettingsJSONIsFlat(t *testing.T) {
 	if _, nested := keys["LiveSettings"]; nested {
 		t.Fatal("LiveSettings aparece anidado en el JSON")
 	}
-	for _, key := range []string{"vad_threshold", "input_device", "log_level", "username", "last_peer"} {
+	for _, key := range []string{"vad_threshold", "input_device", "log_level", "username", "room_name"} {
 		if _, ok := keys[key]; !ok {
 			t.Fatalf("falta la clave %q en el nivel superior del JSON", key)
 		}
@@ -74,7 +74,6 @@ func TestRestoreLiveSettingsKeepsBackgroundFields(t *testing.T) {
 	cfg := Default()
 	baseline := cfg.LiveSettings
 	cfg.VADThreshold = 0.9
-	cfg.LastPeer = "10.0.0.2:47830"
 	cfg.PhoneMicToken = "nuevo"
 	if cfg.LiveSettings == baseline {
 		t.Fatal("un cambio de ajuste en vivo debería verse como pendiente")
@@ -83,7 +82,7 @@ func TestRestoreLiveSettingsKeepsBackgroundFields(t *testing.T) {
 	if cfg.VADThreshold != Default().VADThreshold {
 		t.Fatal("no se restauró el ajuste en vivo")
 	}
-	if cfg.LastPeer != "10.0.0.2:47830" || cfg.PhoneMicToken != "nuevo" {
+	if cfg.PhoneMicToken != "nuevo" {
 		t.Fatal("restaurar ajustes pisó campos de segundo plano")
 	}
 }

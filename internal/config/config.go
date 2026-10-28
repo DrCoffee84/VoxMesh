@@ -16,7 +16,7 @@ const (
 // Config es lo que se persiste en voxmesh.json. Los campos se dividen en dos grupos:
 //   - LiveSettings: los que la vista de ajustes aplica en vivo y revierte al descartar.
 //   - El resto: confirmados al tocar Guardar (Username, puertos) o escritos en segundo plano
-//     (LastPeer, token del celular, soundboard), que la vista de ajustes nunca revierte.
+//     (sala, token del celular, soundboard), que la vista de ajustes nunca revierte.
 //
 // Al agregar un campo, decidir en cuál de los dos va. LiveSettings está embebido sin tag, así
 // que encoding/json aplana sus campos: el archivo es un solo objeto plano.
@@ -25,7 +25,6 @@ type Config struct {
 	RoomName         string            `json:"room_name"`
 	Username         string            `json:"username"`
 	ListenAddress    string            `json:"listen_address"`
-	LastPeer         string            `json:"last_peer"`
 	PhoneMicToken    string            `json:"phone_mic_token"`
 	PhoneMicPort     int               `json:"phone_mic_port"`
 	SoundboardMuted  bool              `json:"soundboard_muted"`

@@ -1,8 +1,8 @@
 # VoxMesh
 
-Chat de voz y texto para grupos chicos de amigos, en **Windows**, en un único `voxmesh.exe` sin instalador. Uno abre una **sala**, los demás se conectan con su dirección y, si el host se va o se le corta internet, la sala **pasa sola a otro participante** sin que nadie tenga que reconectarse a mano.
+Chat de voz y texto para grupos chicos de amigos, en **Windows**, en un único `voxmesh.exe` sin instalador. Uno abre una **sala**, pasa la **invitación** por WhatsApp, los demás la pegan y, si el host se va o se le corta internet, la sala **pasa sola a otro participante** sin que nadie tenga que reconectarse a mano.
 
-> ⚠️ **Seguridad: leer antes de usar por internet.** Todavía no hay clave de sala ni cifrado: cualquiera que conozca la dirección `IP:puerto` del host puede comunicarse con la sala. Pasá la dirección solo a gente de confianza y cerrá la sala cuando no la uses (al cerrarla se borra el puerto abierto en el router). Las correcciones están en curso: ver [AGENDA.md](AGENDA.md) §1.1.
+> 🔒 **Seguridad.** Cada "Iniciar sala" genera una clave nueva (solo en memoria) que viaja dentro de la invitación. Todo lo de la sala (voz, chat, imágenes, sonidos, control) va cifrado y autenticado con esa clave: sin la invitación nadie puede escuchar ni entrar, aunque sepa la `IP:puerto`. **Quien tenga la invitación puede entrar**: pasala solo a tus amigos. Lo que no se oculta son las IPs de los participantes.
 
 ## Qué tiene
 
@@ -24,13 +24,15 @@ Chat de voz y texto para grupos chicos de amigos, en **Windows**, en un único `
 - Se actualiza sola desde GitHub Releases (pregunta antes, verifica el SHA-256 publicado y cierra bien la sala antes de reiniciar).
 - Logs diarios en `%AppData%\VoxMesh` (botón 📄), pensados para poder mandarlos cuando algo falla.
 
-**Todavía no tiene**: cancelación de eco (con parlantes, los demás pueden escucharse a sí mismos: usá auriculares), push-to-talk, link de invitación ni cifrado. Están planificados en [AGENDA.md](AGENDA.md).
+**Todavía no tiene**: cancelación de eco (con parlantes, los demás pueden escucharse a sí mismos: usá auriculares), ni push-to-talk. Están planificados en [AGENDA.md](AGENDA.md).
 
 ## Cómo se usa
 
-1. **Host**: "Iniciar sala" → elegí un nombre (o una sala anterior, con su historial) → "Copiar dirección" y pasásela a tus amigos.
-2. **Los demás**: pegan la dirección (`IP:puerto`) y aprietan "Conectar". El nombre de la sala lo manda el host.
-3. Ajustes (engranaje): nombre, dispositivos, filtro de voz, perfiles, volumen máximo por usuario, celular como micrófono, puertos, migración de host y nivel de log. Los cambios se escuchan en vivo, pero se guardan recién con **Guardar**.
+1. **Host**: "Iniciar sala" → elegí un nombre (o una sala anterior, con su historial) → **Invitar** (arriba, al lado del micrófono) → "Internet" → pegá la invitación (`VM1-…`) en WhatsApp.
+2. **Los demás**: copian la invitación, la pegan en el cuadro de "Cliente" y aprietan "Conectar". El nombre de la sala lo manda el host. Con una invitación equivocada o vieja aparece "Código incorrecto o host inalcanzable" a los 10 s.
+3. **Cualquiera de la sala puede invitar** con el mismo botón: sirve para el que llega tarde, o para el que cerró la app (incluso si era el host) y quiere volver. La invitación sigue valiendo aunque la sala haya cambiado de host; deja de valer cuando alguien vuelve a apretar "Iniciar sala".
+4. **Por LAN o VPN** (Tailscale, ZeroTier, Radmin: sin abrir puertos): el host aprieta **Invitar** y elige la opción "LAN/VPN" de la interfaz que corresponda (por ejemplo `Tailscale · 100.x.y.z:47830`).
+5. Ajustes (engranaje): nombre, dispositivos, filtro de voz, perfiles, volumen máximo por usuario, celular como micrófono, puertos, migración de host y nivel de log. Los cambios se escuchan en vivo, pero se guardan recién con **Guardar**.
 
 ### Red
 
@@ -39,7 +41,7 @@ Chat de voz y texto para grupos chicos de amigos, en **Windows**, en un único `
 - Todo pasa por el host: cada cliente le manda su voz y el host la reenvía a los demás.
 - **Si el host se corta**: a los 6 s los clientes muestran "Reconectando…"; si vuelve antes de 20 s, no pasa nada. Si se fue (o pasan los 20 s), el siguiente participante de la lista se vuelve host y los demás se pasan solos. Quien no quiera ser host de respaldo puede destildar "Permitir ser Host de respaldo si el Host se desconecta" en Ajustes.
 - Limitación: si los dos lados están detrás de NAT simétrico o CGNAT (algunos proveedores móviles o de fibra), la conexión directa no funciona y la app avisa.
-- **Todos tienen que usar la misma versión**: el formato de audio no es compatible entre versiones viejas y nuevas.
+- **Todos tienen que usar la misma versión**: el formato de los paquetes (cifrado, audio) no es compatible entre versiones viejas y nuevas.
 
 ### Dónde guarda cosas
 
@@ -100,7 +102,8 @@ cmd/voxmesh/        Entrada del ejecutable (limpia restos del updater y arranca 
 internal/audio/     Captura/reproducción (malgo), filtros, RNNoise, Opus, buffer de recepción, mezclador
 internal/ui/        Interfaz Fyne, red de la sala, chat, botonera, ajustes
 internal/room/      Estado de la sala, protocolo y migración de host (máquina de estados pura)
-internal/transport/ Socket UDP, cabecera de 16 bytes, cola con ritmo para archivos
+internal/transport/ Socket UDP, paquetes cifrados con la clave de la sala (AES-256-GCM), cola con ritmo para archivos
+internal/invite/    Código de invitación (dirección del host + clave)
 internal/assets/    Partir y rearmar archivos en chunks UDP
 internal/history/   Historial, imágenes y sonidos por sala
 internal/config/    voxmesh.json, tabla de parámetros de audio, perfiles

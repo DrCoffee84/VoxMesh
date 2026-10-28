@@ -2,7 +2,6 @@ package transport
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"net"
 	"sync"
@@ -12,7 +11,7 @@ import (
 )
 
 const (
-	magic              = "VM01"
+	magic              = "VM02"
 	HeaderSize         = 16
 	PacketAudio        = 1
 	PacketPing         = 3
@@ -88,43 +87,37 @@ type Packet struct {
 	// no medir el silencio como retardo de red (secuencia contigua, llegada muy posterior).
 	Talkspurt byte
 	Payload   []byte
+
+	// sealed son los bytes tal como llegaron (Receive): el host los reenvía sin volver a cifrar
+	// (Relay, TryRelayBulk).
+	sealed []byte
 }
 
-func encode(packet Packet) []byte {
-	data := make([]byte, HeaderSize+len(packet.Payload))
-	copy(data[:4], magic)
-	data[4] = packet.Kind
-	data[5] = packet.Flags
-	data[6] = packet.Talkspurt
-	binary.BigEndian.PutUint32(data[8:12], packet.Sequence)
-	binary.BigEndian.PutUint32(data[12:16], uint32(len(packet.Payload)))
-	copy(data[HeaderSize:], packet.Payload)
-	return data
-}
+// MaxPayloadSize es el payload más grande que entra en un datagrama sellado.
+const MaxPayloadSize = maxDatagram - HeaderSize - SealOverhead
 
-const MaxPayloadSize = 65507 - HeaderSize
-
-func decode(data []byte) (Packet, error) {
-	if len(data) < HeaderSize || len(data) > 65507 || string(data[:4]) != magic {
-		return Packet{}, fmt.Errorf("invalid VoxMesh packet")
-	}
-	payloadLength := int(binary.BigEndian.Uint32(data[12:16]))
-	if payloadLength < 0 || payloadLength > MaxPayloadSize || payloadLength != len(data)-HeaderSize {
-		return Packet{}, fmt.Errorf("invalid payload length")
-	}
-	return Packet{Kind: data[4], Flags: data[5], Talkspurt: data[6], Sequence: binary.BigEndian.Uint32(data[8:12]), Payload: data[HeaderSize:]}, nil
-}
+// sealBuffers son los buffers de Send/Broadcast: sellar no asigna memoria por paquete (audio).
+var sealBuffers = sync.Pool{New: func() any {
+	buf := make([]byte, 0, 2048)
+	return &buf
+}}
 
 // UDP guarda los peers como una lista copy-on-write: Broadcast (reenvío del host, audio
 // saliente) y el AddPeer de cada paquete recibido leen la instantánea con una carga atómica,
 // sin lock ni asignaciones. Solo los cambios reales de la lista toman peersMu, que serializa a
 // los escritores entre sí y nunca a un lector.
+//
+// Todo lo que entra y sale de la sala pasa por acá sellado con la clave de la sala (AES-256-GCM,
+// crypto.go): lo que no abre se descarta en Receive y se cuenta en Invalid.
 type UDP struct {
-	conn    *net.UDPConn
-	peersMu sync.Mutex
-	peers   atomic.Pointer[[]*net.UDPAddr] // inmutable una vez publicada
-	readBuf []byte                         // buffer de lectura de Receive (un solo lector: receiveLoop)
-	invalid atomic.Uint64                  // datagramas descartados por Receive (no VoxMesh)
+	conn        *net.UDPConn
+	key         Key
+	cipher      *roomCipher
+	peersMu     sync.Mutex
+	peers       atomic.Pointer[[]*net.UDPAddr] // inmutable una vez publicada
+	readBuf     []byte                         // buffer de lectura de Receive (un solo lector: receiveLoop)
+	invalid     atomic.Uint64                  // datagramas descartados por Receive (no abren)
+	lastInvalid atomic.Pointer[net.UDPAddr]    // origen del último descartado (para el log)
 
 	bulk      chan bulkJob // archivos esperando turno (bulkLoop)
 	bulkOnce  sync.Once
@@ -132,15 +125,22 @@ type UDP struct {
 	closeOnce sync.Once
 }
 
-// bulkJob es un paquete de archivo para un destino, o para todos los peers menos except.
+// bulkJob es un paquete de archivo para un destino, o para todos los peers menos except. Si
+// sealed no es nil, sale tal cual (reenvío del host).
 type bulkJob struct {
 	packet    Packet
+	sealed    []byte
 	to        *net.UDPAddr
 	except    *net.UDPAddr
 	broadcast bool
 }
 
-func Listen(address string) (*UDP, error) {
+// Listen abre el socket de la sala con su clave.
+func Listen(address string, key Key) (*UDP, error) {
+	sealer, err := newRoomCipher(key)
+	if err != nil {
+		return nil, err
+	}
 	lc := net.ListenConfig{
 		Control: func(network, address string, c syscall.RawConn) error {
 			var controlErr error
@@ -168,6 +168,8 @@ func Listen(address string) (*UDP, error) {
 	_ = conn.SetWriteBuffer(SocketBufferBytes)
 	return &UDP{
 		conn:    conn,
+		key:     key,
+		cipher:  sealer,
 		readBuf: make([]byte, 64*1024),
 		bulk:    make(chan bulkJob, bulkQueue),
 		closed:  make(chan struct{}),
@@ -175,6 +177,9 @@ func Listen(address string) (*UDP, error) {
 }
 
 func (u *UDP) Address() *net.UDPAddr { return u.conn.LocalAddr().(*net.UDPAddr) }
+
+// Key es la clave de la sala de este socket (para armar la invitación).
+func (u *UDP) Key() Key { return u.key }
 
 // sameAddr compara como antes la clave addr.String() (IP + puerto + zona), sin asignar strings.
 func sameAddr(a, b *net.UDPAddr) bool {
@@ -239,7 +244,11 @@ func (u *UDP) Peers() []*net.UDPAddr {
 }
 
 func (u *UDP) Send(addr *net.UDPAddr, packet Packet) error {
-	_, err := u.conn.WriteToUDP(encode(packet), addr)
+	buf := sealBuffers.Get().(*[]byte)
+	data := u.cipher.seal(*buf, packet)
+	_, err := u.conn.WriteToUDP(data, addr)
+	*buf = data[:0]
+	sealBuffers.Put(buf)
 	return err
 }
 
@@ -248,7 +257,24 @@ func (u *UDP) Broadcast(packet Packet, except *net.UDPAddr) {
 	if len(peers) == 0 {
 		return
 	}
-	data := encode(packet) // una sola vez: antes se codificaba (y asignaba) por cada peer
+	buf := sealBuffers.Get().(*[]byte)
+	data := u.cipher.seal(*buf, packet) // una sola vez para todos los peers
+	u.writeAll(peers, data, except)
+	*buf = data[:0]
+	sealBuffers.Put(buf)
+}
+
+// Relay reenvía un paquete recibido (Receive) a todos los peers menos except, con los mismos
+// bytes que llegaron: ya se verificó al abrirlo y todos comparten la clave.
+func (u *UDP) Relay(packet Packet, except *net.UDPAddr) {
+	if packet.sealed == nil {
+		u.Broadcast(packet, except)
+		return
+	}
+	u.writeAll(u.snapshot(), packet.sealed, except)
+}
+
+func (u *UDP) writeAll(peers []*net.UDPAddr, data []byte, except *net.UDPAddr) {
 	for _, peer := range peers {
 		if except != nil && sameAddr(peer, except) {
 			continue
@@ -259,9 +285,10 @@ func (u *UDP) Broadcast(packet Packet, except *net.UDPAddr) {
 
 // Receive lee un paquete. No es seguro para lectores concurrentes (reutiliza readBuf); solo lo
 // llama receiveLoop. El paquete devuelto es una copia del tamaño justo: los handlers asíncronos
-// (chat, assets) retienen el payload después de la próxima lectura.
-// Los datagramas que no son VoxMesh (scanners de Internet: con UPnP el puerto queda abierto) se
-// descartan acá y se cuentan en Invalid; antes el error de decode cortaba receiveLoop. Solo
+// (chat, assets) retienen el payload después de la próxima lectura. Una sola asignación por
+// paquete: los bytes sellados (para Relay) y el payload descifrado van en el mismo bloque.
+// Lo que no abre con la clave de la sala (scanners de Internet, una invitación vieja o
+// equivocada, un paquete alterado) se descarta acá en silencio y se cuenta en Invalid. Solo
 // devuelve errores del socket.
 func (u *UDP) Receive() (Packet, *net.UDPAddr, error) {
 	for {
@@ -269,17 +296,33 @@ func (u *UDP) Receive() (Packet, *net.UDPAddr, error) {
 		if err != nil {
 			return Packet{}, nil, err
 		}
-		packet, err := decode(append([]byte(nil), u.readBuf[:n]...))
-		if err != nil {
-			u.invalid.Add(1)
+		if !validFrame(u.readBuf[:n]) {
+			u.reject(addr)
 			continue
 		}
+		block := make([]byte, n+n-sealedSize(0))
+		sealed := block[:n:n]
+		copy(sealed, u.readBuf[:n])
+		packet, err := u.cipher.open(block[n:], sealed)
+		if err != nil {
+			u.reject(addr)
+			continue
+		}
+		packet.sealed = sealed
 		return packet, addr, nil
 	}
 }
 
-// Invalid cuenta los datagramas descartados por no ser paquetes VoxMesh válidos.
+func (u *UDP) reject(addr *net.UDPAddr) {
+	u.invalid.Add(1)
+	u.lastInvalid.Store(addr)
+}
+
+// Invalid cuenta los datagramas descartados porque no abren con la clave de la sala.
 func (u *UDP) Invalid() uint64 { return u.invalid.Load() }
+
+// LastInvalid es el origen del último datagrama descartado (nil si no hubo).
+func (u *UDP) LastInvalid() *net.UDPAddr { return u.lastInvalid.Load() }
 
 // SendBulk encola un paquete de archivo para addr (ritmo BulkRateBytes). Espera si la cola está
 // llena, así que se llama desde goroutines propias, nunca desde receiveLoop. Devuelve false si el
@@ -296,10 +339,11 @@ func (u *UDP) BroadcastBulk(packet Packet, except *net.UDPAddr) bool {
 	return u.enqueueBulk(bulkJob{packet: packet, except: except, broadcast: true}, true)
 }
 
-// TryBroadcastBulk encola sin esperar (reenvío del host desde receiveLoop). Con la cola llena el
-// paquete no se reenvía: a quien le falte lo pide de nuevo (AssetMissing).
-func (u *UDP) TryBroadcastBulk(packet Packet, except *net.UDPAddr) bool {
-	return u.enqueueBulk(bulkJob{packet: packet, except: except, broadcast: true}, false)
+// TryRelayBulk encola sin esperar el reenvío de un paquete recibido (host, desde receiveLoop),
+// con los mismos bytes que llegaron. Con la cola llena el paquete no se reenvía: a quien le falte
+// lo pide de nuevo (AssetMissing).
+func (u *UDP) TryRelayBulk(packet Packet, except *net.UDPAddr) bool {
+	return u.enqueueBulk(bulkJob{packet: packet, sealed: packet.sealed, except: except, broadcast: true}, false)
 }
 
 func (u *UDP) enqueueBulk(job bulkJob, wait bool) bool {
@@ -325,6 +369,7 @@ func (u *UDP) enqueueBulk(job bulkJob, wait bool) bool {
 func (u *UDP) bulkLoop() {
 	bucket := newTokenBucket(BulkRateBytes, bulkBurstBytes)
 	defer bucket.stop()
+	var buf []byte // esta goroutine es la única que sella archivos: se reutiliza
 	for {
 		var job bulkJob
 		select {
@@ -332,7 +377,11 @@ func (u *UDP) bulkLoop() {
 			return
 		case job = <-u.bulk:
 		}
-		data := encode(job.packet)
+		data := job.sealed
+		if data == nil {
+			buf = u.cipher.seal(buf, job.packet)
+			data = buf
+		}
 		targets := []*net.UDPAddr{job.to}
 		if job.broadcast {
 			targets = u.snapshot()

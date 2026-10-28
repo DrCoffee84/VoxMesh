@@ -69,10 +69,11 @@ func (a *App) handlePacket(udp *transport.UDP, fo *room.Failover, packet transpo
 		}
 	}()
 	now := time.Now()
-	// Audio: el host lo reenvía antes que nada, sin esperar a procesarlo.
+	// Audio: el host lo reenvía antes que nada, sin esperar a procesarlo (los mismos bytes que
+	// llegaron: Receive ya lo abrió con la clave de la sala).
 	if packet.Kind == transport.PacketAudio && a.hostMode.Load() {
 		udp.AddPeer(addr)
-		udp.Broadcast(packet, addr)
+		udp.Relay(packet, addr)
 	}
 	addrStr := addr.String() // una sola vez por paquete
 	if logging.IsTrace() {
@@ -123,14 +124,14 @@ func (a *App) handleHostPacket(udp *transport.UDP, fo *room.Failover, packet tra
 		a.handleAudioPacket(packet)
 	case transport.PacketChat:
 		a.handleChatPacket(packet.Payload)
-		udp.Broadcast(packet, addr)
+		udp.Relay(packet, addr)
 	case transport.PacketChatSync:
 		a.handleSyncPacket(udp, addr, packet.Payload, true)
 	case transport.PacketAssetChunk:
 		a.handleAssetChunk(packet.Payload, addrStr)
 		// Reenvío con ritmo y sin esperar: receiveLoop sigue entregando la voz. Si la cola
 		// está llena, a quien le falte el chunk lo pide de nuevo (AssetMissing).
-		udp.TryBroadcastBulk(packet, addr)
+		udp.TryRelayBulk(packet, addr)
 	case transport.PacketAssetMissing:
 		a.handleAssetMissing(udp, addr, packet.Payload)
 	case transport.PacketRoomMute:
@@ -283,14 +284,7 @@ func (a *App) handleRoomHello(udp *transport.UDP, fo *room.Failover, payload []b
 	// Si me voy, la dirección para volver es la del que queda de host: la que vio este socket (su
 	// salida a internet), no la IP con el puerto por defecto.
 	if candidate, ok := a.roomState.NextHost(); ok && candidate.Address != "" {
-		candidateTarget := candidate.Address
-		a.updateConfig(func(c *config.Config) { c.LastPeer = candidateTarget })
-		a.saveConfig()
-		fyne.Do(func() {
-			if a.endpointEntry != nil {
-				a.endpointEntry.SetText(candidateTarget)
-			}
-		})
+		a.setRejoinInvite(candidate.Address, udp.Key())
 	}
 	logging.Infof("Cliente conectado: %s (%s)", joining.Username, addrStr)
 	joinedUser := joining.Username

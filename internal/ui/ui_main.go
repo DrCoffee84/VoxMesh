@@ -56,6 +56,7 @@ type App struct {
 	arrivalEngine   *audio.Engine          // Engine al que está enganchada arrivalRec
 	endpoint        atomic.Pointer[endpointInfo]
 	upnpMapping     atomic.Pointer[netinfo.Mapping] // regla UPnP de la sala (nil = ninguna), para borrarla al cerrar
+	rejoinInvite    atomic.Pointer[string]          // invitación para volver a entrar (solo en memoria, nunca a disco)
 	status          *widget.Label
 	peerHBox        *fyne.Container
 	hostPanel       *fyne.Container

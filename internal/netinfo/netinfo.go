@@ -211,3 +211,39 @@ func LocalIPv4() (net.IP, error) {
 	}
 	return addr.IP.To4(), nil
 }
+
+// InterfaceIP es una IPv4 de una interfaz de red de esta PC (Ethernet, Wi-Fi, Tailscale, ZeroTier,
+// Radmin…), para invitar por LAN/VPN.
+type InterfaceIP struct {
+	Name string
+	IP   net.IP
+}
+
+// LocalIPv4s lista las IPv4 de las interfaces activas, sin loopback ni link-local (169.254.x.x),
+// ordenadas como las devuelve el sistema.
+func LocalIPv4s() ([]InterfaceIP, error) {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return nil, err
+	}
+	var result []InterfaceIP
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ipNet, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			if ip := ipNet.IP.To4(); ip != nil && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() {
+				result = append(result, InterfaceIP{Name: iface.Name, IP: ip})
+			}
+		}
+	}
+	return result, nil
+}

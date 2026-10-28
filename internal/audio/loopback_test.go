@@ -21,12 +21,12 @@ func TestLoopbackRoom(t *testing.T) {
 	if testing.Short() {
 		t.Skip("prueba de tiempo real")
 	}
-	receiver, err := transport.Listen("127.0.0.1:0")
+	receiver, err := transport.Listen("127.0.0.1:0", transport.Key{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer receiver.Close()
-	sender, err := transport.Listen("127.0.0.1:0")
+	sender, err := transport.Listen("127.0.0.1:0", transport.Key{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestLoopbackRoom(t *testing.T) {
 				return
 			}
 			mu.Lock()
-			if size := transport.HeaderSize + len(packet.Payload); size > maxPacket {
+			if size := transport.HeaderSize + transport.SealOverhead + len(packet.Payload); size > maxPacket {
 				maxPacket = size
 			}
 			mu.Unlock()

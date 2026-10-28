@@ -8,7 +8,7 @@ import (
 )
 
 func TestPeersCopyOnWrite(t *testing.T) {
-	udp, err := Listen("127.0.0.1:0")
+	udp, err := Listen("127.0.0.1:0", testKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestPeersCopyOnWrite(t *testing.T) {
 // Lectores (Broadcast/AddPeer de peers conocidos) y escritores en paralelo: con -race esto
 // detecta cualquier acceso sin sincronizar a la lista.
 func TestPeersConcurrentAccess(t *testing.T) {
-	udp, err := Listen("127.0.0.1:0")
+	udp, err := Listen("127.0.0.1:0", testKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,12 +69,12 @@ func TestPeersConcurrentAccess(t *testing.T) {
 // Receive reutiliza el buffer de lectura: el payload devuelto tiene que ser una copia que
 // sobreviva a la lectura siguiente (los handlers de chat/assets lo retienen).
 func TestReceiveCopiesPayloadAndKeepsTalkspurt(t *testing.T) {
-	server, err := Listen("127.0.0.1:0")
+	server, err := Listen("127.0.0.1:0", testKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer server.Close()
-	client, err := Listen("127.0.0.1:0")
+	client, err := Listen("127.0.0.1:0", testKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,12 +109,12 @@ func TestReceiveCopiesPayloadAndKeepsTalkspurt(t *testing.T) {
 
 // Los archivos salen al ritmo de BulkRateBytes: sin esto un sonido de 8 MB saturaba la subida.
 func TestUDP_BulkIsPaced(t *testing.T) {
-	sender, err := Listen("127.0.0.1:0")
+	sender, err := Listen("127.0.0.1:0", testKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer sender.Close()
-	receiver, err := Listen("127.0.0.1:0")
+	receiver, err := Listen("127.0.0.1:0", testKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestUDP_BulkIsPaced(t *testing.T) {
 		}
 	}
 	// La ráfaga deja pasar bulkBurstBytes de entrada; el resto sale a BulkRateBytes.
-	total := packets * (HeaderSize + len(payload))
+	total := packets * sealedSize(len(payload))
 	minimum := time.Duration(float64(total-bulkBurstBytes) / BulkRateBytes * float64(time.Second))
 	if elapsed := last.Sub(start); elapsed < minimum*9/10 {
 		t.Fatalf("bulk not paced: %d bytes in %v, want at least %v", total, elapsed, minimum)
@@ -155,7 +155,7 @@ func TestUDP_BulkIsPaced(t *testing.T) {
 
 // Cerrar el socket destraba a quien espera lugar en la cola de archivos.
 func TestUDP_CloseUnblocksSendBulk(t *testing.T) {
-	udp, err := Listen("127.0.0.1:0")
+	udp, err := Listen("127.0.0.1:0", testKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,12 +187,12 @@ func TestUDP_CloseUnblocksSendBulk(t *testing.T) {
 // Basura en el puerto (scanners) y el ICMP "port unreachable" de mandarle algo a un peer que ya
 // cerró no cortan Receive: antes cualquiera de los dos dejaba sordo a receiveLoop.
 func TestReceiveSurvivesJunkAndClosedPeer(t *testing.T) {
-	server, err := Listen("127.0.0.1:0")
+	server, err := Listen("127.0.0.1:0", testKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer server.Close()
-	client, err := Listen("127.0.0.1:0")
+	client, err := Listen("127.0.0.1:0", testKey)
 	if err != nil {
 		t.Fatal(err)
 	}

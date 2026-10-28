@@ -14,9 +14,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
-	"github.com/atotto/clipboard"
 
-	"voxmesh/internal/config"
 	"voxmesh/internal/imagefile"
 	"voxmesh/internal/logging"
 	"voxmesh/internal/version"
@@ -108,10 +106,7 @@ func (a *App) content() fyne.CanvasObject {
 		}
 	})
 	endpoint := newScrollableEntry()
-	endpoint.SetPlaceHolder(fmt.Sprintf("IP del host (puerto por defecto %d)", config.DefaultListenPort))
-	if lastPeer := a.conf().LastPeer; lastPeer != "" {
-		endpoint.SetText(lastPeer)
-	}
+	endpoint.SetPlaceHolder("Pegá la invitación (VM1-…)")
 	endpoint.OnSubmitted = func(text string) { a.connectClient(text) }
 	a.endpointEntry = endpoint
 	a.connectButton = widget.NewButton("Conectar", func() { a.connectClient(endpoint.Text) })
@@ -120,18 +115,6 @@ func (a *App) content() fyne.CanvasObject {
 	a.createButton = widget.NewButton("Iniciar sala", a.createHost)
 	a.stopButton = widget.NewButton("Parar sala", a.stopConnection)
 	a.stopButton.Disable()
-	copy := widget.NewButton("Copiar dirección", func() {
-		address := a.endpointText()
-		if address == "" {
-			a.setStatus("Primero crea una sala.")
-			return
-		}
-		if err := clipboard.WriteAll(address); err != nil {
-			a.setStatus("No se pudo copiar: " + err.Error())
-			return
-		}
-		a.setStatus("Dirección copiada: " + address)
-	})
 
 	chatInput := newChatInputEntry(a)
 	chatInput.SetPlaceHolder("Escribe un mensaje...")
@@ -159,7 +142,6 @@ func (a *App) content() fyne.CanvasObject {
 		widget.NewLabelWithStyle("Host", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		a.createButton,
 		a.stopButton,
-		copy,
 	)
 	a.hostPanel = uiCard(hostContent)
 
@@ -236,12 +218,16 @@ func (a *App) content() fyne.CanvasObject {
 	})
 	resetAudioBtn.Importance = widget.LowImportance
 
+	inviteBtn := widget.NewButtonWithIcon("Invitar", theme.ContentCopyIcon(), nil)
+	inviteBtn.OnTapped = func() { a.showInviteMenu(inviteBtn) }
+	inviteBtn.Importance = widget.LowImportance
+
 	a.muteButton = widget.NewButtonWithIcon("", micIcon, a.toggleMute)
 	a.muteButton.Importance = widget.LowImportance
 	a.refreshMuteButton()
 
 	leftTop := container.NewHBox(toggleRoomsBtn, a.topHangupBtn, title)
-	topBar := container.NewBorder(nil, nil, leftTop, container.NewHBox(a.muteButton, resetAudioBtn, settingsBtn), leftTop)
+	topBar := container.NewBorder(nil, nil, leftTop, container.NewHBox(inviteBtn, a.muteButton, resetAudioBtn, settingsBtn), leftTop)
 	centerPanel := container.NewBorder(statusCard, nil, nil, nil, chatCard)
 	main := container.NewBorder(nil, nil, a.connectionPanel, a.soundPanel, centerPanel)
 	a.bottomBar = container.NewBorder(nil, nil, a.status, container.NewHBox(buildVersion, openLogs), nil)

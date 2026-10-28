@@ -333,6 +333,44 @@ func TestFailover_RefusedBeforeJoiningGivesUp(t *testing.T) {
 	}
 }
 
+// Invitación con la clave equivocada (o host caído): el host descarta todo en silencio. El cliente
+// reintenta el RoomHello, no dice "Reconectando…" ni intenta migrar, y a los Join se rinde.
+func TestFailover_JoinWithoutAnswerGivesUp(t *testing.T) {
+	timings := DefaultFailoverTimings()
+	f := NewFailover("A", timings)
+	f.JoinedAsClient(hostAddr, foT0)
+	actions := run(f, 0, timings.Join, nil)
+	if hellos := count(actions, ActHello, hostAddr); hellos != int(timings.Join/timings.Ping) {
+		t.Fatalf("RoomHello al host = %d, quería uno cada %v", hellos, timings.Ping)
+	}
+	if count(actions, ActGiveUp, "") != 0 || count(actions, ActStatus, "") != 0 || count(actions, ActPing, "") != 0 {
+		t.Fatalf("antes del plazo solo reintenta el RoomHello: %+v", actions)
+	}
+	actions = run(f, timings.Join, timings.Join+time.Second, nil)
+	if giveUp := find(t, actions, ActGiveUp); giveUp.Text != JoinFailedMessage {
+		t.Fatalf("aviso %q, quería %q", giveUp.Text, JoinFailedMessage)
+	}
+	if actions := run(f, timings.Join+time.Second, time.Minute, nil); len(actions) != 0 {
+		t.Fatalf("después de rendirse no hace nada más: %+v", actions)
+	}
+}
+
+// Si el primer RoomHello se perdió, el reintento entra antes del plazo y la sala sigue normal.
+func TestFailover_JoinAnsweredLateStays(t *testing.T) {
+	f := NewFailover("A", DefaultFailoverTimings())
+	f.JoinedAsClient(hostAddr, foT0)
+	run(f, 0, 3*time.Second, nil)
+	at := foT0.Add(3 * time.Second)
+	if f.Seen(hostAddr, at) != FromHost {
+		t.Fatal("el primer paquete del host tiene que contar como del host")
+	}
+	f.HostState(testRoom(false), at)
+	actions := run(f, 3*time.Second, 30*time.Second, func(time.Duration) bool { return true })
+	if count(actions, ActGiveUp, "") != 0 || count(actions, ActHello, "") != 0 {
+		t.Fatalf("ya adentro no se rinde ni reintenta entrar: %+v", actions)
+	}
+}
+
 func TestFailover_RefusedAfterJoiningIsIgnored(t *testing.T) {
 	f := newClient("A", testRoom(false))
 	f.Refused("La sala está llena.")

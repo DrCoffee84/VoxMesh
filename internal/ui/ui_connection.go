@@ -19,6 +19,7 @@ import (
 	"voxmesh/internal/audio"
 	"voxmesh/internal/config"
 	"voxmesh/internal/history"
+	"voxmesh/internal/invite"
 	"voxmesh/internal/logging"
 	"voxmesh/internal/netinfo"
 	"voxmesh/internal/room"
@@ -72,8 +73,8 @@ func (a *App) stopConnectionAsync() <-chan struct{} {
 			a.leaveButton.Disable()
 		}
 		a.showConnectionPanels()
-		if lastPeer := a.conf().LastPeer; a.endpointEntry != nil && lastPeer != "" {
-			a.endpointEntry.SetText(lastPeer)
+		if rejoin := a.rejoinInvite.Load(); a.endpointEntry != nil && rejoin != nil {
+			a.endpointEntry.SetText(*rejoin)
 		}
 	})
 	a.setStatus("Sala detenida.")
@@ -212,10 +213,15 @@ func (a *App) openHost(roomName, username string) {
 		if listenAddr == "" {
 			listenAddr = config.DefaultListenAddress
 		}
+		// Clave nueva en cada "Iniciar sala", solo en memoria: la invitación vieja deja de servir.
+		key, err := transport.NewKey()
+		if err != nil {
+			a.setStatus("No se pudo generar la clave de la sala: " + err.Error())
+			return
+		}
 		var udp *transport.UDP
-		var err error
 		for attempt := 0; attempt < 3; attempt++ {
-			udp, err = transport.Listen(listenAddr)
+			udp, err = transport.Listen(listenAddr, key)
 			if err == nil {
 				break
 			}
@@ -234,6 +240,7 @@ func (a *App) openHost(roomName, username string) {
 			return
 		}
 		a.hostMode.Store(true)
+		a.rejoinInvite.Store(nil)
 		cfg := a.updateConfig(func(c *config.Config) {
 			c.RoomName = roomName
 			c.Username = username
@@ -406,14 +413,19 @@ func (a *App) connectClient(raw string) {
 	}
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		a.setStatus("Ingresá la IP del host.")
+		a.setStatus("Pegá la invitación de la sala.")
 		return
 	}
-	if !strings.Contains(raw, ":") {
-		raw = net.JoinHostPort(raw, strconv.Itoa(config.DefaultListenPort))
+	code, err := invite.Parse(raw)
+	if err != nil {
+		a.setStatus("Invitación inválida: " + err.Error())
+		return
 	}
+	raw = invite.Format(code.Addr, code.Key)
+	addr := net.UDPAddrFromAddrPort(code.Addr)
+	target := addr.String()
 
-	a.setStatus("Conectando con " + raw + "...")
+	a.setStatus("Conectando con " + target + "...")
 
 	// Deshabilitar botones YA en el hilo de UI para feedback inmediato
 	if a.connectButton != nil {
@@ -428,31 +440,14 @@ func (a *App) connectClient(raw string) {
 
 	go func() {
 		start := time.Now()
-		addr, err := net.ResolveUDPAddr("udp", raw)
-		if err != nil {
-			a.setStatus("Dirección inválida: " + err.Error())
-			fyne.Do(func() {
-				if a.connectButton != nil {
-					a.connectButton.Enable()
-				}
-				if a.leaveButton != nil {
-					a.leaveButton.Disable()
-				}
-				if a.topHangupBtn != nil {
-					a.topHangupBtn.Disable()
-				}
-			})
-			return
-		}
-
 		listenAddr := a.conf().ListenAddress
 		if listenAddr == "" {
 			listenAddr = config.DefaultListenAddress
 		}
-		udp, err := transport.Listen(listenAddr)
+		udp, err := transport.Listen(listenAddr, code.Key)
 		if err != nil {
 			if listenAddr != ":0" {
-				udp, err = transport.Listen(":0")
+				udp, err = transport.Listen(":0", code.Key)
 			}
 			if err != nil {
 				a.setStatus("No se pudo abrir UDP: " + err.Error())
@@ -477,11 +472,10 @@ func (a *App) connectClient(raw string) {
 			return
 		}
 		a.hostMode.Store(false)
+		a.rejoinInvite.Store(&raw)
 		cfg := a.updateConfig(func(c *config.Config) {
 			c.RoomName = strings.TrimSpace(c.RoomName)
-			c.LastPeer = raw
 		})
-		a.saveConfig()
 		a.participantID = room.ParticipantID(cfg.Username, udp.Address().String())
 		a.roomState = room.State{Name: cfg.RoomName, Participants: []room.Participant{{
 			ID:          a.participantID,
@@ -513,7 +507,7 @@ func (a *App) connectClient(raw string) {
 		logging.Infof("Enviando PacketRoomHello a %s: usuario=%q, id=%s", addr.String(), participant.Username, participant.ID)
 		_ = udp.Send(addr, transport.Packet{Kind: transport.PacketRoomHello, Sequence: a.sequence.Add(1), Payload: payload})
 
-		a.setStatus("Conectando con " + raw)
+		a.setStatus("Conectando con " + target)
 
 		// Audio (lo más pesado)
 		go a.startAudio(udp)
@@ -527,7 +521,7 @@ func (a *App) connectClient(raw string) {
 		go a.sweepAssetLoop(udp, connStop)
 
 		a.playEventSound(audio.SFXConnect)
-		logging.Infof("connectClient: conexión iniciada hacia %s (tiempo de ejecución: %v)", raw, time.Since(start))
+		logging.Infof("connectClient: conexión iniciada hacia %s (tiempo de ejecución: %v)", target, time.Since(start))
 
 		// Todo lo visual en fyne.Do
 		fyne.Do(func() {
