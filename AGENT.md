@@ -282,7 +282,9 @@ Strings stay outside the table: `MicMode` (stored only; push-to-talk not impleme
 
 ### K. Security Model (current state — read before touching network code)
 
-Reviewed 2026-10-26. Task details and fixes are in AGENDA §1.1; this is the summary an agent needs so it doesn't build on wrong assumptions.
+Reviewed 2026-10-26, scope updated 2026-10-28. Task details and fixes are in AGENDA §1; this is the summary an agent needs so it doesn't build on wrong assumptions.
+
+**Threat model** (AGENDA "Visión"): an app for a group of friends. Defend against strangers on the internet who read the source and know/scan the host's `IP:port` (no code execution, no file access, no eavesdropping, no joining). Malicious *members* are out of scope. The plan is a per-session room key in the invite code (S4 + F3); with it, the host-side origin filtering of full S2, S3 (identity bound to address), S6 and S9 are accepted risks, listed under AGENDA "Descartado / quizás". Don't add complexity for them unless that section is revisited.
 
 * **No authentication or encryption.** Datagrams are plain `VM01` packets; whoever knows the host's `IP:port` can talk to it. The room key + AEAD is planned (AGENDA S4, magic `VM02`, breaks compatibility).
 * **Client side is scoped**: a client only processes audio/chat/assets/`RoomState`/`RoomLeave` from its host (`Failover.Seen`, §3.E4). A malicious host is out of scope except for file paths and image decoding.
