@@ -4,17 +4,12 @@ package ui
 
 import (
 	"image"
-	_ "image/gif"
-	_ "image/jpeg"
-	_ "image/png"
-	"os"
 	"sync"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
-	"golang.org/x/image/draw"
-	_ "golang.org/x/image/webp"
 
+	"voxmesh/internal/imagefile"
 	"voxmesh/internal/logging"
 )
 
@@ -35,7 +30,7 @@ func newChatThumbnail(path string) *canvas.Image {
 		return img
 	}
 	go func() {
-		thumb, err := loadThumbnail(path)
+		thumb, err := imagefile.Load(path, thumbMaxW, thumbMaxH)
 		if err != nil {
 			logging.Errorf("miniatura %q: %s", path, logging.FormatError(err))
 			return
@@ -47,26 +42,4 @@ func newChatThumbnail(path string) *canvas.Image {
 		})
 	}()
 	return img
-}
-
-func loadThumbnail(path string) (image.Image, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	src, _, err := image.Decode(file)
-	if err != nil {
-		return nil, err
-	}
-	bounds := src.Bounds()
-	w, h := bounds.Dx(), bounds.Dy()
-	if w <= thumbMaxW && h <= thumbMaxH {
-		return src, nil
-	}
-	scale := min(float64(thumbMaxW)/float64(w), float64(thumbMaxH)/float64(h))
-	dstW, dstH := max(1, int(float64(w)*scale)), max(1, int(float64(h)*scale))
-	dst := image.NewNRGBA(image.Rect(0, 0, dstW, dstH))
-	draw.ApproxBiLinear.Scale(dst, dst.Bounds(), src, bounds, draw.Src, nil)
-	return dst, nil
 }

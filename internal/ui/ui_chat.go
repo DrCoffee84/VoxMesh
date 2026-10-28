@@ -3,6 +3,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"image/color"
 	"net/url"
@@ -24,6 +25,7 @@ import (
 	"voxmesh/internal/audio"
 	"voxmesh/internal/config"
 	"voxmesh/internal/history"
+	"voxmesh/internal/imagefile"
 	"voxmesh/internal/logging"
 	"voxmesh/internal/room"
 	"voxmesh/internal/transport"
@@ -107,6 +109,22 @@ func (a *App) submitChat() {
 
 const unsupportedImageStatus = "Formato de imagen no soportado (PNG, JPG, GIF o WebP)."
 
+// imageSendable rechaza antes de mandarla una imagen que los demás tirarían al recibirla
+// (handleAssetChunk): no decodificable o fuera de los topes de imagefile.
+func (a *App) imageSendable(data []byte) bool {
+	err := imagefile.Check(data)
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, imagefile.ErrTooLarge):
+		a.setStatus(fmt.Sprintf("La imagen es demasiado grande (máximo %d MP y %d px por lado).", imagefile.MaxPixels/1_000_000, imagefile.MaxSide))
+	default:
+		a.setStatus(unsupportedImageStatus)
+	}
+	logging.Infof("imagen no enviada: %s", logging.FormatError(err))
+	return false
+}
+
 func (a *App) sendChatImageBytes(ext string, data []byte, caption string) {
 	if a.historyStore == nil || !a.connected() {
 		return
@@ -118,6 +136,9 @@ func (a *App) sendChatImageBytes(ext string, data []byte, caption string) {
 	ext = strings.ToLower(ext)
 	if history.CheckImage(imageID, ext) != nil {
 		a.setStatus(unsupportedImageStatus)
+		return
+	}
+	if !a.imageSendable(data) {
 		return
 	}
 	if _, saveErr := a.historyStore.SaveImage(imageID, ext, data); saveErr != nil {
@@ -579,6 +600,9 @@ func (a *App) sendImageFile(path string) {
 	}
 	if len(data) > assets.MaxBytes {
 		a.setStatus(fmt.Sprintf("El archivo supera el límite de %d MiB.", assets.MaxBytes/1024/1024))
+		return
+	}
+	if !a.imageSendable(data) {
 		return
 	}
 	if _, saveErr := a.historyStore.SaveImage(imageID, extension, data); saveErr != nil {

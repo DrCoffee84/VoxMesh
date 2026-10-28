@@ -17,6 +17,7 @@ import (
 	"github.com/atotto/clipboard"
 
 	"voxmesh/internal/config"
+	"voxmesh/internal/imagefile"
 	"voxmesh/internal/logging"
 	"voxmesh/internal/version"
 )
@@ -369,8 +370,9 @@ func (a *App) showLightbox(imagePath string) {
 		targetH = 220
 	}
 
-	largeImg := &canvas.Image{File: imagePath, FillMode: canvas.ImageFillContain}
+	largeImg := &canvas.Image{FillMode: canvas.ImageFillContain}
 	largeImg.SetMinSize(fyne.NewSize(targetW, targetH))
+	loading := widget.NewLabel("Cargando imagen…")
 
 	var pop *widget.PopUp
 	tapImg := newTappableImage(largeImg, func() {
@@ -378,7 +380,7 @@ func (a *App) showLightbox(imagePath string) {
 			pop.Hide()
 		}
 	})
-	pop = widget.NewPopUp(tapImg, a.window.Canvas())
+	pop = widget.NewPopUp(container.NewStack(tapImg, container.NewCenter(loading)), a.window.Canvas())
 	posX := (cSize.Width - targetW) / 2
 	posY := (cSize.Height - targetH) / 2
 	if posX < 0 {
@@ -388,7 +390,39 @@ func (a *App) showLightbox(imagePath string) {
 		posY = 0
 	}
 	pop.ShowAtPosition(fyne.NewPos(posX, posY))
+
+	scale := a.window.Canvas().Scale()
+	maxW, maxH := int(targetW*scale), int(targetH*scale)
+	go func() {
+		// Una decodificación a la vez: abrir y cerrar seguido no junta varias de ~100 MB.
+		lightboxDecode <- struct{}{}
+		defer func() { <-lightboxDecode }()
+		open := false
+		fyne.DoAndWait(func() { open = pop.Visible() })
+		if !open {
+			return
+		}
+		img, err := imagefile.Load(imagePath, maxW, maxH)
+		if err != nil {
+			logging.Errorf("lightbox %q: %s", imagePath, logging.FormatError(err))
+		}
+		fyne.Do(func() {
+			if !pop.Visible() {
+				return
+			}
+			if err != nil {
+				loading.SetText("No se pudo abrir la imagen.")
+				return
+			}
+			loading.Hide()
+			largeImg.Image = img
+			largeImg.Refresh()
+		})
+	}()
 }
+
+// lightboxDecode limita a una la decodificación del lightbox en curso.
+var lightboxDecode = make(chan struct{}, 1)
 
 func formatPeerLag(p peerView) (string, color.Color) {
 	if p.isSelf {

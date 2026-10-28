@@ -12,6 +12,7 @@ import (
 	"voxmesh/internal/assets"
 	"voxmesh/internal/audio"
 	"voxmesh/internal/history"
+	"voxmesh/internal/imagefile"
 	"voxmesh/internal/logging"
 	"voxmesh/internal/room"
 	"voxmesh/internal/transport"
@@ -155,6 +156,11 @@ func (a *App) handleAssetChunk(payload []byte, origin string) {
 			if pending && time.Since(requested) < pendingPlayTTL {
 				a.playSoundPCM(data)
 			}
+			return
+		}
+		// Lo que no es una imagen decodificable dentro de los topes no se guarda (AGENDA S5).
+		if checkErr := imagefile.Check(data); checkErr != nil {
+			a.assetRejects.note(checkErr, origin)
 			return
 		}
 		if _, saveErr := a.historyStore.SaveImage(chunk.ID, chunk.Ext, data); saveErr != nil {
