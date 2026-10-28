@@ -237,6 +237,12 @@ type captureInterval struct {
 	sent     uint64
 	maxQueue int
 	maxProc  time.Duration
+	// Cancelación de eco: frames procesados, ERLE (suma en dB y cantidad de medidas) y el último
+	// retardo de eco encontrado (-1 = ninguno).
+	echoFrames    uint64
+	echoERLESum   float64
+	echoERLECount int
+	echoDelayMS   int
 }
 
 func (c captureInterval) rate() float64 {
@@ -261,11 +267,30 @@ func (c *captureInterval) add(o captureInterval) {
 	c.sent += o.sent
 	c.maxQueue = max(c.maxQueue, o.maxQueue)
 	c.maxProc = max(c.maxProc, o.maxProc)
+	c.echoFrames += o.echoFrames
+	c.echoERLESum += o.echoERLESum
+	c.echoERLECount += o.echoERLECount
+	if o.echoFrames > 0 {
+		c.echoDelayMS = o.echoDelayMS
+	}
 }
 
 func (c captureInterval) String() string {
-	return fmt.Sprintf("capturados=%d (%.1f/s) descartados=%d enviados=%d | cola máx=%d frames proc máx=%.1f ms",
+	line := fmt.Sprintf("capturados=%d (%.1f/s) descartados=%d enviados=%d | cola máx=%d frames proc máx=%.1f ms",
 		c.frames, c.rate(), c.dropped, c.sent, c.maxQueue, float64(c.maxProc)/float64(time.Millisecond))
+	if c.echoFrames == 0 {
+		return line
+	}
+	// ERLE: cuánto eco saca AEC3 (promedio). Sin medida todavía (no sonó nada por los parlantes),
+	// "?".
+	erle, delay := "?", "?"
+	if c.echoERLECount > 0 {
+		erle = fmt.Sprintf("%.1f dB", c.echoERLESum/float64(c.echoERLECount))
+	}
+	if c.echoDelayMS >= 0 {
+		delay = fmt.Sprintf("%d ms", c.echoDelayMS)
+	}
+	return fmt.Sprintf("%s | eco: frames=%d ERLE=%s retardo=%s", line, c.echoFrames, erle, delay)
 }
 
 // logCaptureStats mide el intervalo del lado que envía: lo suma al resumen y lo deja en el log si
@@ -280,12 +305,16 @@ func logCaptureStats(st *audioLogState, current captureSnapshot) {
 		return
 	}
 	interval := captureInterval{
-		elapsed:  current.at.Sub(previous.at),
-		frames:   current.stats.Frames - previous.stats.Frames,
-		dropped:  current.stats.Dropped - previous.stats.Dropped,
-		sent:     current.sent - previous.sent,
-		maxQueue: current.stats.MaxQueue,
-		maxProc:  current.stats.MaxProc,
+		elapsed:       current.at.Sub(previous.at),
+		frames:        current.stats.Frames - previous.stats.Frames,
+		dropped:       current.stats.Dropped - previous.stats.Dropped,
+		sent:          current.sent - previous.sent,
+		maxQueue:      current.stats.MaxQueue,
+		maxProc:       current.stats.MaxProc,
+		echoFrames:    current.stats.EchoFrames - previous.stats.EchoFrames,
+		echoERLESum:   current.stats.EchoERLESum,
+		echoERLECount: current.stats.EchoERLECount,
+		echoDelayMS:   current.stats.EchoDelayMS,
 	}
 	logf := logging.Tracef
 	if interval.problem() {

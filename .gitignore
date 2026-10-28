@@ -76,3 +76,6 @@ $RECYCLE.BIN/
 *.weights
 /workspace/
 orquestador.py
+# --- WebRTC Audio Processing compilada (third_party/webrtc-apm/build.ps1) ---
+third_party/webrtc-apm/out/
+third_party/webrtc-apm/work/

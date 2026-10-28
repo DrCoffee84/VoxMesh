@@ -154,7 +154,7 @@ func mixFrames(e *Engine, count int) []int16 {
 	out := make([]int16, 0, count*FrameSamples)
 	buf := make([]byte, FrameSamples*2)
 	for i := 0; i < count; i++ {
-		e.mix(buf)
+		e.mix(buf, 0)
 		for k := 0; k < FrameSamples; k++ {
 			out = append(out, int16(binary.LittleEndian.Uint16(buf[k*2:])))
 		}

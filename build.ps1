@@ -1,14 +1,23 @@
 $ErrorActionPreference = "Stop"
 
+$msys = $null
 if (Test-Path "C:\msys64\ucrt64\bin\gcc.exe") {
-    $env:CC = "C:\msys64\ucrt64\bin\gcc.exe"
-    $env:Path = "C:\msys64\ucrt64\bin;$env:Path"
+    $msys = "C:\msys64\ucrt64"
 } elseif (Test-Path "C:\msys64\mingw64\bin\gcc.exe") {
-    $env:CC = "C:\msys64\mingw64\bin\gcc.exe"
-    $env:Path = "C:\msys64\mingw64\bin;$env:Path"
+    $msys = "C:\msys64\mingw64"
+}
+if ($msys) {
+    $env:CC = "$msys\bin\gcc.exe"
+    $env:Path = "$msys\bin;$env:Path"
 }
 
 $env:CGO_ENABLED = "1"
+
+# Cancelacion de eco: WebRTC AEC3 como biblioteca estatica (no hace nada si ya esta compilada).
+if ($msys) {
+    & .\third_party\webrtc-apm\build.ps1 -Ucrt $msys
+    if (-not $?) { exit 1 }
+}
 
 if (Test-Path "icon.png") {
     Copy-Item "icon.png" "internal\ui\icon.png" -Force

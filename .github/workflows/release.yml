@@ -36,12 +36,29 @@ jobs:
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-opus
             mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-meson
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-abseil-cpp
+
+      # WebRTC AEC3 (cancelación de eco) como biblioteca estática. El script vuelve a compilar si
+      # cambió abseil o el toolchain (stamp.txt), así que la caché solo ahorra tiempo.
+      - name: Cache WebRTC Audio Processing
+        uses: actions/cache@v4
+        with:
+          path: third_party/webrtc-apm/out
+          key: webrtc-apm-${{ hashFiles('third_party/webrtc-apm/build.ps1', 'third_party/webrtc-apm/patches/*') }}
+
+      - name: Build WebRTC Audio Processing (static)
+        shell: powershell
+        run: |
+          .\third_party\webrtc-apm\build.ps1 -Ucrt "${{ steps.msys2.outputs.msys2-location }}\ucrt64"
 
       - name: Compile voxmesh.exe with CGO
         shell: powershell
         run: |
           $ucrt = "${{ steps.msys2.outputs.msys2-location }}\ucrt64\bin"
           $env:CC = "$ucrt\gcc.exe"
+          $env:CXX = "$ucrt\g++.exe"
           $env:PKG_CONFIG = "$ucrt\pkg-config.exe"
           $env:Path = "$ucrt;$env:Path"
           $env:CGO_ENABLED = "1"

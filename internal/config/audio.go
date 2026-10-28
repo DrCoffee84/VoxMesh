@@ -40,6 +40,16 @@ const (
 	AudioBusLimiterAttackMS = 1.0
 )
 
+// Cancelación de eco (aec_enabled, WebRTC AEC3).
+const (
+	// AudioEchoDelayMS es la estimación inicial del retardo de eco que recibe AEC3: salida de
+	// malgo (3 períodos de 10 ms) + captura (un período) + armado del frame de 20 ms (~10 en
+	// promedio) + el aire. AEC3 busca el real solo (una tele por HDMI suma 50–150 ms).
+	AudioEchoDelayMS = 60
+	// AudioEchoStatsFrames es cada cuántos frames se leen las medidas de AEC3 para el log.
+	AudioEchoStatsFrames = 50
+)
+
 // Codec Opus del audio de red (siempre Opus, 48 kHz mono, frames de 20 ms).
 const (
 	// OpusMaxPacketBytes es el buffer de salida del encoder (un paquete Opus nunca pasa 1275 bytes).

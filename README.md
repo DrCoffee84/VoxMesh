@@ -9,6 +9,7 @@ Chat de voz y texto para grupos chicos de amigos, en **Windows**, en un único `
 **Voz**
 - Opus a 48 kHz mono (40 kbps por defecto, con FEC), un paquete cada 20 ms.
 - Filtro de voz: supresión de ruido con IA (RNNoise) + detector de voz (VAD), "modo grito" (deja pasar la voz fuerte sin aplastarla), y opcionales: puerta de ruido, ecualizador, compresor/expansor y limitador.
+- **Cancelación de eco para quien usa parlantes o la tele** (WebRTC AEC3): si los demás se escuchan a sí mismos cuando hablás, activá "Uso parlantes: cancelar eco" en Ajustes → Entrada → Configuración avanzada → Supresión de ruido y voz. Corre solo en tu PC (los demás no tienen que hacer nada) y también sirve con el celular como micrófono. Con auriculares dejalo apagado: no hace falta.
 - Perfiles de **entrada** y **salida** guardables ("Default" se actualiza solo con cada versión).
 - Buffer de recepción adaptativo por participante: se agranda solo si la red de alguien es inestable y oculta los paquetes perdidos.
 - Medidor en Ajustes que muestra qué pasa con tu voz: gris = silencio, amarillo = hay sonido pero no se manda, verde = se manda, rojo = modo grito. Avisa si el micrófono satura.
@@ -24,7 +25,7 @@ Chat de voz y texto para grupos chicos de amigos, en **Windows**, en un único `
 - Se actualiza sola desde GitHub Releases (pregunta antes, verifica el SHA-256 publicado y cierra bien la sala antes de reiniciar).
 - Logs diarios en `%AppData%\VoxMesh` (botón 📄), pensados para poder mandarlos cuando algo falla.
 
-**Todavía no tiene**: cancelación de eco (con parlantes, los demás pueden escucharse a sí mismos: usá auriculares), ni push-to-talk. Están planificados en [AGENDA.md](AGENDA.md).
+**Todavía no tiene**: push-to-talk (anotado en [AGENDA.md](AGENDA.md)).
 
 ## Cómo se usa
 
@@ -57,13 +58,14 @@ Nivel de log (Ajustes → Interfaz): **1 Normal** (por defecto) registra eventos
 
 ## Compilar
 
-Requisitos: **Go 1.26+** y **MSYS2 UCRT64** (gcc, libopus y pkg-config). Fyne y malgo necesitan CGO. El `.exe` resultante es estático: tus amigos no necesitan instalar nada.
+Requisitos: **Go 1.26+** y **MSYS2 UCRT64** (gcc, libopus y pkg-config; meson, ninja y abseil para compilar la cancelación de eco). Fyne, malgo y WebRTC AEC3 necesitan CGO. El `.exe` resultante es estático: tus amigos no necesitan instalar nada.
 
 1. Instalar MSYS2 (PowerShell): `winget install --id MSYS2.MSYS2`
 2. En la terminal **MSYS2 UCRT64**:
    ```bash
    pacman -Syu
-   pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-opus mingw-w64-ucrt-x86_64-pkgconf
+   pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-opus mingw-w64-ucrt-x86_64-pkgconf \
+     mingw-w64-ucrt-x86_64-meson mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-abseil-cpp
    ```
    (Si `pacman -Syu` pide cerrar la terminal, cerrala, abrila de nuevo y corré el segundo comando.)
 3. Compilar desde PowerShell, en la carpeta del proyecto:
@@ -71,8 +73,9 @@ Requisitos: **Go 1.26+** y **MSYS2 UCRT64** (gcc, libopus y pkg-config). Fyne y 
    .\build.ps1
    # → dist\voxmesh.exe, con versión "<último tag>-dev.<fecha>" (los builds dev no buscan actualizaciones al arrancar)
    ```
+   La primera vez baja y compila WebRTC Audio Processing 1.3 como biblioteca estática (`third_party\webrtc-apm\build.ps1`, menos de un minuto); después, solo si cambia abseil o el script.
 
-A mano, o para correr los tests:
+A mano, o para correr los tests (antes, una vez: `.\third_party\webrtc-apm\build.ps1`; sin esa biblioteca el paquete de audio no linkea):
 
 ```powershell
 $env:CGO_ENABLED = "1"
@@ -99,7 +102,7 @@ Crea el tag y lo pushea. GitHub Actions ([release.yml](.github/workflows/release
 
 ```text
 cmd/voxmesh/        Entrada del ejecutable (limpia restos del updater y arranca la UI)
-internal/audio/     Captura/reproducción (malgo), filtros, RNNoise, Opus, buffer de recepción, mezclador
+internal/audio/     Captura/reproducción (malgo), cancelación de eco (AEC3), filtros, RNNoise, Opus, buffer de recepción, mezclador
 internal/ui/        Interfaz Fyne, red de la sala, chat, botonera, ajustes
 internal/room/      Estado de la sala, protocolo y migración de host (máquina de estados pura)
 internal/transport/ Socket UDP, paquetes cifrados con la clave de la sala (AES-256-GCM), cola con ritmo para archivos
@@ -113,6 +116,7 @@ internal/updater/   Actualización desde GitHub Releases
 internal/logging/   Log diario, niveles, recuperación de panics
 internal/winproc/   Prioridad del proceso y evitar suspensión en sala (Windows)
 apk/                App Android "VoxMesh Mic"
+third_party/webrtc-apm/ Script y parches para compilar WebRTC Audio Processing (AEC3) estática
 ```
 
 ## Documentación

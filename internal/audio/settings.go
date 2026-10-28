@@ -83,6 +83,27 @@ func InputSettings(cfg *config.Config) (NoiseGate, FilterSettings) {
 	}
 }
 
+// EchoSettings es la cancelación de eco de la entrada (Engine.CancelEcho).
+type EchoSettings struct {
+	Enabled bool
+	// Phone: la entrada es el micrófono del celular. Su frame llega phone_mic_buffer_ms después de
+	// capturado, así que la referencia se toma ReferenceOffset antes; cambiar de entrada reinicia
+	// el AEC (otro camino de eco).
+	Phone           bool
+	ReferenceOffset time.Duration
+	DelayMS         int // estimación inicial del retardo de eco
+}
+
+// InputEchoSettings arma la cancelación de eco para un frame del micrófono (phone = false) o del
+// celular.
+func InputEchoSettings(cfg *config.Config, phone bool) EchoSettings {
+	settings := EchoSettings{Enabled: cfg.AECEnabled, Phone: phone, DelayMS: config.AudioEchoDelayMS}
+	if phone && cfg.PhoneMicBufferEnabled {
+		settings.ReferenceOffset = time.Duration(cfg.PhoneMicBufferMS) * time.Millisecond
+	}
+	return settings
+}
+
 // DefaultFilterSettings es la cadena de envío con los valores de fábrica.
 func DefaultFilterSettings() FilterSettings {
 	cfg := config.Default()

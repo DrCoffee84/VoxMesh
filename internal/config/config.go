@@ -74,6 +74,7 @@ type LiveSettings struct {
 	ShoutOnClip           bool    `json:"shout_on_clip"`
 	ShoutDryMix           float32 `json:"shout_dry_mix"`
 	ShoutHoldMS           int     `json:"shout_hold_ms"`
+	AECEnabled            bool    `json:"aec_enabled"`
 	RNNoiseEnabled        bool    `json:"rnnoise_enabled"`
 	RNNoiseMix            float32 `json:"rnnoise_mix"`
 	VADEnabled            bool    `json:"vad_enabled"`

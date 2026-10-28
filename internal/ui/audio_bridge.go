@@ -76,7 +76,7 @@ func (a *App) receivePhonePCM(frame []byte, at time.Time) {
 		}
 		return
 	}
-	a.sendOutgoingPCM(audio.CapturedFrame{PCM: frame, At: at}, udp)
+	a.sendOutgoingPCM(audio.CapturedFrame{PCM: frame, At: at, Phone: true}, udp)
 }
 
 func (a *App) phoneMicEnabled() bool {

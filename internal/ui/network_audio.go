@@ -86,7 +86,15 @@ func (a *App) handleAudioPacket(packet transport.Packet) {
 // (nada con la compuerta cerrada; al abrirse, el pre-roll y el frame actual), codificado en Opus.
 // El rol se mira en cada frame (host: a todos; cliente: a su host), así la migración de host no
 // reinicia el audio.
+//
+// La cancelación de eco va primero de todo, sobre el frame en el lugar: la ganancia, RNNoise, la
+// línea seca del modo grito y el medidor ya ven la voz sin lo que sonó por los parlantes.
 func (a *App) sendOutgoingPCM(frame audio.CapturedFrame, udp *transport.UDP) {
+	if engine := a.engine(); engine != nil {
+		if err := engine.CancelEcho(frame.PCM, frame.At, audio.InputEchoSettings(a.conf(), frame.Phone)); err != nil {
+			logging.Errorf("%s", logging.FormatError(err))
+		}
+	}
 	frames, ok, postDB := a.prepareOutgoingFrames(frame.PCM)
 	a.reportMeter(frame.PCM, ok, postDB)
 	// Mute: la cadena sigue corriendo (RNNoise retiene 20 ms y el VAD su hold; saltearla dejaría

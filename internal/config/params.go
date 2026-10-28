@@ -42,6 +42,7 @@ var Params = []Param{
 	{Key: "shout_dry_mix", Label: "Voz original al gritar", Profile: InputProfile, Default: 0.2, Min: 0, Max: 1, Step: 0.01, Unit: "%", Scale: 100},
 	{Key: "shout_hold_ms", Label: "Mantener modo grito", Profile: InputProfile, Default: 300, Min: 0, Max: 1000, Step: 10, Unit: "ms"},
 
+	{Key: "aec_enabled", Label: "Uso parlantes: cancelar eco", Help: "Activalo solo si usás parlantes o la tele y los demás se escuchan a sí mismos. Saca de tu micrófono lo que suena por tus parlantes. Con auriculares no hace falta.", Profile: InputProfile, Default: 0},
 	{Key: "rnnoise_enabled", Label: "Supresión de ruido (RNNoise)", Help: "Una IA que borra el ruido de fondo (ventilador, teclado, calle) y deja solo tu voz.", Profile: InputProfile, Default: 1},
 	{Key: "rnnoise_mix", Label: "Intensidad", Help: "100 % = borra todo el ruido que puede. Si tu voz suena robótica o \"bajo el agua\", bajalo: suena más natural pero se cuela algo de ruido.", Profile: InputProfile, Default: 1, Min: 0, Max: 1, Step: 0.01, Unit: "%", Scale: 100},
 	{Key: "vad_enabled", Label: "Detección de voz (VAD)", Help: "Manda audio solo cuando detecta que estás hablando: si te callás, no se manda nada (el medidor se pone amarillo). Así los demás no escuchan tu ruido de fondo entre frase y frase.", Profile: InputProfile, Default: 1},

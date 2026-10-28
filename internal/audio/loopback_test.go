@@ -71,7 +71,7 @@ func TestLoopbackRoom(t *testing.T) {
 			case <-stop:
 				return
 			case <-ticker.C:
-				engine.mix(buf)
+				engine.mix(buf, time.Now().UnixNano())
 				for i := range pcm {
 					pcm[i] = int16(uint16(buf[2*i]) | uint16(buf[2*i+1])<<8)
 				}

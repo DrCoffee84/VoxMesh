@@ -28,7 +28,7 @@ type paramSection struct {
 // (el check principal, fuera del acordeón). Lo verifica TestParamSectionsCoverProfiles.
 var inputSections = []paramSection{
 	{"Modo gritos", []string{"shout_enabled", "shout_threshold_db", "shout_on_clip", "shout_dry_mix", "shout_hold_ms"}},
-	{"Supresión de ruido y voz", []string{"rnnoise_enabled", "rnnoise_mix", "vad_enabled", "vad_threshold", "vad_hold_ms", "noise_gate_enabled", "threshold_db", "gate_hold_ms"}},
+	{"Supresión de ruido y voz", []string{"aec_enabled", "rnnoise_enabled", "rnnoise_mix", "vad_enabled", "vad_threshold", "vad_hold_ms", "noise_gate_enabled", "threshold_db", "gate_hold_ms"}},
 	{"Ecualización", []string{"high_pass_enabled", "high_pass_hz", "low_pass_enabled", "low_pass_hz", "notch_enabled", "notch_hz", "notch_q"}},
 	{"Dinámica", []string{"input_gain_db", "compressor_enabled", "compressor_threshold_db", "compressor_ratio", "compressor_attack_ms", "compressor_release_ms",
 		"expander_enabled", "expander_threshold_db", "expander_ratio", "expander_attack_ms", "expander_release_ms", "limiter_enabled", "limiter_threshold_db"}},

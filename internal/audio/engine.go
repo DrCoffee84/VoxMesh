@@ -94,6 +94,25 @@ type Engine struct {
 	// arrivals graba la llegada de cada paquete de red (nil = apagado).
 	arrivals atomic.Pointer[ArrivalRecorder]
 
+	// Cancelación de eco (CancelEcho). mix copia lo que sale por los parlantes a echoRef solo
+	// mientras echoActive; el resto es de quien procesa la captura, bajo echoMu (micrófono y
+	// celular pueden coincidir un instante al cambiar de entrada).
+	echoRef    *echoReference
+	echoActive atomic.Bool
+	echoMu     sync.Mutex
+	echo       *echoCanceller
+	echoReader echoReader
+	echoPhone  bool  // entrada para la que se creó echo
+	echoFailed error // falló (al crearlo o al procesar): se avisa una vez y no se reintenta
+	echoPCM    [FrameSamples]int16
+	echoCount  int // frames desde la última lectura de medidas
+	// Medidas para el log (TakeCaptureStats): frames procesados, ERLE en centésimas de dB
+	// (suma y cantidad) y el último retardo encontrado (-1 = ninguno).
+	echoFrames    atomic.Uint64
+	echoERLESum   atomic.Int64
+	echoERLECount atomic.Int64
+	echoDelayMS   atomic.Int64
+
 	// Salud de los dispositivos (Health): cuándo se abrió y el último callback de cada uno
 	// (UnixNano), qué dispositivo avisó que el sistema lo detuvo, y si el Stop fue nuestro.
 	started      atomic.Int64
@@ -113,6 +132,8 @@ type CapturedFrame struct {
 	// envío estaba atrasada más que la cola): audio que no existe y que el que manda tiene que
 	// marcar como pérdida (avanzando la secuencia) para que los demás no se queden cortos.
 	Dropped int
+	// Phone: el frame viene del micrófono del celular (cancelación de eco, EchoSettings.Phone).
+	Phone bool
 
 	buf *[streamFrameBytes]byte // buffer de captureFree a devolver (nil si no es del Engine)
 }
@@ -124,6 +145,12 @@ type CaptureStats struct {
 	Dropped  uint64        // frames tirados porque la cola de envío estaba llena (acumulado)
 	MaxQueue int           // cola máxima desde la lectura anterior (frames esperando)
 	MaxProc  time.Duration // procesamiento más lento de un frame desde la lectura anterior
+	// Cancelación de eco: frames procesados (acumulado), ERLE medido desde la lectura anterior
+	// (suma en dB y cantidad de medidas) y el último retardo de eco encontrado (-1 = ninguno).
+	EchoFrames    uint64
+	EchoERLESum   float64
+	EchoERLECount int
+	EchoDelayMS   int
 }
 
 func softClip(sample int32) int16 {
@@ -154,7 +181,7 @@ func newEngineState() *Engine {
 	for range config.AudioCaptureQueueFrames {
 		free <- new([streamFrameBytes]byte)
 	}
-	return &Engine{
+	e := &Engine{
 		captureFrames: make(chan CapturedFrame, config.AudioCaptureQueueFrames),
 		captureFree:   free,
 		streams:       make(map[string]*audioStream),
@@ -169,7 +196,10 @@ func newEngineState() *Engine {
 			defaultPlayback.BusLimiterReleaseMS,
 		),
 		mixLimiterRelease: defaultPlayback.BusLimiterReleaseMS,
+		echoRef:           new(echoReference),
 	}
+	e.echoDelayMS.Store(-1)
+	return e
 }
 
 // NewEngine abre micrófono y salida. onFrame recibe cada frame capturado en una goroutine propia
@@ -218,8 +248,9 @@ func NewEngine(input, output Device, onFrame func(CapturedFrame)) (*Engine, erro
 	}
 	playback, err := malgo.InitDevice(context.Context, playbackConfig, malgo.DeviceCallbacks{
 		Data: func(output, _ []byte, _ uint32) {
-			engine.lastPlayback.Store(time.Now().UnixNano())
-			engine.mix(output)
+			now := time.Now().UnixNano()
+			engine.lastPlayback.Store(now)
+			engine.mix(output, now)
 		},
 		Stop: func() { engine.deviceStopped("salida") },
 	})
@@ -331,10 +362,14 @@ func (e *Engine) TakeCaptureStats() CaptureStats {
 		return CaptureStats{}
 	}
 	return CaptureStats{
-		Frames:   e.captureCount.Load(),
-		Dropped:  e.captureDropped.Load(),
-		MaxQueue: int(e.sendQueueMax.Swap(0)),
-		MaxProc:  time.Duration(e.sendProcMax.Swap(0)),
+		Frames:        e.captureCount.Load(),
+		Dropped:       e.captureDropped.Load(),
+		MaxQueue:      int(e.sendQueueMax.Swap(0)),
+		MaxProc:       time.Duration(e.sendProcMax.Swap(0)),
+		EchoFrames:    e.echoFrames.Load(),
+		EchoERLESum:   float64(e.echoERLESum.Swap(0)) / 100,
+		EchoERLECount: int(e.echoERLECount.Swap(0)),
+		EchoDelayMS:   int(e.echoDelayMS.Load()),
 	}
 }
 
@@ -345,8 +380,10 @@ func (e *Engine) SetArrivalRecorder(rec *ArrivalRecorder) {
 	}
 }
 
-// mix es el callback de playback: arma output (S16LE) con la suma de todos los streams.
-func (e *Engine) mix(output []byte) {
+// mix es el callback de playback: arma output (S16LE) con la suma de todos los streams. at
+// (UnixNano) es la hora del callback: con la cancelación de eco activa, la salida se copia a
+// echoRef con esa hora.
+func (e *Engine) mix(output []byte, at int64) {
 	samples := len(output) / 2
 	if samples == 0 {
 		return
@@ -526,11 +563,91 @@ func (e *Engine) mix(output []byte) {
 	e.mixLimiter.Process(e.mixBuffer[:samples])
 
 	// Renderizar a output con limitador soft-knee anti-clipping
-	// (red de seguridad para los transientes que pasan durante el attack)
+	// (red de seguridad para los transientes que pasan durante el attack). Lo que sale es la
+	// referencia de la cancelación de eco: ring preasignado, sin locks.
+	echo := e.echoActive.Load()
+	if echo {
+		e.echoRef.begin()
+	}
 	for i := 0; i < samples; i++ {
 		clipped := softClip(e.mixBuffer[i])
 		binary.LittleEndian.PutUint16(output[i*2:i*2+2], uint16(clipped))
+		if echo {
+			e.echoRef.put(i, clipped)
+		}
 	}
+	if echo {
+		e.echoRef.publish(samples, at)
+	}
+}
+
+// CancelEcho saca del frame capturado (S16LE, 20 ms, en el lugar) lo que sonó por la salida de
+// este Engine (WebRTC AEC3): antes le pasa la referencia que ya había sonado cuando se capturó
+// (at − ReferenceOffset). Va primero de todo en la cadena de envío. Lo llaman la goroutine de
+// envío y la del celular, nunca un callback de malgo. Con Enabled en false deja de copiar la
+// referencia y libera el AEC. Si el AEC falla (al crearlo o al procesar) devuelve el error una
+// sola vez y queda apagado en este Engine: el frame sigue sin cancelar.
+func (e *Engine) CancelEcho(pcm []byte, at time.Time, settings EchoSettings) error {
+	if e == nil || len(pcm) != streamFrameBytes {
+		return nil
+	}
+	e.echoMu.Lock()
+	defer e.echoMu.Unlock()
+	if !settings.Enabled || e.stopping.Load() {
+		e.closeEcho()
+		return nil
+	}
+	if e.echo == nil || settings.Phone != e.echoPhone {
+		if e.echoFailed != nil {
+			return nil
+		}
+		e.closeEcho()
+		echo, err := newEchoCanceller()
+		if err != nil {
+			e.echoFailed = err
+			return err
+		}
+		e.echo, e.echoPhone = echo, settings.Phone
+		e.echoReader.reset(e.echoRef)
+		e.echoActive.Store(true)
+	}
+
+	for i := range e.echoPCM {
+		e.echoPCM[i] = int16(binary.LittleEndian.Uint16(pcm[i*2:]))
+	}
+	render := e.echoReader.take(e.echoRef, at.Add(-settings.ReferenceOffset).UnixNano())
+	if err := e.echo.process(render, e.echoPCM[:], settings.DelayMS); err != nil {
+		e.closeEcho()
+		e.echoFailed = err
+		return err
+	}
+	for i, sample := range e.echoPCM {
+		binary.LittleEndian.PutUint16(pcm[i*2:], uint16(sample))
+	}
+
+	e.echoFrames.Add(1)
+	if e.echoCount++; e.echoCount >= config.AudioEchoStatsFrames {
+		e.echoCount = 0
+		erle, hasERLE, delay, hasDelay := e.echo.stats()
+		if hasERLE {
+			e.echoERLESum.Add(int64(math.Round(erle * 100)))
+			e.echoERLECount.Add(1)
+		}
+		if hasDelay {
+			e.echoDelayMS.Store(int64(delay))
+		}
+	}
+	return nil
+}
+
+// closeEcho apaga la referencia y libera el AEC (bajo echoMu).
+func (e *Engine) closeEcho() {
+	e.echoActive.Store(false)
+	if e.echo != nil {
+		e.echo.close()
+		e.echo = nil
+	}
+	e.echoCount = 0
 }
 
 // PlayStream encola PCM S16LE en un stream FIFO sin jitter buffer: solo para "__sfx__"
@@ -703,6 +820,9 @@ func (e *Engine) Stop() {
 			e.context.Free()
 		}
 		close(e.captureFrames)
+		e.echoMu.Lock()
+		e.closeEcho()
+		e.echoMu.Unlock()
 		e.playbackMu.Lock()
 		e.streams = nil
 		e.workItems = nil
