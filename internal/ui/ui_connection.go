@@ -135,7 +135,7 @@ func (a *App) createHost() {
 	newRoomEntry.SetText(a.conf().RoomName)
 
 	btnCreate := widget.NewButtonWithIcon("Crear y abrir", theme.ContentAddIcon(), func() {
-		roomName := strings.TrimSpace(newRoomEntry.Text)
+		roomName := history.ClampRoomName(newRoomEntry.Text)
 		if roomName == "" {
 			a.setStatus("Escribe un nombre para la nueva sala.")
 			return

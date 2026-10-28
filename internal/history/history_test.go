@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // IDs con el formato de NewID (32 hex): el Store rechaza cualquier otro.
@@ -136,6 +138,8 @@ func TestSafeName(t *testing.T) {
 		"COM10":         "COM10",
 		"CONSOLA":       "CONSOLA",
 		"../../x":       ".._.._x",
+		strings.Repeat("a", MaxRoomNameRunes) + "CORTADO": strings.Repeat("a", MaxRoomNameRunes),
+		strings.Repeat("a", MaxRoomNameRunes-1) + ".x":    strings.Repeat("a", MaxRoomNameRunes-1),
 	}
 	for in, want := range cases {
 		got := safeName(in)
@@ -233,12 +237,61 @@ func TestStoreKeepsSoundTombstones(t *testing.T) {
 	if err := store.DeleteSound(soundID, ".pcm"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AddSoundTombstones([]string{"snd-2", soundID, ""}); err != nil {
+	if err := store.AddSoundTombstones([]string{imageID, soundID, ""}); err != nil {
 		t.Fatal(err)
 	}
 	got := store.DeletedSounds()
-	if len(got) != 2 || got[0] != soundID || got[1] != "snd-2" {
+	if len(got) != 2 || got[0] != soundID || got[1] != imageID {
 		t.Fatalf("unexpected tombstones: %#v", got)
+	}
+}
+
+func TestStoreIgnoresInvalidSoundTombstones(t *testing.T) {
+	root := t.TempDir()
+	store, err := New(root, "gaming")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := []string{"snd-1", soundID + "\n" + imageID, soundID[:31], strings.ToUpper(soundID), strings.Repeat("a", 4096)}
+	if err := store.AddSoundTombstones(append(bad, soundID)); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.DeletedSounds(); len(got) != 1 || got[0] != soundID {
+		t.Fatalf("se esperaba solo la lápida válida, quedó: %#v", got)
+	}
+	// Un archivo viejo con basura: se ignora al leerlo (y se reescribe limpio).
+	path := filepath.Join(root, "salas", "gaming", "sounds", "tombstones")
+	if err := os.WriteFile(path, []byte("basura\n"+soundID+"\n../x\n"+imageID+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.DeletedSounds(); len(got) != 2 || got[0] != soundID || got[1] != imageID {
+		t.Fatalf("lápidas leídas: %#v", got)
+	}
+	if data, _ := os.ReadFile(path); string(data) != soundID+"\n"+imageID+"\n" {
+		t.Fatalf("el archivo no quedó limpio: %q", data)
+	}
+}
+
+func TestClampRoomName(t *testing.T) {
+	long := strings.Repeat("ñ", MaxRoomNameRunes+10)
+	if got := ClampRoomName(long); utf8.RuneCountInString(got) != MaxRoomNameRunes {
+		t.Fatalf("ClampRoomName dejó %d runas", utf8.RuneCountInString(got))
+	}
+	if got := ClampRoomName("  Mi sala  "); got != "Mi sala" {
+		t.Fatalf("ClampRoomName(%q) = %q", "  Mi sala  ", got)
+	}
+	// El corte no deja espacios al final.
+	cut := strings.Repeat("a", MaxRoomNameRunes-1) + " b"
+	if got := ClampRoomName(cut); got != strings.Repeat("a", MaxRoomNameRunes-1) {
+		t.Fatalf("ClampRoomName(%q) = %q", cut, got)
+	}
+	// Un nombre larguísimo (como el que podría mandar un host) abre la sala igual.
+	store, err := New(t.TempDir(), strings.Repeat("x", 5000))
+	if err != nil {
+		t.Fatalf("New con nombre largo: %v", err)
+	}
+	if _, err := store.SaveSound(SoundMeta{ID: soundID, Ext: ".pcm", Name: "a"}, []byte("pcm")); err != nil {
+		t.Fatalf("SaveSound con nombre de sala largo: %v", err)
 	}
 }
 
@@ -249,13 +302,13 @@ func TestStoreTrimsSoundTombstones(t *testing.T) {
 	}
 	ids := make([]string, MaxSoundTombstones+10)
 	for i := range ids {
-		ids[i] = fmt.Sprintf("snd-%d", i)
+		ids[i] = fmt.Sprintf("%032x", i)
 	}
 	if err := store.AddSoundTombstones(ids); err != nil {
 		t.Fatal(err)
 	}
 	got := store.DeletedSounds()
-	if len(got) != MaxSoundTombstones || got[0] != "snd-10" || got[len(got)-1] != ids[len(ids)-1] {
+	if len(got) != MaxSoundTombstones || got[0] != ids[10] || got[len(got)-1] != ids[len(ids)-1] {
 		t.Fatalf("expected the newest %d tombstones, got %d starting at %q", MaxSoundTombstones, len(got), got[0])
 	}
 	if again := store.DeletedSounds(); len(again) != MaxSoundTombstones {

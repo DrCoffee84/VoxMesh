@@ -14,6 +14,7 @@ import (
 
 	"voxmesh/internal/audio"
 	"voxmesh/internal/config"
+	"voxmesh/internal/history"
 	"voxmesh/internal/logging"
 	"voxmesh/internal/room"
 	"voxmesh/internal/transport"
@@ -420,6 +421,8 @@ func (a *App) handleRoomState(state room.State, udp *transport.UDP) {
 			a.playEventSound(audio.SFXConnect)
 		}
 	}
+	// El nombre lo pone el host: recortado acá, si este cliente pasa a host lo anuncia ya recortado.
+	state.Name = history.ClampRoomName(state.Name)
 	a.roomState = state
 	a.refreshPeersFromRoom()
 	if state.Name != "" && state.Name != a.activeRoomName {

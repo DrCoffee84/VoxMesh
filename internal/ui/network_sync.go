@@ -3,6 +3,7 @@
 package ui
 
 import (
+	"fmt"
 	"net"
 	"strings"
 	"sync"
@@ -76,15 +77,31 @@ func (a *App) netAssetOK(kind byte, id, ext, from string) bool {
 	if err == nil {
 		return true
 	}
-	r := &a.assetRejects
+	a.assetRejects.note(err, from)
+	return false
+}
+
+func (r *rejectedAssets) note(err error, from string) {
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.count++
 	if time.Since(r.last) >= receiveErrorLogEvery {
 		logging.Infof("archivos de red descartados (%d): %s (de %q)", r.count, logging.FormatError(err), from)
 		r.last, r.count = time.Now(), 0
 	}
-	r.mu.Unlock()
-	return false
+}
+
+// netSoundIDsOK filtra las lápidas de sonidos que llegan por red (AGENDA S10): solo IDs de NewID.
+func (a *App) netSoundIDsOK(ids []string, from string) []string {
+	valid := ids[:0:0]
+	for _, id := range ids {
+		if history.ValidID(id) {
+			valid = append(valid, id)
+		} else {
+			a.assetRejects.note(fmt.Errorf("lápida con identificador inválido: %q", id), from)
+		}
+	}
+	return valid
 }
 
 // netSoundsOK filtra los sonidos de la botonera que llegan por red con ID o extensión inválidos.

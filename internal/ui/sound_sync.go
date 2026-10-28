@@ -75,10 +75,11 @@ func (a *App) handleSoundSyncRequest(udp *transport.UDP, addr *net.UDPAddr, enve
 	if store == nil || addr == nil {
 		return
 	}
-	if err := store.AddSoundTombstones(envelope.DeletedIDs); err != nil {
+	deletedIDs := a.netSoundIDsOK(envelope.DeletedIDs, addr.String())
+	if err := store.AddSoundTombstones(deletedIDs); err != nil {
 		logging.Errorf("sync de sonidos: guardar lápidas: %s", logging.FormatError(err))
 	}
-	removed := a.dropSounds(envelope.DeletedIDs)
+	removed := a.dropSounds(deletedIDs)
 	deleted := stringSet(store.DeletedSounds())
 
 	var added []room.Sound
@@ -132,11 +133,12 @@ func (a *App) handleSoundSyncResponse(envelope room.Envelope) {
 		return
 	}
 	a.soundSyncPending.Store(false)
-	if err := store.AddSoundTombstones(envelope.DeletedIDs); err != nil {
+	deletedIDs := a.netSoundIDsOK(envelope.DeletedIDs, "host")
+	if err := store.AddSoundTombstones(deletedIDs); err != nil {
 		logging.Errorf("sync de sonidos: guardar lápidas: %s", logging.FormatError(err))
 	}
-	removed := a.dropSounds(envelope.DeletedIDs)
-	deleted := stringSet(envelope.DeletedIDs)
+	removed := a.dropSounds(deletedIDs)
+	deleted := stringSet(deletedIDs)
 
 	var renamed []room.Sound
 	a.soundMu.Lock()

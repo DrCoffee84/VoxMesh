@@ -171,11 +171,19 @@ Cada tarea pendiente tiene un **ID** (`S1`, `R2`, `F3`...) y está escrita para 
 
 ### S10. Validar los IDs de las lápidas de sonidos
 
-- [ ] Visto en S1. `AddSoundTombstones` ([history.go](internal/history/history.go)) guarda tal cual los `DeletedIDs` que llegan por red (sync de la botonera). No arman rutas, pero un ID con `\n` mete líneas en `sounds\tombstones`, y basura de cualquier largo ocupa los 500 lugares (`MaxSoundTombstones`) y viaja en cada sync. Arreglo: aceptar solo `validID` (32 hex) en `AddSoundTombstones` y en `dropSounds`/`handleSoundSync*`. Test: IDs inválidos o con salto de línea → se ignoran.
+- [x] **Hecho (2026-10-28):**
+  - `history.ValidID` exportada. `AddSoundTombstones` y `readTombstonesLocked` solo aceptan IDs válidos: un archivo viejo con basura se reescribe limpio.
+  - En la UI, `netSoundIDsOK` ([network_sync.go](internal/ui/network_sync.go)) filtra los `DeletedIDs` de los dos syncs ([sound_sync.go](internal/ui/sound_sync.go)) antes de guardarlos o pasarlos a `dropSounds`, con el mismo log limitado que S1.
+  - Test: `TestStoreIgnoresInvalidSoundTombstones`.
+- Visto en S1. `AddSoundTombstones` ([history.go](internal/history/history.go)) guarda tal cual los `DeletedIDs` que llegan por red (sync de la botonera). No arman rutas, pero un ID con `\n` mete líneas en `sounds\tombstones`, y basura de cualquier largo ocupa los 500 lugares (`MaxSoundTombstones`) y viaja en cada sync. Arreglo: aceptar solo `validID` (32 hex) en `AddSoundTombstones` y en `dropSounds`/`handleSoundSync*`. Test: IDs inválidos o con salto de línea → se ignoran.
 
 ### S11. Tope de largo del nombre de sala
 
-- [ ] Visto en S1. El nombre de sala que manda el host (`RoomState`) no tiene tope. Con `safeName` ya no sale de `salas\`, pero un nombre muy largo hace fallar `history.New` (MAX_PATH) y el cliente queda sin historial ni botonera. Arreglo: recortarlo (por ejemplo a 64 runas) donde se recibe y en `safeName`, sin cambiar la carpeta de las salas existentes con nombres cortos.
+- [x] **Hecho (2026-10-28):**
+  - `history.MaxRoomNameRunes = 64` y `history.ClampRoomName`. Se aplica en "Crear y abrir" ([ui_connection.go](internal/ui/ui_connection.go) `createHost`), en el `RoomState` recibido ([network.go](internal/ui/network.go): se guarda ya recortado, así un cliente que pasa a host no reanuncia el largo) y dentro de `safeName`.
+  - Quedó afuera: una carpeta existente de más de 64 runas (no hay ninguna) pasaría a abrirse con el nombre recortado.
+  - Tests: `TestClampRoomName` (un nombre de 5000 caracteres abre la sala y guarda un sonido) y casos de `TestSafeName`.
+- Visto en S1. El nombre de sala que manda el host (`RoomState`) no tiene tope. Con `safeName` ya no sale de `salas\`, pero un nombre muy largo hace fallar `history.New` (MAX_PATH) y el cliente queda sin historial ni botonera. Arreglo: recortarlo (por ejemplo a 64 runas) donde se recibe y en `safeName`, sin cambiar la carpeta de las salas existentes con nombres cortos.
 
 ## 1.2 Rendimiento y estabilidad
 

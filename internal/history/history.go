@@ -189,7 +189,7 @@ func soundName(id, extension string) (string, string, error) {
 }
 
 func assetName(dir string, allowed map[string]struct{}, id, extension string) (string, string, error) {
-	if !validID(id) {
+	if !ValidID(id) {
 		return "", "", fmt.Errorf("identificador de archivo inválido: %q", id)
 	}
 	extension = strings.ToLower(extension)
@@ -199,8 +199,8 @@ func assetName(dir string, allowed map[string]struct{}, id, extension string) (s
 	return filepath.Join(dir, id+extension), extension, nil
 }
 
-// validID acepta solo lo que genera NewID: 32 caracteres hex en minúsculas.
-func validID(id string) bool {
+// ValidID acepta solo lo que genera NewID: 32 caracteres hex en minúsculas.
+func ValidID(id string) bool {
 	if len(id) != 32 {
 		return false
 	}
@@ -401,7 +401,8 @@ func (s *Store) appendSoundMeta(meta SoundMeta) error {
 const MaxSoundTombstones = 500
 
 // AddSoundTombstones records deletions learned from the room (e.g. the host's sync), skipping
-// the ones already known.
+// the ones already known and any ID that NewID could not have produced (they come from the
+// network: a newline would inject lines and junk would fill the MaxSoundTombstones slots).
 func (s *Store) AddSoundTombstones(ids []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -411,7 +412,7 @@ func (s *Store) AddSoundTombstones(ids []string) error {
 	}
 	fresh := make([]string, 0, len(ids))
 	for _, id := range ids {
-		if _, exists := known[id]; exists || strings.TrimSpace(id) == "" {
+		if _, exists := known[id]; exists || !ValidID(id) {
 			continue
 		}
 		known[id] = struct{}{}
@@ -431,7 +432,8 @@ func (s *Store) tombstonesPath() string {
 	return filepath.Join(s.root, "sounds", "tombstones")
 }
 
-// readTombstonesLocked deduplicates and trims the file to the newest MaxSoundTombstones.
+// readTombstonesLocked deduplicates, drops invalid IDs and trims the file to the newest
+// MaxSoundTombstones.
 func (s *Store) readTombstonesLocked() []string {
 	file, err := os.Open(s.tombstonesPath())
 	if err != nil {
@@ -444,7 +446,7 @@ func (s *Store) readTombstonesLocked() []string {
 	for scanner.Scan() {
 		lines++
 		id := strings.TrimSpace(scanner.Text())
-		if id == "" {
+		if !ValidID(id) {
 			continue
 		}
 		if _, exists := seen[id]; exists {
@@ -595,9 +597,24 @@ func NewID(senderID string) string {
 	return hex.EncodeToString(hash[:16])
 }
 
+// MaxRoomNameRunes acota el nombre de sala: el host lo manda en el RoomState y la carpeta
+// salas\<nombre>\sounds\<id>.pcm tiene que entrar en MAX_PATH (AGENDA S11).
+const MaxRoomNameRunes = 64
+
+// ClampRoomName recorta el nombre de sala a MaxRoomNameRunes (sin espacios en los bordes).
+// Se aplica donde se crea (crear sala) y donde se recibe (RoomState del host).
+func ClampRoomName(name string) string {
+	name = strings.TrimSpace(name)
+	if runes := []rune(name); len(runes) > MaxRoomNameRunes {
+		name = strings.TrimSpace(string(runes[:MaxRoomNameRunes]))
+	}
+	return name
+}
+
 // safeName convierte el nombre de la sala (que al cliente se lo manda el host) en un nombre de
-// carpeta de Windows: sin separadores, `<>:"|?*` ni caracteres de control, sin puntos o espacios
-// al final (Windows los borra) y con `_` en los nombres reservados (CON, NUL, COM1...).
+// carpeta de Windows: sin separadores, `<>:"|?*` ni caracteres de control, de MaxRoomNameRunes
+// como máximo, sin puntos o espacios al final (Windows los borra) y con `_` en los nombres
+// reservados (CON, NUL, COM1...).
 func safeName(value string) string {
 	value = strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) || strings.ContainsRune(`\/<>:"|?*`, r) {
@@ -605,7 +622,7 @@ func safeName(value string) string {
 		}
 		return r
 	}, value)
-	value = strings.TrimRight(strings.TrimSpace(value), ". ")
+	value = strings.TrimRight(ClampRoomName(value), ". ")
 	if value == "" {
 		return "sala"
 	}
