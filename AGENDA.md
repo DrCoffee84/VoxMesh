@@ -232,6 +232,27 @@ Sobre el puerto UPnP: la app borra el mapeo al cerrar la sala o la app. Si se ci
 
 ---
 
+# Ideas a futuro
+
+### F4. Directorio de salas en un servidor propio (no volver a pasar la invitación)
+
+- [ ] **Idea (de Coffee, 2026-10-28).** Hoy la invitación se vuelve a pasar en cada sesión porque cambia la IP pública del host (y con S4, la clave). La idea: un servidor HTTPS propio, con DNS fijo, donde el host publica "dónde está la sala" y la app de cada amigo va a buscarlo sola. Se conecta igual P2P: el servidor solo dice la dirección y nunca pasa audio.
+- **Opciones que se pensaron:**
+  1. El servidor guarda IP + nombre de sala **sin la clave**; la clave queda local (se pasó una vez por WhatsApp). Problema: con S4 la clave rota en cada sesión, así que habría que pedirle la nueva al host (con una contraseña) o ponerla a mano.
+  2. El servidor guarda IP + clave detrás de un PIN de 4 dígitos. **No recomendado**: 10.000 combinaciones se prueban en minutos si no hay un límite estricto, y el servidor pasaría a tener las claves de todas las salas (si lo comprometen, se cae todo).
+- **Propuesta para cuando se haga** (resuelve el problema de la rotación sin pasar claves por internet):
+  - Un **secreto de sala de largo plazo** (32 bytes) que viaja una sola vez en la primera invitación (WhatsApp) y cada amigo guarda localmente. Nunca va al servidor.
+  - **Clave de sesión derivada**: `HKDF(secreto, sal de la sesión)`. El host genera una sal aleatoria por sesión y la publica junto a la IP. La sal es pública y no sirve sin el secreto. Así la clave rota en cada sesión **sin intercambiar nada**: todos la calculan solos. No hace falta pedirle nada al host ni ponerla a mano.
+  - **ID de sala en el servidor** = derivado del secreto (por ejemplo `HMAC(secreto, "id")`). Sin el secreto no se puede preguntar por la sala, así que tampoco hace falta contraseña ni PIN: conocer el secreto *es* la contraseña.
+  - El host publica `{dirección(es), sal, vence}` firmado con `HMAC(secreto, …)`. El cliente verifica la firma: un servidor comprometido no puede mandar a nadie a otra dirección (y un host falso no sabría la clave igual).
+  - **Migración**: el host nuevo también conoce el secreto, así que republica su dirección y el servidor apunta al host actual.
+  - En la app: la sala queda guardada ("Mis salas") y entrar es un clic. Para sacar a alguien: secreto nuevo = invitación nueva.
+  - Servidor mínimo: `PUT /salas/{id}` (con la firma) y `GET /salas/{id}`, en memoria con vencimiento, HTTPS, límite de pedidos. Sirve un VPS chico o algo tipo Cloudflare Worker.
+- **Qué no resuelve**: CGNAT / NAT simétrico de los dos lados (sigue siendo UDP directo; ver STUN/TURN en "Descartado / quizás"). Agrega algo que mantener: el servidor.
+- **Relación con S4 + F3**: compatible. El código de invitación de F3 ya lleva versión, así que más adelante puede pasar a llevar el secreto de largo plazo en vez de la clave de sesión. No hay que cambiar nada de S4 + F3 ahora.
+
+---
+
 # Descartado / quizás
 
 No suman al flujo "crear sala → pasar invitación → hablar y jugar", o S4 ya los cubre entre amigos. Se dejan anotados con el porqué para no volver a discutirlos; si aparece el problema real, se retoman.
