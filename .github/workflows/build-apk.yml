@@ -1,0 +1,55 @@
+name: Build Android APK
+
+on:
+  push:
+    tags:
+      - 'v*-apk'
+      - '*-apk'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Android Mic APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.5'
+
+      - name: Build Debug APK
+        run: |
+          cd apk
+          gradle assembleDebug --stacktrace
+          cp app/build/outputs/apk/debug/app-debug.apk ../voxmesh-mic.apk
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoxMesh-Mic-Debug-APK
+          path: voxmesh-mic.apk
+
+      - name: Publish or Attach APK to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: voxmesh-mic.apk
+          name: "VoxMesh Mic (${{ github.ref_name }})"
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

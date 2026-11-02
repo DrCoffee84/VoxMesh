@@ -1,0 +1,232 @@
+package audio
+
+import (
+	"fmt"
+	"math"
+	"sync"
+
+	rnnoise "github.com/VoiceBlender/rnnoise-go"
+	rnmodel "github.com/VoiceBlender/rnnoise-go/model"
+
+	"voxmesh/internal/config"
+)
+
+const RNNoiseFrameSamples = 480
+
+type RNNoise struct {
+	mu       sync.Mutex
+	denoiser *rnnoise.Denoiser
+}
+
+func NewRNNoise() (*RNNoise, error) {
+	denoiser, err := rnnoise.New(rnnoise.Options{
+		SampleRate: SampleRate,
+		Model:      rnmodel.MustLoad(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("inicializar RNNoise: %w", err)
+	}
+	return &RNNoise{denoiser: denoiser}, nil
+}
+
+func (r *RNNoise) Reset() {
+	if r == nil || r.denoiser == nil {
+		return
+	}
+	r.mu.Lock()
+	r.denoiser.Reset()
+	r.mu.Unlock()
+}
+
+// Delay es el retardo de RNNoise en muestras: la salida de la muestra i corresponde a la
+// entrada i − Delay() (960 a 48 kHz, un frame).
+func (r *RNNoise) Delay() int {
+	return r.denoiser.Delay()
+}
+
+// ProcessSamplesWithOptions pasa las muestras por RNNoise in-place (cada bloque de 480 se copia
+// a float antes de escribir la salida en el mismo lugar), sin allocations.
+func (r *RNNoise) ProcessSamplesWithOptions(samples []int16, gate NoiseGate, vadThreshold float32, vadEnabled, gateEnabled bool) (bool, float32, error) {
+	if r == nil || r.denoiser == nil {
+		return false, 0, fmt.Errorf("RNNoise no está inicializado")
+	}
+	if len(samples) == 0 {
+		return false, 0, nil
+	}
+
+	maxVAD := float32(0)
+	hasSpeech := !vadEnabled
+
+	// Usamos la API float32 para controlar nosotros la vuelta a int16:
+	// ProcessInt16 hace int16(v) sin clamp y un pico > 32767 da la vuelta (wrap-around).
+	var inputFrame [RNNoiseFrameSamples]float32
+	var outputFrame [RNNoiseFrameSamples]float32
+	var resultFrame [RNNoiseFrameSamples]int16
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for start := 0; start < len(samples); start += RNNoiseFrameSamples {
+		end := start + RNNoiseFrameSamples
+		if end > len(samples) {
+			end = len(samples)
+		}
+		clear(inputFrame[:])
+		for i, sample := range samples[start:end] {
+			inputFrame[i] = float32(sample)
+		}
+		vad, err := r.denoiser.Process(outputFrame[:], inputFrame[:])
+		if err != nil {
+			return false, 0, fmt.Errorf("procesar frame RNNoise: %w", err)
+		}
+		for i, value := range outputFrame {
+			resultFrame[i] = floatToInt16(value)
+		}
+		if vad > maxVAD {
+			maxVAD = vad
+		}
+		gateOpen := true
+		if gateEnabled {
+			gateOpen = gate.Apply(resultFrame[:])
+		}
+		if (!vadEnabled || vad >= vadThreshold) && gateOpen {
+			hasSpeech = true
+		}
+		copy(samples[start:end], resultFrame[:end-start])
+	}
+	return hasSpeech, maxVAD, nil
+}
+
+// floatToInt16 redondea una muestra float en escala S16 y la satura al rango int16.
+func floatToInt16(value float32) int16 {
+	if value != value { // NaN
+		return 0
+	}
+	if value >= math.MaxInt16 {
+		return math.MaxInt16
+	}
+	if value <= math.MinInt16 {
+		return math.MinInt16
+	}
+	return int16(math.Round(float64(value)))
+}
+
+func ProcessRecording(data []byte, denoiser *RNNoise, gate NoiseGate, filterEnabled bool, vadThreshold float32, settings FilterSettings) ([]byte, error) {
+	samples, err := DecodePCM(data)
+	if err != nil {
+		return nil, err
+	}
+	effects := &Effects{}
+	out := make([]int16, 0, len(samples))
+	for start := 0; start+FrameSamples <= len(samples); start += FrameSamples {
+		frames, _, err := PrepareOutgoingFrames(samples[start:start+FrameSamples], denoiser, gate, filterEnabled, vadThreshold, settings, effects)
+		if err != nil {
+			return nil, err
+		}
+		if len(frames) == 0 {
+			out = append(out, make([]int16, FrameSamples)...)
+			continue
+		}
+		out = out[:len(out)-(len(frames)-1)*FrameSamples]
+		for _, frame := range frames {
+			out = append(out, frame...)
+		}
+	}
+	return EncodePCM(out), nil
+}
+
+// PrepareOutgoingFrames corre la cadena de envío sobre un frame (in-place) y devuelve los frames
+// a mandar, en orden: ninguno con la compuerta cerrada; al abrirse, primero el pre-roll. started
+// indica que arrancó una frase. Los slices son del Effects (o el propio samples) y valen hasta la
+// próxima llamada. Sin effects no hay estado entre frames: ni hold, ni pre-roll, ni envolvente.
+//
+// Orden: ganancia/filtros → RNNoise (siempre, sin bypass; mezcla con la señal original alineada
+// por intensidad o modo grito, ver shout.go) → VAD/compuerta con hold → limitador
+// con envolvente (un solo limitador real; el tanh de entrada solo actúa si InputGainDB > 0) →
+// pre-roll / fade-in.
+func PrepareOutgoingFrames(samples []int16, denoiser *RNNoise, gate NoiseGate, filterEnabled bool, vadThreshold float32, settings FilterSettings, effects *Effects) ([][]int16, bool, error) {
+	if len(samples) == 0 {
+		return nil, false, nil
+	}
+	ceiling := sendCeiling(settings, filterEnabled)
+
+	if !filterEnabled {
+		if effects != nil {
+			effects.setLastFrame(false, -1)
+		}
+		limitSend(samples, ceiling, settings.SendReleaseMS, effects)
+		return [][]int16{samples}, false, nil
+	}
+
+	if effects != nil {
+		// El tanh de entrada distorsiona lo que entra al denoiser: queda solo como protección
+		// cuando el usuario sube la ganancia. El techo real lo pone el limitador del final.
+		input := settings
+		input.LimiterEnabled = settings.LimiterEnabled && settings.GainDB > 0
+		effects.ApplySamples(samples, input)
+	}
+
+	if vadThreshold <= 0 {
+		vadThreshold = 0.5
+	}
+
+	// Ya no hay bypass por grito: RNNoise tiene 20 ms de retardo interno (Delay() = 2*480)
+	// y saltearlo frame a frame desordenaba y duplicaba audio. El "cirkci" original venía
+	// del wrap-around de int16 en ProcessInt16, que ahora evita el clamp de floatToInt16.
+	// Modo grito / intensidad: RNNoise corre igual; con Effects se guarda la entrada alineada
+	// para mezclarla después, y un grito cuenta como voz aunque el VAD diga que no.
+	hasSpeech := true
+	if settings.RNNoiseEnabled && denoiser != nil {
+		shout := false
+		if effects != nil {
+			shout = effects.shoutBegin(samples, denoiser.Delay(), settings)
+		}
+		speech, vad, err := denoiser.ProcessSamplesWithOptions(samples, gate, vadThreshold, settings.VADEnabled, false)
+		if err != nil {
+			return nil, false, err
+		}
+		hasSpeech = speech || shout
+		if effects != nil {
+			effects.shoutMix(samples, shout, settings)
+			effects.setLastFrame(shout, vad)
+		}
+	} else if effects != nil {
+		effects.setLastFrame(false, -1)
+	}
+
+	gateOpen := !settings.NoiseGateEnabled || gate.Open(samples)
+	keepOpen := hasSpeech && gateOpen
+	if effects != nil {
+		keepOpen = effects.KeepVoiceOpen(hasSpeech, gateOpen, settings)
+	}
+
+	limitSend(samples, ceiling, settings.SendReleaseMS, effects)
+	if effects == nil {
+		if !keepOpen {
+			return nil, false, nil
+		}
+		return [][]int16{samples}, false, nil
+	}
+	frames, started := effects.gateFrames(samples, keepOpen, settings)
+	return frames, started, nil
+}
+
+// sendCeiling es el techo del limitador de envío: SendCeilingDB, o el umbral del limiter del
+// usuario si está activo y es más bajo.
+func sendCeiling(settings FilterSettings, filterEnabled bool) int16 {
+	ceiling := math.Min(dbToS16(settings.SendCeilingDB), math.MaxInt16)
+	if filterEnabled && settings.LimiterEnabled {
+		ceiling = math.Min(ceiling, dbToS16(settings.LimiterThreshold))
+	}
+	return int16(ceiling)
+}
+
+// limitSend usa la envolvente del Effects; sin Effects, un limitador nuevo (attack instantáneo:
+// el techo se respeta igual, solo que la ganancia no se arrastra entre llamadas).
+func limitSend(samples []int16, ceiling int16, releaseMS float32, effects *Effects) {
+	if effects != nil {
+		effects.limitSend(samples, ceiling, releaseMS)
+		return
+	}
+	limiter := newPeakLimiter(float64(ceiling), config.AudioSendLimiterAttackMS, float64(releaseMS))
+	limiter.ProcessInt16(samples)
+}
