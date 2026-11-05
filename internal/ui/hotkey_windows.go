@@ -3,7 +3,6 @@
 package ui
 
 import (
-	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,6 +15,7 @@ import (
 	"golang.org/x/sys/windows"
 
 	"voxmesh/internal/config"
+	"voxmesh/internal/i18n"
 	"voxmesh/internal/logging"
 	"voxmesh/internal/room"
 )
@@ -262,15 +262,15 @@ func (a *App) showSoundBindDialog(sound room.Sound) {
 
 	detectedCombo := currentBind
 
-	titleLabel := widget.NewLabelWithStyle(fmt.Sprintf("Sonido: %s", sound.Name), fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	titleLabel := widget.NewLabelWithStyle(i18n.T("hotkey.sound_title", sound.Name), fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
 
-	statusText := "[ Presiona las teclas deseadas ]"
+	statusText := i18n.T("hotkey.press_keys")
 	if currentBind != "" {
-		statusText = "Atajo actual: " + currentBind
+		statusText = i18n.T("hotkey.current", currentBind)
 	}
 	comboLabel := widget.NewLabelWithStyle(statusText, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
 
-	helpLabel := widget.NewLabel("Presiona teclas como 1..9, Numpad 1..9, F1..F12, o con Shift/Ctrl/Alt.")
+	helpLabel := widget.NewLabel(i18n.T("hotkey.help"))
 	helpLabel.Alignment = fyne.TextAlignCenter
 
 	stopScan := make(chan struct{})
@@ -313,7 +313,7 @@ func (a *App) showSoundBindDialog(sound room.Sound) {
 							// detectedCombo lo lee el botón Aceptar: se escribe en el hilo de UI.
 							fyne.Do(func() {
 								detectedCombo = comboStr
-								comboLabel.SetText("Detectado: " + comboStr)
+								comboLabel.SetText(i18n.T("hotkey.detected", comboStr))
 							})
 						}
 						break
@@ -325,28 +325,28 @@ func (a *App) showSoundBindDialog(sound room.Sound) {
 
 	var d dialog.Dialog
 
-	btnAccept := widget.NewButton("Aceptar", func() {
+	btnAccept := widget.NewButton(i18n.T("common.accept"), func() {
 		cleanup()
 		if detectedCombo != "" {
 			combo := detectedCombo
 			a.updateSoundBinds(func(binds map[string]string) { binds[sound.ID] = combo })
 			a.rebuildSoundboard()
-			a.setStatus(fmt.Sprintf("Atajo '%s' asignado a '%s'", detectedCombo, sound.Name))
+			a.setStatus(i18n.M("hotkey.assigned", detectedCombo, sound.Name))
 		}
 		d.Hide()
 	})
 	btnAccept.Importance = widget.HighImportance
 
-	btnUnbind := widget.NewButton("Desbindear", func() {
+	btnUnbind := widget.NewButton(i18n.T("hotkey.unbind"), func() {
 		cleanup()
 		a.updateSoundBinds(func(binds map[string]string) { delete(binds, sound.ID) })
 		a.rebuildSoundboard()
-		a.setStatus(fmt.Sprintf("Atajo removido de '%s'", sound.Name))
+		a.setStatus(i18n.M("hotkey.removed", sound.Name))
 		d.Hide()
 	})
 	btnUnbind.Importance = widget.DangerImportance
 
-	btnCancel := widget.NewButton("Cancelar", func() {
+	btnCancel := widget.NewButton(i18n.T("common.cancel"), func() {
 		cleanup()
 		d.Hide()
 	})
@@ -361,7 +361,7 @@ func (a *App) showSoundBindDialog(sound room.Sound) {
 		buttons,
 	)
 
-	d = dialog.NewCustomWithoutButtons("Configurar atajo de teclado", content, a.window)
+	d = dialog.NewCustomWithoutButtons(i18n.T("hotkey.dialog_title"), content, a.window)
 	d.Resize(fyne.NewSize(380, 180))
 	d.SetOnClosed(cleanup)
 	d.Show()
@@ -371,15 +371,15 @@ func (a *App) showStopSoundBindDialog() {
 	currentBind := a.conf().StopSoundBind
 	detectedCombo := currentBind
 
-	titleLabel := widget.NewLabelWithStyle("Detener sonido", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	titleLabel := widget.NewLabelWithStyle(i18n.T("hotkey.stop_title"), fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
 
-	statusText := "[ Presiona las teclas deseadas ]"
+	statusText := i18n.T("hotkey.press_keys")
 	if currentBind != "" {
-		statusText = "Atajo actual: " + currentBind
+		statusText = i18n.T("hotkey.current", currentBind)
 	}
 	comboLabel := widget.NewLabelWithStyle(statusText, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
 
-	helpLabel := widget.NewLabel("Presiona teclas como 1..9, Numpad 1..9, F1..F12, o con Shift/Ctrl/Alt.")
+	helpLabel := widget.NewLabel(i18n.T("hotkey.help"))
 	helpLabel.Alignment = fyne.TextAlignCenter
 
 	stopScan := make(chan struct{})
@@ -422,7 +422,7 @@ func (a *App) showStopSoundBindDialog() {
 							// detectedCombo lo lee el botón Aceptar: se escribe en el hilo de UI.
 							fyne.Do(func() {
 								detectedCombo = comboStr
-								comboLabel.SetText("Detectado: " + comboStr)
+								comboLabel.SetText(i18n.T("hotkey.detected", comboStr))
 							})
 						}
 						break
@@ -434,7 +434,7 @@ func (a *App) showStopSoundBindDialog() {
 
 	var d dialog.Dialog
 
-	btnAccept := widget.NewButton("Aceptar", func() {
+	btnAccept := widget.NewButton(i18n.T("common.accept"), func() {
 		cleanup()
 		if detectedCombo != "" {
 			combo := detectedCombo
@@ -444,13 +444,13 @@ func (a *App) showStopSoundBindDialog() {
 			if a.stopBindBtn != nil {
 				a.stopBindBtn.SetCombo(detectedCombo)
 			}
-			a.setStatus(fmt.Sprintf("Atajo '%s' asignado para detener sonido", detectedCombo))
+			a.setStatus(i18n.M("hotkey.stop_assigned", detectedCombo))
 		}
 		d.Hide()
 	})
 	btnAccept.Importance = widget.HighImportance
 
-	btnUnbind := widget.NewButton("Desbindear", func() {
+	btnUnbind := widget.NewButton(i18n.T("hotkey.unbind"), func() {
 		cleanup()
 		a.updateConfig(func(c *config.Config) { c.StopSoundBind = "" })
 		a.publishHotkeys()
@@ -458,12 +458,12 @@ func (a *App) showStopSoundBindDialog() {
 		if a.stopBindBtn != nil {
 			a.stopBindBtn.SetCombo("")
 		}
-		a.setStatus("Atajo removido para detener sonido")
+		a.setStatus(i18n.M("hotkey.stop_removed"))
 		d.Hide()
 	})
 	btnUnbind.Importance = widget.DangerImportance
 
-	btnCancel := widget.NewButton("Cancelar", func() {
+	btnCancel := widget.NewButton(i18n.T("common.cancel"), func() {
 		cleanup()
 		d.Hide()
 	})
@@ -478,7 +478,7 @@ func (a *App) showStopSoundBindDialog() {
 		buttons,
 	)
 
-	d = dialog.NewCustomWithoutButtons("Configurar atajo para detener sonido", content, a.window)
+	d = dialog.NewCustomWithoutButtons(i18n.T("hotkey.stop_dialog_title"), content, a.window)
 	d.Resize(fyne.NewSize(380, 180))
 	d.SetOnClosed(cleanup)
 	d.Show()

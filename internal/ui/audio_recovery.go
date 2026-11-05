@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"voxmesh/internal/audio"
+	"voxmesh/internal/i18n"
 	"voxmesh/internal/logging"
 	"voxmesh/internal/winproc"
 )
@@ -92,14 +93,15 @@ func (a *App) checkAudioHealth(now time.Time) {
 		logging.Errorf("evitar la suspensión durante la sala: %s", logging.FormatError(err))
 	}
 	engine := a.engine()
-	ok, reason := engine.Health(now)
+	ok, health := engine.Health(now)
+	reason := i18n.Plain(health) // el motivo del Engine es un detalle técnico: va tal cual
 	if engine == nil {
-		reason = "no hay audio abierto"
+		reason = i18n.M("audio.no_engine")
 	}
 	if !a.audioRecovery.check(now, inRoom, engine, ok) {
 		return
 	}
-	logging.Errorf("audio caído (%s): reabriendo (intento %d, %d en total)", reason, a.audioRecovery.attempts, a.audioRecovery.total)
-	a.setStatus("Se cayó el audio (" + reason + "), reabriendo...")
+	logging.Errorf("audio caído (%s): reabriendo (intento %d, %d en total)", reason.In(i18n.ES), a.audioRecovery.attempts, a.audioRecovery.total)
+	a.setStatus(i18n.M("audio.dropped", reason))
 	go a.restartAudioInRoom() // cerrar un dispositivo invalidado puede tardar: el monitor sigue
 }

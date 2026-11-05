@@ -27,12 +27,13 @@ import (
 	"voxmesh/internal/audio"
 	"voxmesh/internal/config"
 	"voxmesh/internal/history"
+	"voxmesh/internal/i18n"
 	"voxmesh/internal/logging"
 	"voxmesh/internal/room"
 )
 
 func (a *App) buildSoundPanel() {
-	muteCheck := widget.NewCheck("Bloquear sonidos ajenos", func(checked bool) {
+	muteCheck := widget.NewCheck(i18n.T("sound.block_others"), func(checked bool) {
 		a.updateConfig(func(c *config.Config) { c.SoundboardMuted = checked })
 		a.saveConfig()
 	})
@@ -55,9 +56,9 @@ func (a *App) buildSoundPanel() {
 	}
 
 	// El porcentaje con ancho fijo: si no, el slider cambia de largo al pasar de 95 % a 100 %.
-	volRow := container.NewBorder(nil, nil, widget.NewLabel("Volumen"), container.New(fixedWidthLayout{48}, volPercent), volSlider)
+	volRow := container.NewBorder(nil, nil, widget.NewLabel(i18n.T("sound.volume")), container.New(fixedWidthLayout{48}, volPercent), volSlider)
 
-	stopButton := widget.NewButtonWithIcon("Detener", theme.MediaStopIcon(), a.stopSoundboard)
+	stopButton := widget.NewButtonWithIcon(i18n.T("sound.stop"), theme.MediaStopIcon(), a.stopSoundboard)
 	a.stopBindBtn = a.newBindButton(cfg.StopSoundBind, a.showStopSoundBindDialog)
 	stopBindWrap := container.NewGridWrap(fyne.NewSize(bindButtonWidth, 34), a.stopBindBtn)
 	delSpacer := container.NewGridWrap(fyne.NewSize(34, 34), layout.NewSpacer())
@@ -65,7 +66,7 @@ func (a *App) buildSoundPanel() {
 	stopRow := container.NewBorder(nil, nil, nil, stopActions, stopButton)
 
 	searchEntry := widget.NewEntry()
-	searchEntry.SetPlaceHolder("Buscar sonido…")
+	searchEntry.SetPlaceHolder(i18n.T("sound.search_placeholder"))
 	clearSearch := widget.NewButtonWithIcon("", theme.CancelIcon(), func() { searchEntry.SetText("") })
 	clearSearch.Importance = widget.LowImportance
 	searchEntry.ActionItem = clearSearch
@@ -75,12 +76,12 @@ func (a *App) buildSoundPanel() {
 		a.rebuildSoundboard()
 	}
 
-	addButton := widget.NewButtonWithIcon("Agregar sonido", theme.ContentAddIcon(), a.pickAndAddSound)
+	addButton := widget.NewButtonWithIcon(i18n.T("sound.add"), theme.ContentAddIcon(), a.pickAndAddSound)
 	a.soundGrid = container.NewVBox()
 	soundScroll := container.NewVScroll(a.soundGrid)
 	soundScroll.SetMinSize(fyne.NewSize(220, 160))
 	soundHeader := container.NewVBox(
-		cardTitle("Sonidos"),
+		cardTitle(i18n.T("sound.title")),
 		muteCheck,
 		volRow,
 		stopRow,
@@ -130,7 +131,7 @@ func (a *App) rebuildSoundboard() {
 		objects = append(objects, row)
 	}
 	if len(objects) == 0 && filter != "" && len(sounds) > 0 {
-		objects = append(objects, widget.NewLabelWithStyle("Sin resultados", fyne.TextAlignCenter, fyne.TextStyle{Italic: true}))
+		objects = append(objects, widget.NewLabelWithStyle(i18n.T("sound.no_results"), fyne.TextAlignCenter, fyne.TextStyle{Italic: true}))
 	}
 	fyne.Do(func() {
 		if a.soundGrid == nil {
@@ -184,7 +185,7 @@ func (b *bindButton) SetCombo(combo string) {
 
 func bindButtonText(combo string) string {
 	if combo == "" {
-		return "Bind"
+		return i18n.T("sound.bind")
 	}
 	return fitButtonText(combo, bindButtonWidth)
 }
@@ -251,14 +252,14 @@ func (a *App) showEditSoundDialog(sound room.Sound) {
 	}
 	nameEntry.OnSubmitted = func(string) { save() }
 
-	replaceBtn := widget.NewButtonWithIcon("Cambiar audio", theme.FolderOpenIcon(), func() {
+	replaceBtn := widget.NewButtonWithIcon(i18n.T("sound.replace_audio"), theme.FolderOpenIcon(), func() {
 		name := strings.TrimSpace(nameEntry.Text)
 		if name == "" {
 			name = sound.Name
 		}
 		editDialog.Hide()
 		a.pickSoundFile(func(_ string, pcm []byte, peaks []int16) {
-			a.showSoundTrimDialog("Reemplazar audio", name, pcm, peaks, func(newName string, trimmed []byte) {
+			a.showSoundTrimDialog(i18n.T("sound.replace_title"), name, pcm, peaks, func(newName string, trimmed []byte) {
 				a.replaceSoundAudio(sound, newName, trimmed)
 			})
 		})
@@ -267,8 +268,8 @@ func (a *App) showEditSoundDialog(sound room.Sound) {
 		replaceBtn.Disable()
 	}
 
-	deleteBtn := widget.NewButtonWithIcon("Eliminar", theme.DeleteIcon(), func() {
-		confirm := dialog.NewConfirm("Eliminar \""+sound.Name+"\"", "¿Estás seguro de eliminar este sonido?", func(ok bool) {
+	deleteBtn := widget.NewButtonWithIcon(i18n.T("sound.delete"), theme.DeleteIcon(), func() {
+		confirm := dialog.NewConfirm(i18n.T("sound.delete_title", sound.Name), i18n.T("sound.delete_confirm"), func(ok bool) {
 			if !ok {
 				return
 			}
@@ -276,22 +277,22 @@ func (a *App) showEditSoundDialog(sound room.Sound) {
 			// removeSound borra el archivo y avisa a la sala: fuera del hilo de UI.
 			go a.removeSound(sound.ID)
 		}, a.window)
-		confirm.SetConfirmText("Eliminar")
-		confirm.SetDismissText("Cancelar")
+		confirm.SetConfirmText(i18n.T("sound.delete"))
+		confirm.SetDismissText(i18n.T("common.cancel"))
 		confirm.SetConfirmImportance(widget.DangerImportance)
 		confirm.Show()
 	})
 	deleteBtn.Importance = widget.DangerImportance
 
 	content := container.NewVBox(
-		widget.NewLabel("Nombre:"),
+		widget.NewLabel(i18n.T("sound.name")),
 		nameEntry,
 		widget.NewSeparator(),
 		container.NewGridWithColumns(2, replaceBtn, deleteBtn),
 	)
-	editDialog = dialog.NewCustom("Editar sonido", "Cancelar", content, a.window)
-	cancelBtn := widget.NewButtonWithIcon("Cancelar", theme.CancelIcon(), editDialog.Hide)
-	saveBtn := widget.NewButtonWithIcon("Guardar", theme.ConfirmIcon(), save)
+	editDialog = dialog.NewCustom(i18n.T("sound.edit_title"), i18n.T("common.cancel"), content, a.window)
+	cancelBtn := widget.NewButtonWithIcon(i18n.T("common.cancel"), theme.CancelIcon(), editDialog.Hide)
+	saveBtn := widget.NewButtonWithIcon(i18n.T("common.save"), theme.ConfirmIcon(), save)
 	saveBtn.Importance = widget.HighImportance
 	editDialog.SetButtons([]fyne.CanvasObject{cancelBtn, saveBtn})
 	editDialog.Resize(fyne.NewSize(380, editDialog.MinSize().Height))
@@ -325,21 +326,21 @@ func (a *App) renameSound(soundID, name string) {
 	}
 	// sound_add con un ID existente reemplaza la entrada en addSound.
 	a.sendSoundEnvelope(room.SoundAddMessage, renamed)
-	a.setStatus("Sonido renombrado: " + name)
+	a.setStatus(i18n.M("sound.renamed", name))
 }
 
 // replaceSoundAudio guarda el audio nuevo con otro ID (los demás ya tienen cacheado el asset del
 // ID viejo y no lo volverían a pedir), lo pone en el mismo lugar de la lista y le pasa el atajo.
 func (a *App) replaceSoundAudio(old room.Sound, name string, pcm []byte) {
 	if a.historyStore == nil || !a.connected() {
-		dialog.ShowInformation("Cambiar audio", "Conecta a una sala antes de cambiar el audio.", a.window)
+		dialog.ShowInformation(i18n.T("sound.replace_audio"), i18n.T("sound.connect_first_replace"), a.window)
 		return
 	}
-	a.setStatus("Reemplazando audio: " + name + "...")
+	a.setStatus(i18n.M("sound.replacing", name))
 	go func() {
 		sound := room.Sound{ID: history.NewID(a.participantID), Ext: ".pcm", Name: name}
 		if _, saveErr := a.historyStore.SaveSound(history.SoundMeta{ID: sound.ID, Ext: sound.Ext, Name: sound.Name}, pcm); saveErr != nil {
-			a.showSoundError("No se pudo guardar el sonido: " + saveErr.Error())
+			a.showSoundError(i18n.M("sound.save_failed", saveErr.Error()))
 			return
 		}
 		a.soundMu.Lock()
@@ -373,7 +374,7 @@ func (a *App) replaceSoundAudio(old room.Sound, name string, pcm []byte) {
 		a.sendSoundEnvelope(room.SoundAddMessage, sound)
 		a.sendAsset(assets.KindSound, sound.ID, sound.Ext, pcm)
 		a.sendSoundEnvelope(room.SoundRemoveMessage, old)
-		a.setStatus("Audio reemplazado: " + name)
+		a.setStatus(i18n.M("sound.replaced", name))
 	}()
 }
 
@@ -389,11 +390,11 @@ func (a *App) sendSoundEnvelope(kind string, sound room.Sound) {
 
 // showSoundError se puede llamar desde cualquier goroutine. Va a un diálogo y no solo a setStatus:
 // la barra de estado puede estar oculta (ShowStatusBar) y el error pasaba desapercibido.
-func (a *App) showSoundError(text string) {
-	logging.Errorf("soundboard: %s", text)
-	a.setStatus(text)
+func (a *App) showSoundError(msg i18n.Msg) {
+	logging.Errorf("soundboard: %s", msg.In(i18n.ES))
+	a.setStatus(msg)
 	fyne.Do(func() {
-		dialog.ShowInformation("Sonidos", text, a.window)
+		dialog.ShowInformation(i18n.T("sound.title"), msg.String(), a.window)
 	})
 }
 
@@ -443,17 +444,17 @@ func (a *App) removeSound(soundID string) {
 		return
 	}
 	a.sendSoundEnvelope(room.SoundRemoveMessage, removed[0])
-	a.setStatus("Sonido eliminado: " + removed[0].Name)
+	a.setStatus(i18n.M("sound.removed", removed[0].Name))
 }
 
 // pickAndAddSound corre en el hilo de UI (callback de "Agregar sonido").
 func (a *App) pickAndAddSound() {
 	if a.historyStore == nil || !a.connected() {
-		dialog.ShowInformation("Agregar sonido", "Conecta a una sala antes de agregar un sonido.", a.window)
+		dialog.ShowInformation(i18n.T("sound.add"), i18n.T("sound.connect_first_add"), a.window)
 		return
 	}
 	a.pickSoundFile(func(name string, pcm []byte, peaks []int16) {
-		a.showSoundTrimDialog("Recortar sonido", name, pcm, peaks, a.saveAndBroadcastSound)
+		a.showSoundTrimDialog(i18n.T("sound.trim_title"), name, pcm, peaks, a.saveAndBroadcastSound)
 	})
 }
 
@@ -471,33 +472,33 @@ func (a *App) pickSoundFile(onLoaded func(name string, pcm []byte, peaks []int16
 		defer func() {
 			if value := recover(); value != nil {
 				logging.Panic(value)
-				a.showSoundError("No se pudo abrir el selector de sonidos.")
+				a.showSoundError(i18n.M("sound.picker_failed"))
 			}
 		}()
 		path, err := selectSoundFile(owner)
 		if err != nil {
 			if err.Error() != "selección cancelada" {
-				a.showSoundError("No se pudo abrir el selector de sonidos: " + err.Error())
+				a.showSoundError(i18n.M("sound.picker_failed_detail", err.Error()))
 			}
 			return
 		}
-		a.setStatus("Cargando y procesando audio...")
+		a.setStatus(i18n.M("sound.loading"))
 		raw, readErr := os.ReadFile(path)
 		if readErr != nil {
-			a.showSoundError("No se pudo leer el sonido: " + readErr.Error())
+			a.showSoundError(i18n.M("sound.read_failed", readErr.Error()))
 			return
 		}
 		extension := strings.ToLower(filepath.Ext(path))
 		pcm, decodeErr := audio.DecodeSoundFile(extension, raw)
 		raw = nil // Liberar memoria del archivo original de inmediato
 		if decodeErr != nil {
-			a.showSoundError("No se pudo procesar el sonido: " + decodeErr.Error())
+			a.showSoundError(i18n.M("sound.decode_failed", errorMsg(decodeErr)))
 			return
 		}
 		name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 		// Recorre todo el PCM (millones de muestras en un MP3 largo): se calcula acá, no en el hilo de UI.
 		peaks := computeWaveformPeaks(pcm, trimWaveWidth)
-		a.setStatus("Audio cargado: " + name)
+		a.setStatus(i18n.M("sound.loaded", name))
 		fyne.Do(func() {
 			onLoaded(name, pcm, peaks)
 		})
@@ -615,7 +616,7 @@ func (a *App) showSoundTrimDialog(title, defaultName string, pcm []byte, initial
 	nameEntry := widget.NewEntry()
 	nameEntry.SetText(defaultName)
 
-	durationLabel := widget.NewLabel(fmt.Sprintf("Duración visible: %.2f s", totalSec))
+	durationLabel := widget.NewLabel(i18n.T("sound.trim_visible", totalSec))
 
 	waveformImg := canvas.NewImageFromImage(waveImg)
 	waveformImg.SetMinSize(fyne.NewSize(imgW, imgH))
@@ -782,7 +783,7 @@ func (a *App) showSoundTrimDialog(title, defaultName string, pcm []byte, initial
 
 	var zoomOutBtn *widget.Button
 
-	zoomInBtn := widget.NewButtonWithIcon("Zoom a selección", theme.ZoomInIcon(), func() {
+	zoomInBtn := widget.NewButtonWithIcon(i18n.T("sound.trim_zoom_in"), theme.ZoomInIcon(), func() {
 		s := int(startSlider.Value*96000) &^ 1
 		e := int(endSlider.Value*96000) &^ 1
 		curTotalBytes := viewEndByte - viewStartByte
@@ -799,7 +800,7 @@ func (a *App) showSoundTrimDialog(title, defaultName string, pcm []byte, initial
 		viewStartByte += s
 		viewEndByte = viewStartByte + (e - s)
 		newTotal := float64(viewEndByte-viewStartByte) / 96000.0
-		durationLabel.SetText(fmt.Sprintf("Duración visible: %.2f s", newTotal))
+		durationLabel.SetText(i18n.T("sound.trim_visible", newTotal))
 
 		activePeaks = computeWaveformPeaks(pcm[viewStartByte:viewEndByte], imgW)
 
@@ -817,7 +818,7 @@ func (a *App) showSoundTrimDialog(title, defaultName string, pcm []byte, initial
 		updateWaveform()
 	})
 
-	zoomOutBtn = widget.NewButtonWithIcon("Alejar zoom", theme.ZoomOutIcon(), func() {
+	zoomOutBtn = widget.NewButtonWithIcon(i18n.T("sound.trim_zoom_out"), theme.ZoomOutIcon(), func() {
 		if len(zoomHistory) == 0 {
 			return
 		}
@@ -826,7 +827,7 @@ func (a *App) showSoundTrimDialog(title, defaultName string, pcm []byte, initial
 		viewStartByte = prev.startByte
 		viewEndByte = prev.endByte
 		prevTotal := float64(viewEndByte-viewStartByte) / 96000.0
-		durationLabel.SetText(fmt.Sprintf("Duración visible: %.2f s", prevTotal))
+		durationLabel.SetText(i18n.T("sound.trim_visible", prevTotal))
 
 		activePeaks = computeWaveformPeaks(pcm[viewStartByte:viewEndByte], imgW)
 
@@ -845,37 +846,37 @@ func (a *App) showSoundTrimDialog(title, defaultName string, pcm []byte, initial
 	})
 	zoomOutBtn.Disable()
 
-	previewBtn := widget.NewButton("▶ Probar recorte", func() {
+	previewBtn := widget.NewButton(i18n.T("sound.trim_preview"), func() {
 		trimmed := slicePCM()
 		if len(trimmed) > 0 {
 			a.playSoundPCM(trimmed)
 		}
 	})
 
-	stopBtn := widget.NewButton("⏹ Detener", func() {
+	stopBtn := widget.NewButton(i18n.T("sound.trim_stop"), func() {
 		a.stopSoundboard()
 	})
 
-	startRow := container.NewBorder(nil, nil, widget.NewLabel("Inicio:"), container.NewHBox(startEntryBox, widget.NewLabel("s")), startSlider)
-	endRow := container.NewBorder(nil, nil, widget.NewLabel("Fin:   "), container.NewHBox(endEntryBox, widget.NewLabel("s")), endSlider)
+	startRow := container.NewBorder(nil, nil, widget.NewLabel(i18n.T("sound.trim_start")), container.NewHBox(startEntryBox, widget.NewLabel("s")), startSlider)
+	endRow := container.NewBorder(nil, nil, widget.NewLabel(i18n.T("sound.trim_end")), container.NewHBox(endEntryBox, widget.NewLabel("s")), endSlider)
 	zoomToolbar := container.NewHBox(durationLabel, layout.NewSpacer(), zoomInBtn, zoomOutBtn)
 
 	controls := container.NewVBox(
-		widget.NewLabelWithStyle("Onda de audio (verde = área seleccionada):", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		widget.NewLabelWithStyle(i18n.T("sound.trim_wave"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		waveformImg,
 		zoomToolbar,
 		widget.NewSeparator(),
 		startRow,
 		endRow,
 		widget.NewSeparator(),
-		widget.NewLabel(fmt.Sprintf("Máximo %.0f s por sonido.", math.Floor(maxSoundSec))),
-		widget.NewLabel("Nombre del sonido:"),
+		widget.NewLabel(i18n.T("sound.trim_max", math.Floor(maxSoundSec))),
+		widget.NewLabel(i18n.T("sound.trim_name")),
 		nameEntry,
 		container.NewGridWithColumns(2, previewBtn, stopBtn),
 	)
 
 	var d *dialog.ConfirmDialog
-	d = dialog.NewCustomConfirm(title, "Guardar sonido", "Cancelar", controls, func(confirmed bool) {
+	d = dialog.NewCustomConfirm(title, i18n.T("sound.trim_save"), i18n.T("common.cancel"), controls, func(confirmed bool) {
 		a.stopSoundboard()
 		if confirmed {
 			soundName := strings.TrimSpace(nameEntry.Text)
@@ -886,8 +887,8 @@ func (a *App) showSoundTrimDialog(title, defaultName string, pcm []byte, initial
 			if len(trimmed) > assets.MaxBytes {
 				// No se podría mandar a la sala: se vuelve al recorte (sin liberar el PCM).
 				d.Show()
-				dialog.ShowInformation("Recorte demasiado largo",
-					fmt.Sprintf("La selección dura %.1f s y el máximo es %.0f s.\nAcorta el recorte.", float64(len(trimmed))/96000.0, math.Floor(maxSoundSec)),
+				dialog.ShowInformation(i18n.T("sound.trim_too_long_title"),
+					i18n.T("sound.trim_too_long", float64(len(trimmed))/96000.0, math.Floor(maxSoundSec)),
 					a.window)
 				return
 			}
@@ -908,27 +909,27 @@ func (a *App) showSoundTrimDialog(title, defaultName string, pcm []byte, initial
 
 func (a *App) saveAndBroadcastSound(name string, pcm []byte) {
 	if a.historyStore == nil || !a.connected() {
-		dialog.ShowInformation("Agregar sonido", "Conecta a una sala antes de agregar un sonido.", a.window)
+		dialog.ShowInformation(i18n.T("sound.add"), i18n.T("sound.connect_first_add"), a.window)
 		return
 	}
-	a.setStatus("Guardando sonido: " + name + "...")
+	a.setStatus(i18n.M("sound.saving", name))
 	go func() {
 		sound := room.Sound{ID: history.NewID(a.participantID), Ext: ".pcm", Name: name}
 		if _, saveErr := a.historyStore.SaveSound(history.SoundMeta{ID: sound.ID, Ext: sound.Ext, Name: sound.Name}, pcm); saveErr != nil {
-			a.showSoundError("No se pudo guardar el sonido: " + saveErr.Error())
+			a.showSoundError(i18n.M("sound.save_failed", saveErr.Error()))
 			return
 		}
 		a.addSound(sound)
 		a.sendSoundEnvelope(room.SoundAddMessage, sound)
 		a.sendAsset(assets.KindSound, sound.ID, sound.Ext, pcm)
-		a.setStatus("Sonido agregado: " + name)
+		a.setStatus(i18n.M("sound.added", name))
 	}()
 }
 
 func (a *App) triggerSound(sound room.Sound) {
 	go func() {
 		if a.playOrFetchSound(sound) {
-			a.setStatus("Descargando sonido: " + sound.Name + "...")
+			a.setStatus(i18n.M("sound.downloading", sound.Name))
 		}
 		payload, err := room.Encode(room.Envelope{Kind: room.SoundPlayMessage, Sound: &sound})
 		if err == nil {

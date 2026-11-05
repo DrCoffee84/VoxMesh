@@ -4,7 +4,7 @@ package ui
 
 import (
 	_ "embed"
-	"fmt"
+	"errors"
 	"net"
 	"os"
 	"runtime/debug"
@@ -23,10 +23,12 @@ import (
 	"voxmesh/internal/audio"
 	"voxmesh/internal/config"
 	"voxmesh/internal/history"
+	"voxmesh/internal/i18n"
 	"voxmesh/internal/logging"
 	"voxmesh/internal/netinfo"
 	"voxmesh/internal/phonemic"
 	"voxmesh/internal/room"
+	"voxmesh/internal/screen"
 	"voxmesh/internal/transport"
 	"voxmesh/internal/updater"
 	"voxmesh/internal/version"
@@ -104,6 +106,7 @@ type App struct {
 	previewPlayer   *audio.Player
 	previewEngine   *audio.Engine
 	mainView        fyne.CanvasObject
+	mainFrame       *fyne.Container // barra de arriba (+ banner de pantalla) | centro | barra de estado
 	settingsStatus  *widget.Label
 	assetAssembler  *assets.Assembler
 	assetRejects    rejectedAssets
@@ -136,8 +139,29 @@ type App struct {
 	// Sync de la botonera con el host, una vez por conexión (sound_sync.go).
 	soundSyncPending atomic.Bool
 	soundSyncSentAt  atomic.Int64
+	// Pantalla compartida (network_screen.go, screen_share.go, screen_view.go, ui_screen.go).
+	screenState      atomic.Pointer[screenState]  // quién comparte y quién mira; la rearma refreshPeersFromRoom
+	screenShare      atomic.Pointer[shareSession] // mi pantalla compartida (nil = no comparto)
+	screenWatch      atomic.Pointer[watchSession] // la pantalla que miro (nil = ninguna)
+	screenRejects    rejectedTiles                // tiles que el host no reenvía; solo receiveLoop
+	rttFloor         screen.RTTFloor              // latencias por dirección: ¿la pantalla va a ritmo de LAN?
+	screenRateLAN    atomic.Bool                  // host: el último ritmo elegido fue el de LAN (log)
+	screenRateLogged atomic.Bool
+	screenHostRate   atomic.Int64 // cliente que comparte: ritmo que mandó el host (bytes/s)
+	screenHostRateAt atomic.Int64 // UnixNano de cuándo llegó
+	shareButton      *widget.Button
+	shareBanner      *fyne.Container
+	shareBannerText  *widget.Label
+	shareResolution  *widget.Select // resolución en el banner (cambia en vivo); solo el hilo de UI
+	screenView       *screenView    // ventana del visor; solo el hilo de UI
 }
 
+// appTitle es el título de la ventana principal (un nombre: no se traduce). Mientras comparto
+// pantalla pasa a main.title_sharing (setSharingIndicator).
+const appTitle = "VoxMesh"
+
+// phoneMicInput es el valor que se guarda en InputDevice cuando la entrada es el celular (un
+// identificador: no se traduce; el select muestra deviceOptionLabel).
 const phoneMicInput = "Micrófono del celular"
 
 // memoryLimit es el tope blando de memoria del runtime (debug.SetMemoryLimit): por encima, el GC
@@ -146,7 +170,14 @@ const memoryLimit = 512 << 20
 
 func New(executable string) *App {
 	cfgPath := config.Path(executable)
+	_, statErr := os.Stat(cfgPath)
 	cfg, _ := config.Load(cfgPath)
+	// El idioma va antes que cualquier texto y que la ventana: se aplica al arrancar.
+	i18n.Set(cfg.Language)
+	if os.IsNotExist(statErr) {
+		// Primera vez: el nombre y la sala por defecto en el idioma de la app.
+		cfg.Username, cfg.RoomName = i18n.T("default.username"), i18n.T("default.room_name")
+	}
 	logging.SetLevel(cfg.LogLevel)
 	var profiles config.Profiles
 	if profilesDir, err := config.ProfilesDir(); err == nil {
@@ -180,11 +211,14 @@ func New(executable string) *App {
 	return a
 }
 
-func (a *App) setStatus(text string) {
-	logging.Infof("%s", text)
+// setStatus muestra msg en la barra de estado (y en la de Ajustes) en el idioma de la app; el log
+// lo guarda en español.
+func (a *App) setStatus(msg i18n.Msg) {
+	logging.Infof("%s", msg.In(i18n.ES))
 	if a.status == nil && a.settingsStatus == nil {
 		return
 	}
+	text := msg.String()
 	fyne.Do(func() {
 		if a.status != nil {
 			a.status.SetText(text)
@@ -214,7 +248,7 @@ func (a *App) Run() {
 		appIcon := fyne.NewStaticResource("icon.png", appIconBytes)
 		application.SetIcon(appIcon)
 	}
-	a.window = application.NewWindow("VoxMesh")
+	a.window = application.NewWindow(appTitle)
 	if len(appIconBytes) > 0 {
 		appIcon := fyne.NewStaticResource("icon.png", appIconBytes)
 		a.window.SetIcon(appIcon)
@@ -223,7 +257,7 @@ func (a *App) Run() {
 	a.window.Resize(fyne.NewSize(cfg.WindowWidth, cfg.WindowHeight))
 	a.window.SetCloseIntercept(func() {
 		if a.connected() {
-			dialog.ShowConfirm("Salir de VoxMesh", "Estás en una sala activa. ¿Deseas salir y cerrar VoxMesh?", func(confirmed bool) {
+			dialog.ShowConfirm(i18n.T("main.quit.title"), i18n.T("main.quit.message"), func(confirmed bool) {
 				if confirmed {
 					a.quit(a.stopConnectionAsync(), nil)
 				}
@@ -237,7 +271,7 @@ func (a *App) Run() {
 	if a.conf().InputDevice == phoneMicInput {
 		if _, err := a.ensurePhoneMicServer(); err != nil {
 			logging.Errorf("iniciar micrófono de celular: %s", logging.FormatError(err))
-			a.setStatus("No se pudo iniciar el servidor del celular: " + err.Error())
+			a.setStatus(i18n.M("status.phone_server_start_failed", errorMsg(err)))
 		}
 	}
 	a.startHotkeyListener()
@@ -310,13 +344,13 @@ func fileExists(path string) bool {
 
 func (a *App) checkForUpdates(manual bool) {
 	if manual {
-		a.setStatus("Buscando actualizaciones...")
+		a.setStatus(i18n.M("update.checking"))
 	}
 	info, err := updater.CheckForUpdate(version.Value)
 	if err != nil {
 		if manual {
 			fyne.Do(func() {
-				a.setStatus("Error al buscar actualizaciones.")
+				a.setStatus(i18n.M("update.check_failed"))
 				dialog.ShowError(err, a.window)
 			})
 		} else {
@@ -327,8 +361,8 @@ func (a *App) checkForUpdates(manual bool) {
 	if info == nil {
 		if manual {
 			fyne.Do(func() {
-				a.setStatus("Tienes la versión más reciente.")
-				dialog.ShowInformation("Actualizaciones", "Ya tienes instalada la versión más reciente ("+version.Value+").", a.window)
+				a.setStatus(i18n.M("update.up_to_date"))
+				dialog.ShowInformation(i18n.T("update.title"), i18n.T("update.up_to_date_dialog", version.Value), a.window)
 			})
 		}
 		return
@@ -340,13 +374,13 @@ func (a *App) checkForUpdates(manual bool) {
 }
 
 func (a *App) promptUpdate(info *updater.ReleaseInfo) {
-	msg := fmt.Sprintf("¡Hay una nueva versión disponible!\n\nVersión nueva: %s\nVersión actual: %s", info.Version, version.Value)
+	msg := i18n.T("update.available", info.Version, version.Value)
 	if info.Changelog != "" {
-		msg += "\n\nNovedades:\n" + info.Changelog
+		msg += i18n.T("update.changelog", info.Changelog)
 	}
-	msg += "\n\n¿Deseas actualizar ahora automáticamente?"
+	msg += i18n.T("update.ask")
 
-	dialog.ShowConfirm("Actualización disponible", msg, func(confirm bool) {
+	dialog.ShowConfirm(i18n.T("update.available_title"), msg, func(confirm bool) {
 		if !confirm {
 			return
 		}
@@ -357,10 +391,10 @@ func (a *App) promptUpdate(info *updater.ReleaseInfo) {
 func (a *App) executeAutoUpdate(info *updater.ReleaseInfo) {
 	progress := widget.NewProgressBar()
 	progress.SetValue(0)
-	statusText := widget.NewLabel("Descargando " + info.Version + "...")
+	statusText := widget.NewLabel(i18n.T("update.downloading", info.Version))
 	box := container.NewVBox(statusText, progress)
 
-	updateDialog := dialog.NewCustomWithoutButtons("Actualizando VoxMesh", box, a.window)
+	updateDialog := dialog.NewCustomWithoutButtons(i18n.T("update.updating_title"), box, a.window)
 	updateDialog.Show()
 
 	go func() {
@@ -373,7 +407,7 @@ func (a *App) executeAutoUpdate(info *updater.ReleaseInfo) {
 			logging.Errorf("actualizar a %s: %s", info.Version, logging.FormatError(err))
 			fyne.Do(func() {
 				updateDialog.Hide()
-				dialog.ShowError(fmt.Errorf("no se pudo completar la actualización: %w", err), a.window)
+				dialog.ShowError(errors.New(i18n.T("update.failed", err.Error())), a.window)
 			})
 			return
 		}

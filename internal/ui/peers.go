@@ -9,6 +9,7 @@ import (
 
 	"voxmesh/internal/audio"
 	"voxmesh/internal/config"
+	"voxmesh/internal/i18n"
 )
 
 type peerView struct {
@@ -21,6 +22,7 @@ type peerView struct {
 	shoutUntil time.Time // hasta cuándo va el aro rojo del avatar (habló en modo grito)
 	isSelf     bool
 	muted      bool
+	sharing    bool // comparte su pantalla (el propio: la sesión local, sin esperar al host)
 	net        peerNetStats
 }
 
@@ -34,7 +36,7 @@ type peerNetStats struct {
 func (a *App) refreshPeersFromRoom() {
 	selfName := a.conf().Username
 	if selfName == "" {
-		selfName = config.DefaultUsername
+		selfName = i18n.T("default.username")
 	}
 	connected := a.connected()
 	a.peerMu.Lock()
@@ -54,6 +56,7 @@ func (a *App) refreshPeersFromRoom() {
 			address:    "127.0.0.1",
 			isSelf:     true,
 			muted:      a.isMuted.Load(),
+			sharing:    a.screenShare.Load() != nil,
 			speaking:   a.voiceActive.Load(),
 			speakStop:  time.Now().Add(250 * time.Millisecond),
 			shoutUntil: shoutByID[a.participantID],
@@ -69,11 +72,13 @@ func (a *App) refreshPeersFromRoom() {
 			address:    participant.Address,
 			lag:        lagByAddress[participant.Address],
 			muted:      participant.Muted,
+			sharing:    participant.Sharing,
 			net:        netByID[participant.ID],
 			shoutUntil: shoutByID[participant.ID],
 		})
 	}
 	a.peerMu.Unlock()
+	a.publishScreenState()
 	a.loadSavedPeerVolumes()
 	a.refreshPeerAvatars()
 }
@@ -96,6 +101,7 @@ func (a *App) setSelfMuted(muted bool) {
 }
 
 func (a *App) updatePeerLag(address string, lag time.Duration) {
+	a.rttFloor.Add(address, lag) // ritmo de la pantalla compartida: ¿es LAN?
 	a.peerMu.Lock()
 	for index := range a.peerNames {
 		if a.peerNames[index].address == address {

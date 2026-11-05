@@ -5,7 +5,6 @@ package ui
 import (
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"net"
 	"runtime/debug"
 	"time"
@@ -15,6 +14,7 @@ import (
 	"voxmesh/internal/audio"
 	"voxmesh/internal/config"
 	"voxmesh/internal/history"
+	"voxmesh/internal/i18n"
 	"voxmesh/internal/logging"
 	"voxmesh/internal/room"
 	"voxmesh/internal/transport"
@@ -75,7 +75,9 @@ func (a *App) handlePacket(udp *transport.UDP, fo *room.Failover, packet transpo
 		udp.Relay(packet, addr)
 	}
 	addrStr := addr.String() // una sola vez por paquete
-	if logging.IsTrace() {
+	// Los tiles de pantalla (cientos por segundo) no: tapaban el resto del log de nivel 2. Los
+	// cuentan los resúmenes de pantalla.
+	if logging.IsTrace() && packet.Kind != transport.PacketScreenTile && packet.Kind != transport.PacketScreenCursor {
 		logging.Tracef("Tráfico UDP recibido: tipo=%d, origen=%s, tamaño=%d bytes", packet.Kind, addrStr, len(packet.Payload))
 	}
 	if a.hostMode.Load() {
@@ -135,6 +137,14 @@ func (a *App) handleHostPacket(udp *transport.UDP, fo *room.Failover, packet tra
 		a.handleAssetMissing(udp, addr, packet.Payload)
 	case transport.PacketRoomMute:
 		a.handleMutePacket(udp, addr, packet.Payload)
+	case transport.PacketScreenShare:
+		a.handleSharePacket(udp, addr, packet.Payload)
+	case transport.PacketScreenWatch:
+		a.handleWatchPacket(udp, addr, packet.Payload)
+	case transport.PacketScreenTile, transport.PacketScreenCursor, transport.PacketScreenDigest:
+		a.handleScreenFromSharer(udp, packet, addrStr, false)
+	case transport.PacketScreenRepair:
+		a.handleScreenRepair(udp, packet, addrStr, false)
 	}
 }
 
@@ -172,7 +182,7 @@ func (a *App) handleClientPacket(udp *transport.UDP, fo *room.Failover, packet t
 	case transport.PacketRoomLeave:
 		if fromHost {
 			if envelope, err := room.Decode(packet.Payload); err == nil && envelope.Kind == room.RoomFullMessage {
-				fo.Refused(fmt.Sprintf("La sala está llena (máximo %d participantes).", room.MaxParticipants))
+				fo.Refused(i18n.M("room.full", room.MaxParticipants))
 				return
 			}
 			a.handleHostLeave(packet.Payload, fo, now)
@@ -196,6 +206,14 @@ func (a *App) handleClientPacket(udp *transport.UDP, fo *room.Failover, packet t
 	case transport.PacketAssetMissing:
 		if fromHost {
 			a.handleAssetMissing(udp, addr, packet.Payload)
+		}
+	case transport.PacketScreenTile, transport.PacketScreenCursor, transport.PacketScreenDigest:
+		a.handleScreenFromSharer(udp, packet, addrStr, fromHost)
+	case transport.PacketScreenRepair:
+		a.handleScreenRepair(udp, packet, addrStr, fromHost)
+	case transport.PacketScreenRate:
+		if fromHost {
+			a.handleScreenRate(packet.Payload)
 		}
 	}
 }
@@ -225,7 +243,7 @@ func (a *App) handleRoomHello(udp *transport.UDP, fo *room.Failover, payload []b
 	// El tope va antes del sufijo: recortado después, el sufijo se perdería y el bucle no terminaría.
 	candidateName := room.ClampUsername(joining.Username)
 	if candidateName == "" {
-		candidateName = config.DefaultUsername
+		candidateName = i18n.T("default.username")
 	}
 	joining.Username = a.roomState.UniqueUsername(joining.ID, candidateName)
 
@@ -275,7 +293,7 @@ func (a *App) handleRoomHello(udp *transport.UDP, fo *room.Failover, payload []b
 	}
 	logging.Infof("Cliente conectado: %s (%s)", joining.Username, addrStr)
 	joinedUser := joining.Username
-	go a.addSystemMessage(joinedUser + " se conectó.")
+	go a.addSystemMessage("chat.sys.joined", joinedUser)
 	a.playEventSound(audio.SFXConnect)
 	a.broadcastRoomState(udp, addr)
 }
@@ -329,7 +347,7 @@ func (a *App) handleParticipantLeave(participantID, username string, addr *net.U
 		if addr != nil {
 			username = addr.String()
 		} else {
-			username = config.DefaultUsername
+			username = i18n.T("default.username")
 		}
 	}
 	addrStr := ""
@@ -340,7 +358,7 @@ func (a *App) handleParticipantLeave(participantID, username string, addr *net.U
 	a.refreshPeersFromRoom()
 	leftName := username
 	go func(uName string) {
-		a.addSystemMessage(uName + " se desconectó.")
+		a.addSystemMessage("chat.sys.left", uName)
 		if a.roomStore != nil {
 			a.roomStore.Replace(a.roomState)
 		}
@@ -370,10 +388,14 @@ func (a *App) handleHostLeave(payload []byte, fo *room.Failover, now time.Time) 
 	}
 	username := leaving.Username
 	if username == "" {
-		username = "El host"
+		username = "El host" // solo para el log
 	}
 	logging.Infof("Notificación de desconexión recibida: %s", username)
-	go a.addSystemMessage(username + " se desconectó.")
+	if leaving.Username == "" {
+		go a.addSystemMessage("chat.sys.host_left")
+	} else {
+		go a.addSystemMessage("chat.sys.left", leaving.Username)
+	}
 	a.playEventSound(audio.SFXDisconnect)
 	a.roomState.MarkDisconnected(leaving.ID)
 	a.refreshPeersFromRoom()
@@ -396,8 +418,8 @@ func (a *App) handleRoomState(state room.State, udp *transport.UDP) {
 						a.selfNameLabel.SetText(newName)
 					}
 				})
-				a.setStatus("Nombre en uso. Tu nuevo nombre es: " + p.Username)
-				a.addSystemMessage("Tu nombre de usuario se cambió a " + p.Username + " porque ya existía otro en la sala.")
+				a.setStatus(i18n.M("status.name_taken", p.Username))
+				a.addSystemMessage("chat.sys.renamed", p.Username)
 				logging.Infof("Nombre cambiado por el host de '%s' a '%s' por duplicado", oldName, p.Username)
 			}
 			continue
@@ -450,6 +472,8 @@ func (a *App) sendHelloOnly(udp *transport.UDP, address *net.UDPAddr) {
 		Connected:   true,
 		CanBeHost:   cfg.AllowHostMigration,
 		Muted:       a.isMuted.Load(),
+		Sharing:     a.screenShare.Load() != nil,
+		Watching:    a.watchTarget(),
 		LastSeenUTC: time.Now().UTC(),
 	}
 	payload, _ := room.Encode(room.Envelope{Kind: room.HelloMessage, Participant: &participant})
@@ -546,12 +570,15 @@ func (a *App) broadcastRoomState(udp *transport.UDP, except *net.UDPAddr) {
 func (a *App) pingPeers(udp *transport.UDP, stop <-chan struct{}) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
+	var relayLog screenRelayLog
 	for {
 		select {
 		case <-stop:
 			return
 		case <-ticker.C:
 			now := time.Now().UTC()
+			relayLog.check(udp, now)
+			a.updateScreenRates(udp)
 			for _, peer := range udp.Peers() {
 				a.sendPing(udp, peer)
 			}

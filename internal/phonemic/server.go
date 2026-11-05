@@ -12,6 +12,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"html/template"
 	"math"
@@ -29,6 +30,7 @@ import (
 
 	"voxmesh/internal/audio"
 	"voxmesh/internal/config"
+	"voxmesh/internal/i18n"
 	"voxmesh/internal/logging"
 )
 
@@ -59,7 +61,7 @@ type Server struct {
 	connected       bool
 	sample          []byte
 	onPCM           func(frame []byte, at time.Time)
-	onStatus        func(string)
+	onStatus        func(i18n.Msg)
 	frames          chan []byte
 	bufferEnabled   bool
 	prebufferFrames int
@@ -73,7 +75,7 @@ type Server struct {
 // Start abre el servidor del micrófono del celular. onPCM recibe cada frame de 20 ms con su hora:
 // con buffer, la del horario de reparto (un atraso al repartir no parece una pausa); sin buffer,
 // la de llegada.
-func Start(token string, port int, buffer Buffer, username string, onPCM func(frame []byte, at time.Time), onStatus func(string)) (*Server, error) {
+func Start(token string, port int, buffer Buffer, username string, onPCM func(frame []byte, at time.Time), onStatus func(i18n.Msg)) (*Server, error) {
 	localIP, err := localIPv4()
 	if err != nil {
 		return nil, err
@@ -97,7 +99,7 @@ func Start(token string, port int, buffer Buffer, username string, onPCM func(fr
 		}
 	}
 	if username == "" {
-		username = config.DefaultUsername
+		username = i18n.T("default.username")
 	}
 	bufferMS := normalizeBufferMS(buffer.MS)
 	prebufferFrames := (bufferMS + int(frameDuration/time.Millisecond) - 1) / int(frameDuration/time.Millisecond)
@@ -129,7 +131,7 @@ func Start(token string, port int, buffer Buffer, username string, onPCM func(fr
 	server.http = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		if err := server.http.Serve(listener); err != nil && err != http.ErrServerClosed {
-			server.status("Servidor de micrófono detenido: " + err.Error())
+			server.status(i18n.M("phone.server_stopped", err.Error()))
 		}
 	}()
 	if buffer.Enabled {
@@ -259,7 +261,7 @@ func (s *Server) handlePage(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = phoneTemplate.Execute(writer, struct{ Username string }{Username: s.username})
+	_ = phoneTemplate.Execute(writer, newPhonePage(s.username))
 }
 
 func (s *Server) handleWebSocket(writer http.ResponseWriter, request *http.Request) {
@@ -412,14 +414,14 @@ func (s *Server) setConnected(connected bool) {
 	s.mu.Unlock()
 	if changed {
 		if connected {
-			s.status("Celular conectado como micrófono.")
+			s.status(i18n.M("phone.connected"))
 		} else {
-			s.status("Celular desconectado del micrófono.")
+			s.status(i18n.M("phone.disconnected"))
 		}
 	}
 }
 
-func (s *Server) status(message string) {
+func (s *Server) status(message i18n.Msg) {
 	if s.onStatus != nil {
 		s.onStatus(message)
 	}
@@ -446,8 +448,12 @@ func localIPv4() (net.IP, error) {
 			return ipNet.IP.To4(), nil
 		}
 	}
-	return nil, fmt.Errorf("no se encontró una IP local privada")
+	return nil, ErrNoLocalIP
 }
+
+// ErrNoLocalIP: la PC no tiene una IP de red local (no está en Wi-Fi ni LAN), así que el celular
+// no la puede encontrar.
+var ErrNoLocalIP = errors.New("no se encontró una IP local privada")
 
 func persistentCertificate(ip net.IP) (tls.Certificate, error) {
 	root, err := config.AppDir()
@@ -521,20 +527,44 @@ func randomToken() (string, error) {
 	return hex.EncodeToString(bytes), nil
 }
 
+// phonePage son los datos de la página del celular: los textos van en el idioma de la PC.
+type phonePage struct {
+	Lang, Heading, Welcome, Info, Button, Idle string
+	Connected, Reconnecting, MicLost, MicError string // texto de JavaScript (html/template lo escapa)
+	MediaTitle, Username                       string
+}
+
+func newPhonePage(username string) phonePage {
+	return phonePage{
+		Lang:         string(i18n.Current()),
+		Heading:      i18n.T("phone.page.heading"),
+		Welcome:      i18n.T("phone.page.welcome", username),
+		Info:         i18n.T("phone.page.info"),
+		Button:       i18n.T("phone.page.button"),
+		Idle:         i18n.T("phone.page.idle"),
+		Connected:    i18n.T("phone.page.connected"),
+		Reconnecting: i18n.T("phone.page.reconnecting"),
+		MicLost:      i18n.T("phone.page.mic_lost"),
+		MicError:     i18n.T("phone.page.mic_error"),
+		MediaTitle:   i18n.T("phone.page.media_title"),
+		Username:     username,
+	}
+}
+
 var phoneTemplate = template.Must(template.New("phone").Parse(phonePageTemplate))
 
-const phonePageTemplate = `<!doctype html><html lang="es"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VoxMesh Mic</title>
+const phonePageTemplate = `<!doctype html><html lang="{{.Lang}}"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VoxMesh Mic</title>
 <style>
 body{font:16px sans-serif;background:#142124;color:#e8f2ef;margin:0;padding:32px;text-align:center}
 button{font:inherit;padding:14px 22px;background:#80ef80;border:0;border-radius:6px;color:#102014}
 #state{margin-top:20px;line-height:1.5}
 p.info{max-width:420px;margin:16px auto;font-size:14px;color:#b7c9c4;line-height:1.5;text-align:left}
 </style>
-<h1>Micrófono VoxMesh</h1>
-<p>Bienvenido, {{.Username}}</p>
-<p class="info">Este celular funciona como el micrófono de tu PC en la sala VoxMesh: tu voz se manda por Wi-Fi y no crea un usuario aparte. Tocá el botón, aceptá el permiso de micrófono y dejá esta pestaña abierta con la pantalla encendida mientras hablás. Si bloqueás la pantalla manualmente, la conexión se corta y se reconecta sola al desbloquear.</p>
-<button id="start">Usar este celular como micrófono</button>
-<div id="state">Conectá el micrófono para hablar desde la PC.</div>
+<h1>{{.Heading}}</h1>
+<p>{{.Welcome}}</p>
+<p class="info">{{.Info}}</p>
+<button id="start">{{.Button}}</button>
+<div id="state">{{.Idle}}</div>
 <audio id="keepalive" loop playsinline style="display:none"></audio>
 <script>
 const state=document.querySelector('#state'),button=document.querySelector('#start'),keepAlive=document.querySelector('#keepalive'),token=new URLSearchParams(location.search).get('token');
@@ -556,8 +586,8 @@ function send(input){
 function connect(){
 	socket=new WebSocket('wss://'+location.host+'/ws?token='+encodeURIComponent(token));
 	socket.binaryType='arraybuffer';
-	socket.onopen=()=>{state.textContent='Conectado. Dejá esta pantalla abierta.';reconnecting=false};
-	socket.onclose=()=>{state.textContent='Reconectando...';setTimeout(resume,1000)}
+	socket.onopen=()=>{state.textContent={{.Connected}};reconnecting=false};
+	socket.onclose=()=>{state.textContent={{.Reconnecting}};setTimeout(resume,1000)}
 }
 
 async function requestWakeLock(){
@@ -580,7 +610,7 @@ function startKeepAliveAudio(){
 		keepAlive.volume=0.01;
 		keepAlive.play().catch(()=>{});
 		if('mediaSession' in navigator){
-			navigator.mediaSession.metadata=new MediaMetadata({title:'VoxMesh Micrófono',artist:'{{.Username}}'});
+			navigator.mediaSession.metadata=new MediaMetadata({title:{{.MediaTitle}},artist:'{{.Username}}'});
 			navigator.mediaSession.playbackState='playing';
 			navigator.mediaSession.setActionHandler('play',()=>{});
 			navigator.mediaSession.setActionHandler('pause',()=>{})
@@ -593,7 +623,7 @@ async function reacquireMicIfNeeded(){
 	try{
 		stream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
 		context.createMediaStreamSource(stream).connect(processor)
-	}catch(error){state.textContent='No se pudo recuperar el micrófono: '+error.message}
+	}catch(error){state.textContent={{.MicLost}}+error.message}
 }
 
 async function resume(){
@@ -627,6 +657,6 @@ button.onclick=async()=>{
 		requestWakeLock();
 		startKeepAliveAudio();
 		button.disabled=true
-	}catch(error){state.textContent='No se pudo usar el micrófono: '+error.message}
+	}catch(error){state.textContent={{.MicError}}+error.message}
 }
 </script>`

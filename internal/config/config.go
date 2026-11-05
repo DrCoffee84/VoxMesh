@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"voxmesh/internal/i18n"
 )
 
 type MicMode string
@@ -22,8 +24,11 @@ const (
 // que encoding/json aplana sus campos: el archivo es un solo objeto plano.
 type Config struct {
 	LiveSettings
-	RoomName         string            `json:"room_name"`
-	Username         string            `json:"username"`
+	RoomName string `json:"room_name"`
+	Username string `json:"username"`
+	// Language es el idioma de la interfaz ("en" | "es"; vacío o desconocido = "en"). Lo confirma
+	// Guardar y se aplica al arrancar (i18n.Set en ui.New).
+	Language         string            `json:"language"`
 	ListenAddress    string            `json:"listen_address"`
 	PhoneMicToken    string            `json:"phone_mic_token"`
 	PhoneMicPort     int               `json:"phone_mic_port"`
@@ -39,6 +44,10 @@ type Config struct {
 	WindowWidth     float32 `json:"window_width"`
 	WindowHeight    float32 `json:"window_height"`
 	WindowMaximized bool    `json:"window_maximized"`
+	// ScreenResolution es la última resolución elegida para compartir pantalla ("full" | "1080p" |
+	// "900p" | "720p"). Se guarda tal cual: vacía o desconocida se lee como 1080p con
+	// screen.ParseResolution. La escribe el diálogo de "Compartir"; Ajustes no la toca.
+	ScreenResolution string `json:"screen_resolution,omitempty"`
 }
 
 // Tamaño de ventana por defecto y mínimo aceptado al cargar (más chico = archivo roto).
@@ -168,6 +177,7 @@ func Default() Config {
 		LiveSettings:     live,
 		RoomName:         "Mi sala",
 		Username:         DefaultUsername,
+		Language:         string(i18n.EN),
 		ListenAddress:    DefaultListenAddress,
 		PhoneMicPort:     DefaultPhoneMicPort,
 		SoundboardVolume: 1.0,
@@ -236,6 +246,7 @@ func Load(path string) (Config, error) {
 	if cfg.SoundboardVolume <= 0 {
 		cfg.SoundboardVolume = 1.0
 	}
+	cfg.Language = string(i18n.Normalize(cfg.Language))
 	// Valores fuera de rango (archivo editado a mano o de otra versión) vuelven a su default.
 	ResetOutOfRange(&cfg.LiveSettings)
 	if cfg.WindowWidth < minWindowWidth || cfg.WindowHeight < minWindowHeight {

@@ -14,18 +14,30 @@ import (
 
 	"voxmesh/internal/config"
 	"voxmesh/internal/history"
+	"voxmesh/internal/i18n"
 	"voxmesh/internal/room"
 )
 
 // TestMainViewIgnoresLongText: ningún texto largo ensancha la ventana principal. Antes la
-// invitación pegada estiraba la columna izquierda y la botonera quedaba fuera de la ventana.
+// invitación pegada estiraba la columna izquierda y la botonera quedaba fuera de la ventana. En
+// los dos idiomas: los textos de los botones de las columnas fijas tienen que entrar.
 func TestMainViewIgnoresLongText(t *testing.T) {
+	for _, lang := range []string{"en", "es"} {
+		t.Run(lang, func(t *testing.T) { testMainViewIgnoresLongText(t, lang) })
+	}
+}
+
+func testMainViewIgnoresLongText(t *testing.T, lang string) {
 	test.NewTempApp(t).Settings().SetTheme(voxTheme{})
 	a := New(filepath.Join(t.TempDir(), "voxmesh.exe"))
+	setLanguage(t, lang) // después de New, que aplica el de la config
 	view := a.content()
 	window := test.NewTempWindow(t, view)
 	window.Resize(fyne.NewSize(960, 700))
 	base := view.MinSize().Width
+	if base > config.DefaultWindowWidth {
+		t.Fatalf("ancho mínimo %v: no entra en la ventana por defecto (%v)", base, config.DefaultWindowWidth)
+	}
 
 	long := strings.Repeat("palabra ", 40)
 	roomName := strings.Repeat("S", 64)
@@ -56,6 +68,11 @@ func TestMainViewIgnoresLongText(t *testing.T) {
 		{"sonido", func() {
 			a.sounds = append(a.sounds, room.Sound{ID: "0123456789abcdef0123456789abcdef", Ext: ".pcm", Name: strings.Repeat("Bocina ", 9)})
 			a.rebuildSoundboard()
+		}},
+		{"banner de pantalla compartida", func() {
+			a.screenState.Store(&screenState{myWatcherNames: strings.Split(strings.Repeat("Participante,", 15), ",")})
+			a.screenShare.Store(&shareSession{stop: make(chan struct{})})
+			a.refreshShareControls()
 		}},
 	}
 	for _, step := range steps {
@@ -118,5 +135,40 @@ func TestBindTooltip(t *testing.T) {
 	test.MoveMouse(window.Canvas(), fyne.NewPos(1, 1))
 	if a.tooltip.box.Visible() {
 		t.Fatal("la leyenda sigue después de sacar el mouse")
+	}
+}
+
+// TestShareBannerPushesContentDown: el banner de "Estás compartiendo tu pantalla" baja el resto de
+// la ventana en vez de taparlo (mostrar u ocultar no rearma el Border de afuera por sí solo). El
+// título de la ventana (el aviso que se ve minimizada) cambia junto con el banner.
+func TestShareBannerPushesContentDown(t *testing.T) {
+	test.NewTempApp(t).Settings().SetTheme(voxTheme{})
+	a := New(filepath.Join(t.TempDir(), "voxmesh.exe"))
+	window := test.NewTempWindow(t, a.content())
+	window.SetTitle(appTitle)
+	a.window = window
+	window.Resize(fyne.NewSize(960, 700))
+	center := a.mainFrame.Objects[0]
+	before := center.Position().Y
+
+	a.screenShare.Store(&shareSession{stop: make(chan struct{})})
+	a.refreshShareControls()
+	if !a.shareBanner.Visible() {
+		t.Fatal("the banner must show while sharing")
+	}
+	if got, want := center.Position().Y, before+a.shareBanner.MinSize().Height; got < want {
+		t.Fatalf("content starts at y=%v with the banner, want at least %v", got, want)
+	}
+	if got := window.Title(); got != i18n.T("main.title_sharing") {
+		t.Fatalf("title while sharing = %q", got)
+	}
+
+	a.screenShare.Store(nil)
+	a.refreshShareControls()
+	if a.shareBanner.Visible() || center.Position().Y != before {
+		t.Fatalf("after stopping: banner visible=%v, content at y=%v (want %v)", a.shareBanner.Visible(), center.Position().Y, before)
+	}
+	if got := window.Title(); got != appTitle {
+		t.Fatalf("title after stopping = %q, want %q", got, appTitle)
 	}
 }

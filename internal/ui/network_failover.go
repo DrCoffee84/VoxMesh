@@ -6,6 +6,7 @@ import (
 	"net"
 	"time"
 
+	"voxmesh/internal/i18n"
 	"voxmesh/internal/logging"
 	"voxmesh/internal/room"
 	"voxmesh/internal/transport"
@@ -42,6 +43,7 @@ func (a *App) failoverLoop(udp *transport.UDP, fo *room.Failover, stop <-chan st
 					if !a.selfMuteSynced() {
 						a.sendMuteState(udp)
 					}
+					a.resyncScreenState(udp)
 					a.maybeSendSoundSync(udp)
 				})
 			}
@@ -78,12 +80,12 @@ func (r *rejectedPackets) check(udp *transport.UDP) {
 func (a *App) runFailoverAction(udp *transport.UDP, fo *room.Failover, action room.Action) {
 	if action.Kind == room.ActStatus || action.Kind == room.ActGiveUp {
 		// Solo local: addSystemMessage lo difundiría a la sala si soy el host, y el texto es mío.
-		logging.Infof("Migración de host: %s", action.Text)
+		logging.Infof("Migración de host: %s", action.Msg.In(i18n.ES))
 		if action.Kind == room.ActGiveUp {
 			a.stopConnection() // antes del aviso: su "Sala detenida." no lo tapa
 		}
-		a.setStatus(action.Text)
-		a.addActivity(action.Text)
+		a.setStatus(action.Msg)
+		a.addActivity(action.Msg.String())
 		return
 	}
 	if action.Kind == room.ActBecomeHost {
@@ -113,6 +115,11 @@ func (a *App) runFailoverAction(udp *transport.UDP, fo *room.Failover, action ro
 func (a *App) takeOverHost(udp *transport.UDP, fo *room.Failover, state room.State) {
 	logging.Infof("Migración: asumiendo el rol de host (epoch %d)", state.Epoch)
 	state.SetMuted(a.participantID, "", a.isMuted.Load()) // el mute local, no el último que vio el host viejo
+	// Lo mismo con la pantalla: quién comparte y quién mira sigue como estaba (lo trae el estado
+	// del host viejo), y lo propio va según lo local.
+	state.SetSharing(a.participantID, "", a.screenShare.Load() != nil)
+	state.SetWatching(a.participantID, "", a.watchTarget())
+	udp.SetScreenRate(transport.ScreenRateBytes) // como host la cola entera es para reenviar
 	a.roomState = state
 	if a.roomStore == nil {
 		a.roomStore = room.NewStore(state)

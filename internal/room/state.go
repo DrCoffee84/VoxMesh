@@ -13,13 +13,17 @@ import (
 )
 
 type Participant struct {
-	ID          string    `json:"id"`
-	Username    string    `json:"username"`
-	Address     string    `json:"address"`
-	Order       int       `json:"order"`
-	Connected   bool      `json:"connected"`
-	CanBeHost   bool      `json:"can_be_host"`
-	Muted       bool      `json:"muted,omitempty"`
+	ID        string `json:"id"`
+	Username  string `json:"username"`
+	Address   string `json:"address"`
+	Order     int    `json:"order"`
+	Connected bool   `json:"connected"`
+	CanBeHost bool   `json:"can_be_host"`
+	Muted     bool   `json:"muted,omitempty"`
+	// Sharing: comparte su pantalla. Watching: ID del que está mirando ("" = nadie). Los cambia
+	// el host (SetSharing / SetWatching) y viajan en el Hello como Muted: sobreviven a la migración.
+	Sharing     bool      `json:"sharing,omitempty"`
+	Watching    string    `json:"watching,omitempty"`
 	LastSeenUTC time.Time `json:"last_seen_utc"`
 }
 
@@ -88,6 +92,86 @@ func (s *State) SetMuted(id, address string, muted bool) bool {
 		return true
 	}
 	return false
+}
+
+// SetSharing cambia si el participante id comparte su pantalla, con la misma regla de dirección
+// que SetMuted. Al dejar de compartir también se borra el Watching de los que lo miraban, así el
+// estado no queda apuntando a una pantalla que ya no existe. Devuelve si el estado cambió.
+func (s *State) SetSharing(id, address string, sharing bool) bool {
+	index := s.indexFrom(id, address)
+	if index < 0 || s.Participants[index].Sharing == sharing {
+		return false
+	}
+	participants := append([]Participant(nil), s.Participants...)
+	participants[index].Sharing = sharing
+	if !sharing {
+		for i := range participants {
+			if participants[i].Watching == id {
+				participants[i].Watching = ""
+			}
+		}
+	}
+	s.Participants = participants
+	return true
+}
+
+// SetWatching cambia a quién mira el participante id (target "" = a nadie), con la misma regla de
+// dirección que SetMuted. target tiene que ser otro participante de la lista; si todavía no
+// comparte, el cambio queda igual y Watchers lo ignora hasta que comparta. Devuelve si cambió.
+func (s *State) SetWatching(id, address, target string) bool {
+	index := s.indexFrom(id, address)
+	if index < 0 || target == id || s.Participants[index].Watching == target {
+		return false
+	}
+	if target != "" && s.indexFrom(target, "") < 0 {
+		return false
+	}
+	participants := append([]Participant(nil), s.Participants...)
+	participants[index].Watching = target
+	s.Participants = participants
+	return true
+}
+
+// indexFrom es el índice del participante id; si address no es vacío también tiene que coincidir.
+func (s State) indexFrom(id, address string) int {
+	for index, participant := range s.Participants {
+		if participant.ID == id && (address == "" || participant.Address == address) {
+			return index
+		}
+	}
+	return -1
+}
+
+// Watchers son los conectados que miran la pantalla de sharerID, en el orden de la lista. Vacío si
+// sharerID no está conectado o no comparte: así una marca vieja (alguien que se cayó, un Watching
+// que llegó antes que el Sharing) nunca hace que se mande una pantalla.
+func (s State) Watchers(sharerID string) []Participant {
+	index := s.indexFrom(sharerID, "")
+	if index < 0 || !s.Participants[index].Connected || !s.Participants[index].Sharing {
+		return nil
+	}
+	var watchers []Participant
+	for _, participant := range s.Participants {
+		if participant.Connected && participant.ID != sharerID && participant.Watching == sharerID {
+			watchers = append(watchers, participant)
+		}
+	}
+	return watchers
+}
+
+// ScreenCopies es cuántas copias de pantallas compartidas manda el host en total: un stream por
+// cada uno que mira, salvo el propio host (lo recibe directo, no lo reenvía). Quien comparte desde
+// un cliente reparte el presupuesto del host por este número.
+func (s State) ScreenCopies() int {
+	copies := 0
+	for _, sharer := range s.Participants {
+		for _, watcher := range s.Watchers(sharer.ID) {
+			if watcher.ID != s.HostID {
+				copies++
+			}
+		}
+	}
+	return copies
 }
 
 func (s *State) MarkDisconnected(id string) {

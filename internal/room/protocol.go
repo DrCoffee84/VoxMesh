@@ -25,6 +25,10 @@ const (
 	SoundSyncResponseMessage = "sound_sync_response"
 	LeaveMessage             = "leave"
 	MuteMessage              = "mute"
+	// ShareMessage (PacketScreenShare) y WatchMessage (PacketScreenWatch), cliente → host: empieza o
+	// deja de compartir su pantalla (Participant.Sharing) y a quién mira (Participant.Watching).
+	ShareMessage = "share"
+	WatchMessage = "watch"
 	// RoomFullMessage (host → cliente, PacketRoomLeave): la sala llegó a MaxParticipants y no hay
 	// desconectados viejos para podar; el cliente deja de intentar (Failover.Refused).
 	RoomFullMessage = "room_full"

@@ -8,9 +8,20 @@ import (
 
 	"voxmesh/internal/audio"
 	"voxmesh/internal/config"
+	"voxmesh/internal/i18n"
 )
 
+// setLanguage fija el idioma de la app para un test y lo restaura al terminar.
+func setLanguage(t *testing.T, code string) {
+	t.Helper()
+	prev := i18n.Current()
+	i18n.Set(code)
+	t.Cleanup(func() { i18n.Set(string(prev)) })
+}
+
+// En español las etiquetas fijas son los mismos nombres que se guardan.
 func TestDeviceOptions(t *testing.T) {
+	setLanguage(t, "es")
 	devices := []audio.Device{
 		{Name: "Auriculares (USB)", ID: "a1"},
 		{Name: "Auriculares (USB)", ID: "b2"},
@@ -42,5 +53,24 @@ func TestDeviceOptions(t *testing.T) {
 	// Sin ID solo valen las opciones fijas: un nombre suelto se muestra como el predeterminado.
 	if _, _, selected := deviceOptions(devices, audio.Device{Name: "Auriculares (USB)"}); selected != config.DefaultDevice {
 		t.Fatalf("sin ID: elegido %q, quería el predeterminado", selected)
+	}
+}
+
+// En inglés se muestran traducidas, pero detrás siguen los valores que se guardan en español.
+func TestDeviceOptionsTranslatedLabels(t *testing.T) {
+	setLanguage(t, "en")
+	devices := []audio.Device{{Name: "Altavoces", ID: "c3"}}
+	options, byLabel, selected := deviceOptions(devices, audio.Device{Name: phoneMicInput}, phoneMicInput)
+	if want := []string{"System default", "Phone microphone", "Altavoces"}; !slices.Equal(options, want) {
+		t.Fatalf("opciones = %q, quería %q", options, want)
+	}
+	if selected != "Phone microphone" || byLabel[selected].Name != phoneMicInput {
+		t.Fatalf("celular: elegido %q (%+v)", selected, byLabel[selected])
+	}
+	if deviceByLabel(byLabel, "System default") != audio.DefaultChoice || audio.DefaultChoice.Name != config.DefaultDevice {
+		t.Fatal(`"System default" tiene que ser el predeterminado, guardado como config.DefaultDevice`)
+	}
+	if _, _, selected := deviceOptions(devices, audio.Device{Name: config.DefaultDevice}); selected != "System default" {
+		t.Fatalf("predeterminado guardado: elegido %q", selected)
 	}
 }

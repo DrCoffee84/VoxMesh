@@ -4,7 +4,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+
+	"voxmesh/internal/i18n"
 )
 
 func TestParamsMatchLiveSettings(t *testing.T) {
@@ -17,8 +20,8 @@ func TestParamsMatchLiveSettings(t *testing.T) {
 		if _, ok := paramFields[param.Key]; !ok {
 			t.Fatalf("%q no es un campo de LiveSettings", param.Key)
 		}
-		if param.Label == "" {
-			t.Fatalf("%q no tiene texto", param.Key)
+		if !i18n.Has("param." + param.Key + ".label") {
+			t.Fatalf("%q no tiene texto (param.%s.label en los catálogos de i18n)", param.Key, param.Key)
 		}
 		if param.IsBool() {
 			if param.Default != 0 && param.Default != 1 {
@@ -111,5 +114,20 @@ func TestLoadOldLogLevelZeroBecomesOne(t *testing.T) {
 	}
 	if cfg.LogLevel != 1 {
 		t.Fatalf("log_level 0 quedó en %d, quería 1", cfg.LogLevel)
+	}
+}
+
+// Los textos de los parámetros están en i18n ("param.<clave>.label" / ".help"): una clave de un
+// parámetro que ya no existe es un texto que nadie muestra.
+func TestParamTextsHaveParams(t *testing.T) {
+	for _, key := range i18n.Keys() {
+		rest, ok := strings.CutPrefix(key, "param.")
+		if !ok {
+			continue
+		}
+		name, suffix, _ := strings.Cut(rest, ".")
+		if _, exists := paramIndex[name]; !exists || (suffix != "label" && suffix != "help") {
+			t.Errorf("%q no corresponde a ningún parámetro de la tabla", key)
+		}
 	}
 }

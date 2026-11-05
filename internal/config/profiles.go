@@ -21,9 +21,15 @@ import (
 // DefaultProfileName es el perfil fijo con los valores de fábrica.
 const DefaultProfileName = "Default"
 
-// CustomProfileName es el nombre base del perfil que se crea solo al guardar cambios hechos
-// sobre Default ("Personalizado", "Personalizado 2", ...).
-const CustomProfileName = "Personalizado"
+// Errores de nombres de perfil que la UI le muestra al usuario (los reconoce con errors.Is para
+// traducirlos).
+var (
+	ErrProfileNameEmpty    = errors.New("el nombre del perfil está vacío")
+	ErrProfileNameDefault  = fmt.Errorf("%q es el perfil de fábrica", DefaultProfileName)
+	ErrProfileNameTooLong  = errors.New("el nombre del perfil es demasiado largo")
+	ErrProfileExists       = errors.New("ya existe un perfil")
+	ErrDefaultProfileFixed = errors.New("el perfil de fábrica no se puede borrar")
+)
 
 const profileVersion = 1
 
@@ -80,11 +86,11 @@ func ValidateProfileName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	switch {
 	case name == "":
-		return "", errors.New("el nombre del perfil está vacío")
+		return "", ErrProfileNameEmpty
 	case strings.EqualFold(name, DefaultProfileName):
-		return "", fmt.Errorf("%q es el perfil de fábrica", DefaultProfileName)
+		return "", ErrProfileNameDefault
 	case len([]rune(name)) > 60:
-		return "", errors.New("el nombre del perfil es demasiado largo")
+		return "", ErrProfileNameTooLong
 	}
 	return name, nil
 }
@@ -167,7 +173,7 @@ func (p Profiles) Rename(kind ProfileKind, oldName, newName string) error {
 		return err
 	}
 	if profileFileName(newName) != profileFileName(oldName) && p.Exists(kind, newName) {
-		return fmt.Errorf("ya existe un perfil %q", newName)
+		return fmt.Errorf("%w %q", ErrProfileExists, newName)
 	}
 	if err := p.Save(kind, newName, settings); err != nil {
 		return err
@@ -181,7 +187,7 @@ func (p Profiles) Rename(kind ProfileKind, oldName, newName string) error {
 // Delete borra un perfil guardado.
 func (p Profiles) Delete(kind ProfileKind, name string) error {
 	if name == "" || name == DefaultProfileName {
-		return errors.New("el perfil de fábrica no se puede borrar")
+		return ErrDefaultProfileFixed
 	}
 	return os.Remove(p.path(kind, name))
 }
@@ -219,16 +225,18 @@ func ApplyDefaultProfiles(settings *LiveSettings) bool {
 	return changed
 }
 
-// NextCustomProfileName devuelve el primer "Personalizado", "Personalizado 2"... que no esté en
-// existing (sin distinguir mayúsculas ni nombres que darían el mismo archivo).
-func NextCustomProfileName(existing []string) string {
+// NextCustomProfileName devuelve el primer base, "base 2"... que no esté en existing (sin
+// distinguir mayúsculas ni nombres que darían el mismo archivo). base es el nombre del perfil que
+// se crea solo al guardar cambios hechos sobre Default ("Personalizado" en español); lo pone la UI
+// en su idioma.
+func NextCustomProfileName(base string, existing []string) string {
 	taken := make(map[string]bool, len(existing))
 	for _, name := range existing {
 		taken[profileFileName(name)] = true
 	}
-	name := CustomProfileName
+	name := base
 	for n := 2; taken[profileFileName(name)]; n++ {
-		name = fmt.Sprintf("%s %d", CustomProfileName, n)
+		name = fmt.Sprintf("%s %d", base, n)
 	}
 	return name
 }

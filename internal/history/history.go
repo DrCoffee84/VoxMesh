@@ -25,6 +25,10 @@ type Message struct {
 	ImageID   string    `json:"image_id,omitempty"`
 	ImageExt  string    `json:"image_ext,omitempty"`
 	System    bool      `json:"system,omitempty"`
+	// Key y Args: aviso de la sala (System) para que cada uno lo lea en su idioma
+	// (i18n.T(Key, Args...)). Text lleva el mismo aviso en el idioma del host, de respaldo.
+	Key  string   `json:"key,omitempty"`
+	Args []string `json:"args,omitempty"`
 }
 
 type Store struct {

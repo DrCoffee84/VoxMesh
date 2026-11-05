@@ -11,6 +11,8 @@ import (
 
 	"voxmesh/internal/config"
 	"voxmesh/internal/history"
+	"voxmesh/internal/i18n"
+	"voxmesh/internal/room"
 )
 
 // TestActivityLogIsSessionOnly: el registro de actividad es solo de la sesión. Los avisos viejos
@@ -57,5 +59,34 @@ func TestActivityLogIsSessionOnly(t *testing.T) {
 	a.addActivity("Pepe se conectó.") // en vivo, sí
 	if n := len(a.activityBox.Objects); n != 1 {
 		t.Fatalf("aviso en vivo: %d entradas, quería 1", n)
+	}
+}
+
+// Un aviso de la sala viaja como clave + datos: cada uno lo lee en su idioma. Text, en el idioma
+// del host, queda de respaldo para una clave que no conoce o que no es de avisos.
+func TestSystemMessageInReceiverLanguage(t *testing.T) {
+	setLanguage(t, "en") // el host
+	sent := newSystemMessage("chat.sys.joined", "Ana")
+	if sent.Text != "Ana joined." || !isSystemMessage(sent) || sent.Key != "chat.sys.joined" {
+		t.Fatalf("aviso del host: %+v", sent)
+	}
+	payload, err := room.Encode(room.Envelope{Kind: room.SystemMessage, Message: &sent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := room.Decode(payload)
+	if err != nil || envelope.Message == nil {
+		t.Fatalf("decode: %v", err)
+	}
+	i18n.Set("es") // el cliente
+	if got := systemMessageText(*envelope.Message); got != "Ana se conectó." {
+		t.Fatalf("cliente en español: %q", got)
+	}
+	for _, key := range []string{"", "chat.sys.no_existe", "settings.title"} {
+		received := *envelope.Message
+		received.Key = key
+		if got := systemMessageText(received); got != "Ana joined." {
+			t.Fatalf("clave %q: %q, quería el Text del host", key, got)
+		}
 	}
 }

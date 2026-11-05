@@ -4,6 +4,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"voxmesh/internal/i18n"
 )
 
 // Failover decide qué hace un participante cuando pierde a su host, y qué hace un host cuando
@@ -91,8 +93,8 @@ const (
 	ActBecomeHost                       // pasar a host con State (epoch ya incrementado)
 	ActSwitchHost                       // pasarse como cliente al host de Addr, con su State
 	ActStepDown                         // (host) bajarse y pasarse como cliente al host de Addr
-	ActGiveUp                           // dejar la sala: no se pudo seguir (Text)
-	ActStatus                           // avisarle al usuario (Text)
+	ActGiveUp                           // dejar la sala: no se pudo seguir (Msg)
+	ActStatus                           // avisarle al usuario (Msg)
 )
 
 // Action es una acción para la UI.
@@ -100,7 +102,7 @@ type Action struct {
 	Kind  ActionKind
 	Addr  string
 	State State
-	Text  string
+	Msg   i18n.Msg // aviso para el usuario (ActGiveUp, ActStatus); el log lo escribe en español
 }
 
 // Source dice si un paquete que recibió un cliente es de su host.
@@ -199,7 +201,7 @@ func (f *Failover) Seen(from string, now time.Time) Source {
 		f.lastHost = now
 		f.phase = phaseClient
 		f.candidates, f.hellos = nil, nil
-		f.status("Volvió la conexión con el host.")
+		f.status(i18n.M("room.host_back"))
 		f.emit(Action{Kind: ActHello, Addr: f.hostAddr}) // pudo habernos dado de baja
 	default:
 		return FromOther
@@ -219,7 +221,7 @@ func (f *Failover) HostState(state State, now time.Time) {
 		if next, ok := participantByID(state, state.HostID); ok {
 			f.state = cloneState(state)
 			f.epoch = state.Epoch
-			f.startMigration(now, []Participant{next}, true, "El host le pasó la sala a "+displayName(next)+".")
+			f.startMigration(now, []Participant{next}, true, i18n.M("room.host_handed", displayName(next)))
 			return
 		}
 	}
@@ -236,19 +238,19 @@ func (f *Failover) HostLeft(now time.Time) {
 	if f.stopped || (f.phase != phaseClient && f.phase != phaseReconnecting) {
 		return
 	}
-	f.startMigration(now, f.state.Candidates(), true, "El host se fue. Buscando host nuevo…")
+	f.startMigration(now, f.state.Candidates(), true, i18n.M("room.host_left"))
 }
 
 // Refused: el host no me dejó entrar (sala llena). Solo cuenta antes del primer estado de la sala:
 // ya adentro, un rechazo no tiene sentido y se ignora.
-func (f *Failover) Refused(text string) {
+func (f *Failover) Refused(msg i18n.Msg) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.stopped || f.phase != phaseClient || f.hostID != "" {
 		return
 	}
 	f.phase = phaseIdle
-	f.emit(Action{Kind: ActGiveUp, Text: text})
+	f.emit(Action{Kind: ActGiveUp, Msg: msg})
 }
 
 // StateFrom: llegó el estado de sala de from, que no es mi host. Como cliente me paso si es el
@@ -277,14 +279,14 @@ func (f *Failover) StateFrom(state State, from string, now time.Time) {
 		if state.Epoch > f.epoch || (state.Epoch == f.epoch && state.HostID < f.self) {
 			f.adopt(state, from, now)
 			f.emit(Action{Kind: ActStepDown, Addr: from, State: cloneState(state)})
-			f.status(displayName(host) + " ya es el host de la sala: te pasás a su sala.")
+			f.status(i18n.M("room.already_host", displayName(host)))
 		}
 	case phaseClient, phaseReconnecting, phaseMigrating:
 		asked := f.phase == phaseMigrating && f.candidate < len(f.candidates) && f.candidates[f.candidate].ID == state.HostID
 		if asked || state.Epoch > f.epoch {
 			f.adopt(state, from, now)
 			f.emit(Action{Kind: ActSwitchHost, Addr: from, State: cloneState(state)})
-			f.status(displayName(host) + " es el nuevo host.")
+			f.status(i18n.M("room.new_host", displayName(host)))
 		}
 	}
 }
@@ -328,14 +330,14 @@ func (f *Failover) Tick(now time.Time) {
 		f.pingHost(now)
 		if now.Sub(f.lastHost) > f.timings.HostSilence {
 			f.phase = phaseReconnecting
-			f.status("Se cortó la conexión con el host. Reconectando…")
+			f.status(i18n.M("room.reconnecting"))
 			f.lastHello = now
 			f.emit(Action{Kind: ActHello, Addr: f.hostAddr})
 		}
 	case phaseReconnecting:
 		f.pingHost(now)
 		if now.Sub(f.lastHost) > f.timings.Grace {
-			f.startMigration(now, f.state.Candidates(), false, "El host no responde. Buscando host nuevo…")
+			f.startMigration(now, f.state.Candidates(), false, i18n.M("room.host_silent"))
 			return
 		}
 		if now.Sub(f.lastHello) >= f.timings.Ping {
@@ -380,7 +382,7 @@ func (f *Failover) Tick(now time.Time) {
 func (f *Failover) tickJoining(now time.Time) {
 	if now.Sub(f.joinedAt) > f.timings.Join {
 		f.phase = phaseIdle
-		f.emit(Action{Kind: ActGiveUp, Text: JoinFailedMessage})
+		f.emit(Action{Kind: ActGiveUp, Msg: i18n.M(JoinFailedKey)})
 		return
 	}
 	if now.Sub(f.lastHello) >= f.timings.Ping {
@@ -389,17 +391,17 @@ func (f *Failover) tickJoining(now time.Time) {
 	}
 }
 
-// JoinFailedMessage es el aviso al cliente que no pudo entrar: el host no contestó nada que se
-// pudiera abrir con la clave de la invitación.
-const JoinFailedMessage = "Código incorrecto o host inalcanzable."
+// JoinFailedKey es la clave del aviso al cliente que no pudo entrar: el host no contestó nada que
+// se pudiera abrir con la clave de la invitación ("Código incorrecto o host inalcanzable.").
+const JoinFailedKey = "room.join_failed"
 
-func (f *Failover) startMigration(now time.Time, candidates []Participant, onPurpose bool, text string) {
+func (f *Failover) startMigration(now time.Time, candidates []Participant, onPurpose bool, msg i18n.Msg) {
 	f.phase = phaseMigrating
 	f.candidates = candidates
 	f.candidate = 0
 	f.leftOnPurpose = onPurpose
 	f.hellos = map[string]bool{}
-	f.status(text)
+	f.status(msg)
 	f.turn(now)
 }
 
@@ -408,7 +410,7 @@ func (f *Failover) turn(now time.Time) {
 	f.candidateSince = now
 	if f.candidate >= len(f.candidates) {
 		f.phase = phaseIdle
-		f.emit(Action{Kind: ActGiveUp, Text: "No se pudo seguir la sala sin el host."})
+		f.emit(Action{Kind: ActGiveUp, Msg: i18n.M("room.gave_up")})
 		return
 	}
 	if next := f.candidates[f.candidate]; next.ID != f.self {
@@ -456,7 +458,7 @@ func (f *Failover) becomeHost(now time.Time) {
 	f.announceStart = now
 	f.lastAnnounce = now
 	f.emit(Action{Kind: ActBecomeHost, State: cloneState(state)})
-	f.status("Sos el nuevo host de la sala.")
+	f.status(i18n.M("room.you_are_host"))
 	f.announce()
 }
 
@@ -514,7 +516,7 @@ func (f *Failover) known(id string) bool {
 	return false
 }
 
-func (f *Failover) status(text string) { f.emit(Action{Kind: ActStatus, Text: text}) }
+func (f *Failover) status(msg i18n.Msg) { f.emit(Action{Kind: ActStatus, Msg: msg}) }
 
 func (f *Failover) emit(action Action) {
 	f.actions = append(f.actions, action)
@@ -538,9 +540,9 @@ func participantByID(state State, id string) (Participant, bool) {
 	return Participant{}, false
 }
 
-func displayName(participant Participant) string {
+func displayName(participant Participant) i18n.Msg {
 	if participant.Username != "" {
-		return participant.Username
+		return i18n.Plain(participant.Username)
 	}
-	return "Otro participante"
+	return i18n.M("room.other_participant")
 }

@@ -24,6 +24,20 @@ const (
 	PacketAssetMissing = 10
 	PacketRoomLeave    = 11
 	PacketRoomMute     = 12 // cliente → host: cambio de mute propio; el host responde con PacketRoomState
+	// Pantalla compartida. Share y Watch: cliente → host, el host responde con PacketRoomState
+	// (Participant.Sharing / Watching). Tile: un chunk de un tile PNG, de quien comparte al host y
+	// del host a los que miran (internal/screen).
+	PacketScreenShare = 13
+	PacketScreenWatch = 14
+	PacketScreenTile  = 15
+	// ScreenRate: host → cliente que comparte, el ritmo que puede usar (LAN o internet, entre las
+	// copias que reenvía el host). Cursor: posición del cursor de quien comparte, sin cola (chico y
+	// urgente). Digest: resumen de los tiles enviados (quien mira pide lo que le falta). Repair:
+	// quien mira → host → quien comparte, los tiles que tiene viejos.
+	PacketScreenRate   = 16
+	PacketScreenCursor = 17
+	PacketScreenDigest = 18
+	PacketScreenRepair = 19
 )
 
 func PacketKindName(kind byte) string {
@@ -50,6 +64,20 @@ func PacketKindName(kind byte) string {
 		return "RoomLeave"
 	case PacketRoomMute:
 		return "RoomMute"
+	case PacketScreenShare:
+		return "ScreenShare"
+	case PacketScreenWatch:
+		return "ScreenWatch"
+	case PacketScreenTile:
+		return "ScreenTile"
+	case PacketScreenRate:
+		return "ScreenRate"
+	case PacketScreenCursor:
+		return "ScreenCursor"
+	case PacketScreenDigest:
+		return "ScreenDigest"
+	case PacketScreenRepair:
+		return "ScreenRepair"
 	default:
 		return fmt.Sprintf("Unknown(%d)", kind)
 	}
@@ -76,6 +104,20 @@ const (
 	BulkRateBytes  = 250_000 // ~2 Mbps en total, sumando todos los destinos
 	bulkBurstBytes = 16_000
 	bulkQueue      = 256 // paquetes esperando turno
+)
+
+// Ritmo de la pantalla compartida (SendScreen, TryRelayScreen): una cola aparte de la de archivos,
+// así una sincronización de sonidos no frena la pantalla ni al revés. ScreenRateBytes es el tope de
+// lo que sale de este socket sumando destinos por internet: el host que reenvía a varios no pasa de
+// ahí. En una LAN (todos con IP privada y ping bajo, lo decide el host) el tope es
+// ScreenLANRateBytes. Ráfaga chica (5 ms de datos, mínimo unos 5 paquetes) y cola corta: el ritmo
+// parejo deja vacía la cola del router y la voz, que no pasa por acá, no espera detrás de una imagen.
+const (
+	ScreenRateBytes    = 187_500   // ~1,5 Mbps en total: internet
+	ScreenLANRateBytes = 2_500_000 // ~20 Mbps en total: LAN
+	screenBurstBytes   = 6_000
+	screenQueue        = 32
+	screenMinRate      = 1_000
 )
 
 type Packet struct {
@@ -119,20 +161,39 @@ type UDP struct {
 	invalid     atomic.Uint64                  // datagramas descartados por Receive (no abren)
 	lastInvalid atomic.Pointer[net.UDPAddr]    // origen del último descartado (para el log)
 
-	bulk      chan bulkJob // archivos esperando turno (bulkLoop)
-	bulkOnce  sync.Once
+	bulk      *lane // archivos (SendBulk, BroadcastBulk, TryRelayBulk)
+	screen    *lane // pantalla compartida (SendScreen, TryRelayScreen)
 	closed    chan struct{}
 	closeOnce sync.Once
 }
 
-// bulkJob es un paquete de archivo para un destino, o para todos los peers menos except. Si
-// sealed no es nil, sale tal cual (reenvío del host).
-type bulkJob struct {
+// laneJob es un paquete con ritmo para un destino, para targets o para todos los peers menos
+// except. Si sealed no es nil, sale tal cual (reenvío del host).
+type laneJob struct {
 	packet    Packet
 	sealed    []byte
 	to        *net.UDPAddr
+	targets   []*net.UDPAddr // solo lectura: el llamador no la modifica después
 	except    *net.UDPAddr
 	broadcast bool
+}
+
+// lane es una cola con ritmo propio (token bucket) y su goroutine, que arranca con el primer
+// paquete. La tasa se puede cambiar en vivo (SetScreenRate).
+type lane struct {
+	jobs  chan laneJob
+	rate  atomic.Int64 // bytes por segundo
+	burst int
+	once  sync.Once
+
+	sentBytes atomic.Uint64 // bytes escritos al socket, sumando destinos
+	dropped   atomic.Uint64 // paquetes descartados por cola llena (Try*)
+}
+
+func newLane(rate, burst, queue int) *lane {
+	l := &lane{jobs: make(chan laneJob, queue), burst: burst}
+	l.rate.Store(int64(rate))
+	return l
 }
 
 // Listen abre el socket de la sala con su clave.
@@ -171,7 +232,8 @@ func Listen(address string, key Key) (*UDP, error) {
 		key:     key,
 		cipher:  sealer,
 		readBuf: make([]byte, 64*1024),
-		bulk:    make(chan bulkJob, bulkQueue),
+		bulk:    newLane(BulkRateBytes, bulkBurstBytes, bulkQueue),
+		screen:  newLane(ScreenRateBytes, screenBurstBytes, screenQueue),
 		closed:  make(chan struct{}),
 	}, nil
 }
@@ -331,60 +393,123 @@ func (u *UDP) SendBulk(addr *net.UDPAddr, packet Packet) bool {
 	if addr == nil {
 		return false
 	}
-	return u.enqueueBulk(bulkJob{packet: packet, to: addr}, true)
+	return u.enqueue(u.bulk, laneJob{packet: packet, to: addr}, true, nil)
 }
 
 // BroadcastBulk es SendBulk a todos los peers menos except.
 func (u *UDP) BroadcastBulk(packet Packet, except *net.UDPAddr) bool {
-	return u.enqueueBulk(bulkJob{packet: packet, except: except, broadcast: true}, true)
+	return u.enqueue(u.bulk, laneJob{packet: packet, except: except, broadcast: true}, true, nil)
 }
 
 // TryRelayBulk encola sin esperar el reenvío de un paquete recibido (host, desde receiveLoop),
 // con los mismos bytes que llegaron. Con la cola llena el paquete no se reenvía: a quien le falte
 // lo pide de nuevo (AssetMissing).
 func (u *UDP) TryRelayBulk(packet Packet, except *net.UDPAddr) bool {
-	return u.enqueueBulk(bulkJob{packet: packet, sealed: packet.sealed, except: except, broadcast: true}, false)
+	return u.enqueue(u.bulk, laneJob{packet: packet, sealed: packet.sealed, except: except, broadcast: true}, false, nil)
 }
 
-func (u *UDP) enqueueBulk(job bulkJob, wait bool) bool {
-	u.bulkOnce.Do(func() { go u.bulkLoop() })
+// SendScreen encola un paquete de pantalla para targets (cola de pantalla, ScreenRateBytes o lo
+// que diga SetScreenRate). Espera si la cola está llena: lo llama la goroutine de quien comparte,
+// nunca receiveLoop. Devuelve false si el socket o stop se cerraron. targets no se modifica después.
+func (u *UDP) SendScreen(targets []*net.UDPAddr, packet Packet, stop <-chan struct{}) bool {
+	if len(targets) == 0 {
+		return false
+	}
+	return u.enqueue(u.screen, laneJob{packet: packet, targets: targets}, true, stop)
+}
+
+// TryRelayScreen encola sin esperar el reenvío de un tile recibido (host, desde receiveLoop) a
+// targets, con los mismos bytes que llegaron. Con la cola llena se descarta: ese tile queda viejo
+// hasta que vuelva a cambiar o hasta la próxima imagen completa. targets no se modifica después.
+func (u *UDP) TryRelayScreen(packet Packet, targets []*net.UDPAddr) bool {
+	if len(targets) == 0 {
+		return false
+	}
+	return u.enqueue(u.screen, laneJob{packet: packet, sealed: packet.sealed, targets: targets}, false, nil)
+}
+
+// SetScreenRate cambia el ritmo de la cola de pantalla (bytes por segundo sumando destinos), entre
+// screenMinRate y ScreenLANRateBytes. El host elige LAN o internet; quien comparte desde un
+// cliente usa lo que le dice el host (PacketScreenRate), así lo que reenvía el host entra en su tope.
+func (u *UDP) SetScreenRate(bytesPerSecond int) {
+	u.screen.rate.Store(int64(min(max(bytesPerSecond, screenMinRate), ScreenLANRateBytes)))
+}
+
+// ScreenRate es el ritmo actual de la cola de pantalla.
+func (u *UDP) ScreenRate() int { return int(u.screen.rate.Load()) }
+
+// SendTo sella el paquete una vez y lo manda ya a cada destino, sin cola (el cursor de la pantalla
+// compartida: chico y urgente).
+func (u *UDP) SendTo(targets []*net.UDPAddr, packet Packet) {
+	if len(targets) == 0 {
+		return
+	}
+	buf := sealBuffers.Get().(*[]byte)
+	data := u.cipher.seal(*buf, packet)
+	u.writeAll(targets, data, nil)
+	*buf = data[:0]
+	sealBuffers.Put(buf)
+}
+
+// RelayTo reenvía un paquete recibido a targets con los mismos bytes, sin cola.
+func (u *UDP) RelayTo(packet Packet, targets []*net.UDPAddr) {
+	if packet.sealed == nil {
+		u.SendTo(targets, packet)
+		return
+	}
+	u.writeAll(targets, packet.sealed, nil)
+}
+
+// ScreenCounters devuelve los bytes que salieron por la cola de pantalla (sumando destinos) y los
+// reenvíos descartados por cola llena, desde que se abrió el socket.
+func (u *UDP) ScreenCounters() (sentBytes, dropped uint64) {
+	return u.screen.sentBytes.Load(), u.screen.dropped.Load()
+}
+
+func (u *UDP) enqueue(l *lane, job laneJob, wait bool, stop <-chan struct{}) bool {
+	l.once.Do(func() { go u.laneLoop(l) })
 	if !wait {
 		select {
-		case u.bulk <- job:
+		case l.jobs <- job:
 			return true
 		default:
+			l.dropped.Add(1)
 			return false
 		}
 	}
 	select {
-	case u.bulk <- job:
+	case l.jobs <- job:
 		return true
 	case <-u.closed:
+		return false
+	case <-stop:
 		return false
 	}
 }
 
-// bulkLoop manda los archivos encolados al ritmo de un token bucket (BulkRateBytes, con ráfagas
-// de hasta bulkBurstBytes).
-func (u *UDP) bulkLoop() {
-	bucket := newTokenBucket(BulkRateBytes, bulkBurstBytes)
+// laneLoop manda lo encolado en l al ritmo de su token bucket.
+func (u *UDP) laneLoop(l *lane) {
+	bucket := newTokenBucket(&l.rate, l.burst)
 	defer bucket.stop()
-	var buf []byte // esta goroutine es la única que sella archivos: se reutiliza
+	var buf []byte // esta goroutine es la única que sella lo de esta cola: se reutiliza
 	for {
-		var job bulkJob
+		var job laneJob
 		select {
 		case <-u.closed:
 			return
-		case job = <-u.bulk:
+		case job = <-l.jobs:
 		}
 		data := job.sealed
 		if data == nil {
 			buf = u.cipher.seal(buf, job.packet)
 			data = buf
 		}
-		targets := []*net.UDPAddr{job.to}
-		if job.broadcast {
+		targets := job.targets
+		switch {
+		case job.broadcast:
 			targets = u.snapshot()
+		case targets == nil:
+			targets = []*net.UDPAddr{job.to}
 		}
 		for _, peer := range targets {
 			if job.except != nil && sameAddr(peer, job.except) {
@@ -393,37 +518,47 @@ func (u *UDP) bulkLoop() {
 			if !bucket.wait(len(data), u.closed) {
 				return
 			}
-			_, _ = u.conn.WriteToUDP(data, peer)
+			if _, err := u.conn.WriteToUDP(data, peer); err == nil {
+				l.sentBytes.Add(uint64(len(data)))
+			}
 		}
 	}
 }
 
-// tokenBucket reparte crédito en bytes a ritmo constante, con un tope para las ráfagas.
+// tokenBucket reparte crédito en bytes a ritmo constante (rate, que puede cambiar en vivo), con un
+// tope para las ráfagas: minBurst o burstWindow de datos a la tasa actual, lo que sea más grande
+// (a 20 Mbps una ráfaga de 6 KB era un timer por paquete).
 type tokenBucket struct {
-	rate, burst, tokens float64
-	last                time.Time
-	timer               *time.Timer
+	rate             *atomic.Int64
+	minBurst, tokens float64
+	last             time.Time
+	timer            *time.Timer
 }
 
-func newTokenBucket(rate, burst int) *tokenBucket {
+// burstWindow es cuánto tiempo de datos entra en una ráfaga a la tasa actual.
+const burstWindow = 5 * time.Millisecond
+
+func newTokenBucket(rate *atomic.Int64, burst int) *tokenBucket {
 	timer := time.NewTimer(time.Hour)
 	timer.Stop()
-	return &tokenBucket{rate: float64(rate), burst: float64(burst), tokens: float64(burst), last: time.Now(), timer: timer}
+	return &tokenBucket{rate: rate, minBurst: float64(burst), tokens: float64(burst), last: time.Now(), timer: timer}
 }
 
 // wait espera hasta tener n bytes de crédito y los gasta (un paquete más grande que la ráfaga
 // espera la ráfaga entera). Devuelve false si stop se cerró.
 func (b *tokenBucket) wait(n int, stop <-chan struct{}) bool {
-	need := min(float64(n), b.burst)
 	for {
+		rate := float64(max(b.rate.Load(), 1))
+		burst := max(b.minBurst, rate*burstWindow.Seconds())
+		need := min(float64(n), burst)
 		now := time.Now()
-		b.tokens = min(b.burst, b.tokens+b.rate*now.Sub(b.last).Seconds())
+		b.tokens = min(burst, b.tokens+rate*now.Sub(b.last).Seconds())
 		b.last = now
 		if b.tokens >= need {
 			b.tokens -= need
 			return true
 		}
-		b.timer.Reset(time.Duration((need - b.tokens) / b.rate * float64(time.Second)))
+		b.timer.Reset(time.Duration((need - b.tokens) / rate * float64(time.Second)))
 		select {
 		case <-stop:
 			return false

@@ -1,9 +1,18 @@
 package room
 
 import (
+	"os"
 	"testing"
 	"time"
+
+	"voxmesh/internal/i18n"
 )
+
+// Los avisos se comparan con el texto en español.
+func TestMain(m *testing.M) {
+	i18n.Set("es")
+	os.Exit(m.Run())
+}
 
 var foT0 = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
@@ -323,10 +332,10 @@ func TestFailover_StopSilencesEverything(t *testing.T) {
 func TestFailover_RefusedBeforeJoiningGivesUp(t *testing.T) {
 	f := NewFailover("A", DefaultFailoverTimings())
 	f.JoinedAsClient(hostAddr, foT0)
-	f.Refused("La sala está llena.")
+	f.Refused(i18n.M("room.full", MaxParticipants))
 	actions := f.Drain()
-	if giveUp := find(t, actions, ActGiveUp); giveUp.Text != "La sala está llena." {
-		t.Fatalf("unexpected give up text %q", giveUp.Text)
+	if giveUp := find(t, actions, ActGiveUp); giveUp.Msg.String() != "La sala está llena (máximo 16 participantes)." {
+		t.Fatalf("unexpected give up text %q", giveUp.Msg)
 	}
 	if actions := run(f, 0, 30*time.Second, nil); len(actions) != 0 {
 		t.Fatalf("a refused client must stop trying, got %+v", actions)
@@ -347,8 +356,8 @@ func TestFailover_JoinWithoutAnswerGivesUp(t *testing.T) {
 		t.Fatalf("antes del plazo solo reintenta el RoomHello: %+v", actions)
 	}
 	actions = run(f, timings.Join, timings.Join+time.Second, nil)
-	if giveUp := find(t, actions, ActGiveUp); giveUp.Text != JoinFailedMessage {
-		t.Fatalf("aviso %q, quería %q", giveUp.Text, JoinFailedMessage)
+	if giveUp := find(t, actions, ActGiveUp); giveUp.Msg.String() != "Código incorrecto o host inalcanzable." {
+		t.Fatalf("aviso %q", giveUp.Msg)
 	}
 	if actions := run(f, timings.Join+time.Second, time.Minute, nil); len(actions) != 0 {
 		t.Fatalf("después de rendirse no hace nada más: %+v", actions)
@@ -373,11 +382,33 @@ func TestFailover_JoinAnsweredLateStays(t *testing.T) {
 
 func TestFailover_RefusedAfterJoiningIsIgnored(t *testing.T) {
 	f := newClient("A", testRoom(false))
-	f.Refused("La sala está llena.")
+	f.Refused(i18n.M("room.full", MaxParticipants))
 	if actions := f.Drain(); len(actions) != 0 {
 		t.Fatalf("a refusal once in the room must be ignored, got %+v", actions)
 	}
 	if source := f.Seen(hostAddr, foT0); source != FromHost {
 		t.Fatal("the client must still follow its host")
+	}
+}
+
+// El aviso lleva el nombre del participante (o "Otro participante" sin nombre) y se escribe en el
+// idioma que se pida: la pantalla en el elegido, el log en español.
+func TestFailover_StatusNamesTheNewHost(t *testing.T) {
+	for _, c := range []struct{ username, want string }{
+		{"Ana", "El host le pasó la sala a Ana."},
+		{"", "El host le pasó la sala a Otro participante."},
+	} {
+		f := newClient("B", testRoom(false))
+		handed := testRoom(false)
+		handed.HostID, handed.Epoch = "A", 2
+		handed.Participants[1].Username = c.username
+		f.HostState(handed, foT0)
+		status := find(t, f.Drain(), ActStatus)
+		if got := status.Msg.String(); got != c.want {
+			t.Fatalf("aviso %q, quería %q", got, c.want)
+		}
+		if c.username == "Ana" && status.Msg.In(i18n.EN) != "The host handed the room to Ana." {
+			t.Fatalf("en inglés: %q", status.Msg.In(i18n.EN))
+		}
 	}
 }

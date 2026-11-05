@@ -4,11 +4,11 @@ package ui
 
 import (
 	"encoding/binary"
-	"strconv"
 	"time"
 
 	"voxmesh/internal/audio"
 	"voxmesh/internal/config"
+	"voxmesh/internal/i18n"
 	"voxmesh/internal/logging"
 	"voxmesh/internal/phonemic"
 	"voxmesh/internal/room"
@@ -48,9 +48,9 @@ func (a *App) ensurePhoneMicServer() (*phonemic.Server, error) {
 	})
 	a.saveConfig()
 	if cfg.PhoneMicBufferEnabled {
-		a.setStatus("Micrófono de celular listo con " + strconv.Itoa(cfg.PhoneMicBufferMS) + " ms de buffer. Escaneá el QR desde la misma Wi-Fi.")
+		a.setStatus(i18n.M("phone.ready_buffer", cfg.PhoneMicBufferMS))
 	} else {
-		a.setStatus("Micrófono de celular listo sin buffer. Escaneá el QR desde la misma Wi-Fi.")
+		a.setStatus(i18n.M("phone.ready_no_buffer"))
 	}
 	return server, nil
 }
@@ -257,7 +257,7 @@ func (a *App) startAudio(udp *transport.UDP) {
 	})
 	if err != nil {
 		logging.Errorf("audio no disponible: %s", logging.FormatError(err))
-		a.setStatus("Audio no disponible: " + err.Error() + ". Probá con Refresh Audio.")
+		a.setStatus(i18n.M("audio.unavailable", err.Error()))
 		return
 	}
 	engine.SetPlaybackSettings(a.playbackSettings)
@@ -267,7 +267,7 @@ func (a *App) startAudio(udp *transport.UDP) {
 	if !a.publishEngine(engine, udp) {
 		return
 	}
-	a.setStatus(notice + "Audio listo: " + audioDevicesText(cfg, input, output))
+	a.setStatus(i18n.Join(notice, i18n.M("audio.ready", audioDevicesText(cfg, input, output))))
 }
 
 // inputChoice es el micrófono elegido en la config. El celular no es un dispositivo de Windows:
@@ -292,8 +292,8 @@ func outputChoice(cfg *config.Config) audio.Device {
 // el predeterminado de Windows (no se recuerda: el próximo cambio de dispositivo lo resuelve
 // Windows); si estaba, se actualiza su nombre si Windows lo cambió. Solo
 // pisa una elección que no cambió mientras se abría el audio. Devuelve el aviso para la barra de
-// estado ("" si no faltó ninguno).
-func (a *App) applyResolvedDevices(inputWant, outputWant audio.Device, input, output audio.Resolved) string {
+// estado (vacío si no faltó ninguno).
+func (a *App) applyResolvedDevices(inputWant, outputWant audio.Device, input, output audio.Resolved) i18n.Msg {
 	before := a.conf()
 	after := a.updateConfig(func(c *config.Config) {
 		if c.InputDevice != phoneMicInput && c.InputDevice == inputWant.Name && c.InputDeviceID == inputWant.ID {
@@ -307,32 +307,32 @@ func (a *App) applyResolvedDevices(inputWant, outputWant audio.Device, input, ou
 		after.OutputDevice != before.OutputDevice || after.OutputDeviceID != before.OutputDeviceID {
 		a.saveConfig()
 	}
-	notice := ""
+	var notice []i18n.Msg
 	if input.Missing && before.InputDevice != phoneMicInput {
 		logging.Errorf("micrófono %q no encontrado: se usa el predeterminado de Windows", inputWant.Name)
-		notice += "No encontré el micrófono «" + inputWant.Name + "»: uso el predeterminado de Windows. "
+		notice = append(notice, i18n.M("audio.input_missing", inputWant.Name))
 	}
 	if output.Missing {
 		logging.Errorf("salida %q no encontrada: se usa la predeterminada de Windows", outputWant.Name)
-		notice += "No encontré la salida «" + outputWant.Name + "»: uso la predeterminada de Windows. "
+		notice = append(notice, i18n.M("audio.output_missing", outputWant.Name))
 	}
-	return notice
+	return i18n.Join(notice...)
 }
 
 // audioDevicesText dice por dónde entra y sale el audio, para la barra de estado.
-func audioDevicesText(cfg *config.Config, input, output audio.Resolved) string {
+func audioDevicesText(cfg *config.Config, input, output audio.Resolved) i18n.Msg {
 	mic := deviceLabel(input.Device)
 	if cfg.InputDevice == phoneMicInput {
-		mic = "celular"
+		mic = i18n.M("audio.phone")
 	}
-	return "micrófono «" + mic + "», salida «" + deviceLabel(output.Device) + "»."
+	return i18n.M("audio.devices", mic, deviceLabel(output.Device))
 }
 
-func deviceLabel(device audio.Device) string {
+func deviceLabel(device audio.Device) i18n.Msg {
 	if audio.IsDefaultDevice(device.Name) {
-		return "predeterminado de Windows"
+		return i18n.M("audio.windows_default")
 	}
-	return device.Name
+	return i18n.Plain(device.Name)
 }
 
 // dropSoundPlayer cierra la salida del soundboard; el próximo sonido la abre de nuevo con el
@@ -354,7 +354,7 @@ func (a *App) restartAudioInRoom() {
 	a.stopEngine()
 	a.dropSoundPlayer()
 	if udp := a.transport.Load(); udp != nil {
-		a.setStatus("Recargando el audio...")
+		a.setStatus(i18n.M("audio.reloading"))
 		go a.startAudio(udp)
 	} else {
 		cfg := a.conf()
@@ -364,6 +364,6 @@ func (a *App) restartAudioInRoom() {
 			logging.Errorf("recargar audio: %s", logging.FormatError(err))
 		}
 		notice := a.applyResolvedDevices(inputWant, outputWant, input, output)
-		a.setStatus(notice + "Audio recargado: " + audioDevicesText(cfg, input, output))
+		a.setStatus(i18n.Join(notice, i18n.M("audio.reloaded", audioDevicesText(cfg, input, output))))
 	}
 }

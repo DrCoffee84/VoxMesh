@@ -1,71 +1,74 @@
+[Español](README.es.md)
+
 # VoxMesh
 
-Chat de voz y texto para jugar o charlar con amigos, en **Windows**. Es un solo programa: sin instalador, sin cuentas y sin servidores de por medio. Uno abre una sala, pasa la invitación por WhatsApp y listo. Si el que abrió la sala se va o se le corta internet, la sala sigue sola con los demás.
+Voice and text chat for gaming or hanging out with friends, on **Windows**. It's a single program: no installer, no accounts and no servers in between. One person starts a room, shares the invite on WhatsApp and that's it. If whoever started the room leaves or loses their internet, the room keeps going with everyone else.
 
-## Descargar
+## Download
 
-- 💻 **PC (Windows 10 u 11):** [**Descargar VoxMesh para Windows**](https://github.com/DrCoffee84/VoxMesh/releases/latest/download/voxmesh.exe)
-- 📱 **Celular como micrófono** (Android, opcional): [**Descargar VoxMesh Mic**](https://github.com/DrCoffee84/VoxMesh/releases/download/v1.0.0/voxmesh-mic.apk)
+- 💻 **PC (Windows 10 or 11):** [**Download VoxMesh for Windows**](https://github.com/DrCoffee84/VoxMesh/releases/latest/download/voxmesh.exe)
+- 📱 **Phone as a microphone** (Android, optional): [**Download VoxMesh Mic**](https://github.com/DrCoffee84/VoxMesh/releases/download/v1.0.0/voxmesh-mic.apk)
 
-La app de la PC se actualiza sola: cuando sale una versión nueva, te pregunta si querés instalarla. **Todos los de la sala tienen que tener la misma versión.**
+The PC app updates itself: when a new version comes out, it asks whether you want to install it. **Everyone in the room needs the same version.**
 
-## Instalar en la PC
+## Install on the PC
 
-1. Creá una carpeta (por ejemplo `Documentos\VoxMesh`) y mové ahí `voxmesh.exe`. La app guarda su configuración al lado del `.exe`.
-2. Abrilo con doble clic. La primera vez pueden aparecer estos avisos, que son normales (más abajo se explica [por qué](#es-seguro)):
-   - **El navegador** dice que el archivo "no se descarga con frecuencia" → **Conservar**.
-   - **"Windows protegió su PC"** (cartel azul) → **Más información** → **Ejecutar de todas formas**.
-   - **Firewall de Windows** → **Permitir acceso**. Si no lo permitís, tus amigos no van a poder entrar a tu sala.
+1. Create a folder (for example `Documents\VoxMesh`) and move `voxmesh.exe` into it. The app saves its settings next to the `.exe`.
+2. Double-click it. The first time you may see these warnings, which are normal (see [why](#is-it-safe) below):
+   - **Your browser** says the file "isn't commonly downloaded" → **Keep**.
+   - **"Windows protected your PC"** (blue screen) → **More info** → **Run anyway**.
+   - **Windows Firewall** → **Allow access**. If you don't allow it, your friends won't be able to join your room.
 
-## Instalar la app del celular (opcional)
+## Install the phone app (optional)
 
-Sirve para usar el celular como micrófono de la PC. También se puede sin instalar nada: en la PC, Ajustes (⚙️) → **📱 Micrófono del Celular** → **Mostrar QR**, y escanealo con la cámara del celular (los dos tienen que estar en el mismo Wi-Fi).
+It lets you use your phone as the PC's microphone. You can also do it without installing anything: on the PC, Settings (⚙️) → **📱 Phone microphone** → **Show QR**, and scan it with the phone's camera (both have to be on the same Wi-Fi).
 
-1. Abrí el link de descarga **desde el celular**.
-2. Android te va a pedir permiso para instalar apps desde el navegador → **Configuración** → activá **Permitir de esta fuente** → volvé atrás.
-3. Si aparece **Play Protect** avisando que la app es desconocida → **Más detalles** → **Instalar de todas formas**.
-4. Abrí *VoxMesh Mic*, tocá **Escanear Código QR** y apuntá al QR que muestra la PC.
+1. Open the download link **on the phone**.
+2. Android will ask for permission to install apps from the browser → **Settings** → turn on **Allow from this source** → go back.
+3. If **Play Protect** warns that the app is unknown → **More details** → **Install anyway**.
+4. Open *VoxMesh Mic*, tap **Escanear Código QR** (scan QR code; the phone app is in Spanish for now) and point it at the QR the PC shows.
 
-Si una versión nueva no se instala encima de la vieja, desinstalá la anterior y probá de nuevo.
+If a new version won't install over the old one, uninstall the old one and try again.
 
-## Cómo se usa
+## How to use it
 
-**Para abrir una sala:**
-1. Tocá **Iniciar sala** y elegí un nombre.
-2. Arriba, al lado del micrófono, tocá **Invitar** → **Internet**. La invitación (`VM1-…`) queda copiada.
-3. Pegala en WhatsApp para tus amigos.
+**To start a room:**
+1. Click **Start room** and pick a name.
+2. At the top, next to the microphone, click **Invite** → **Internet**. The invite (`VM1-…`) is copied.
+3. Paste it on WhatsApp for your friends.
 
-**Para entrar a una sala:**
-1. Copiá la invitación que te mandaron.
-2. Pegala en el cuadro de **Cliente** y tocá **Conectar**.
+**To join a room:**
+1. Copy the invite you were sent.
+2. Paste it in the **Join** box and click **Connect**.
 
-**Bueno saber:**
-- **Pasá la invitación solo a gente de confianza**: cualquiera que la tenga puede entrar.
-- Cualquiera de la sala puede invitar con el mismo botón: sirve para el que llega tarde o para el que se cayó y quiere volver. La invitación deja de valer cuando alguien vuelve a tocar "Iniciar sala".
-- En Ajustes (⚙️) elegís tu nombre, micrófono y auriculares, el filtro de ruido y el volumen de cada amigo. Los cambios se escuchan al instante, pero se guardan recién con **Guardar**.
-- También tiene chat con imágenes y una botonera de sonidos con atajos de teclado.
+**Good to know:**
+- **Only share the invite with people you trust**: anyone who has it can join.
+- Anyone in the room can invite with the same button: handy for someone who arrives late or dropped out and wants back in. The invite stops working when someone clicks "Start room" again.
+- In Settings (⚙️) you pick your name, microphone and headphones, the noise filter and each friend's volume. Changes are heard right away, but they're only saved with **Save**.
+- It also has chat with images and a soundboard with keyboard shortcuts.
+- **Screen sharing**, made for helping a friend set something up: the **Share** button at the top shares your screen (you choose which one if you have several, and the resolution), and the others click **View screen** on your avatar to see it in its own window, fitted or at actual size to read small text. Only people who click it can see it, and while you're sharing a bar reminds you (you can change the resolution there) and a red dot shows on VoxMesh's taskbar button, even minimized.
 
-## ¿Es seguro?
+## Is it safe?
 
-Sí, y no hace falta creerlo: se puede comprobar.
+Yes, and you don't have to take our word for it: you can check.
 
-- **Es código abierto** ([licencia MIT](LICENSE)): todo el código está en este repositorio y cualquiera lo puede leer.
-- **Lo compila GitHub, no una persona**: tanto el `.exe` como la app del celular los arma GitHub Actions a partir de este mismo código público. Cada compilación queda registrada en la pestaña [Actions](https://github.com/DrCoffee84/VoxMesh/actions).
-- **¿Por qué avisan Windows y Android?** Porque la app no está firmada con un certificado pago (cuestan cientos de dólares por año) y no está en Play Store. Esos avisos aparecen con cualquier programa nuevo sin firma, no porque se haya detectado algo malo.
-- **Qué hace en tu PC**: no se instala, no pide permisos de administrador y no tiene cuentas ni publicidad. Solo se conecta a los demás de tu sala, a GitHub (para buscar actualizaciones), a `api.ipify.org` (para saber tu IP pública cuando abrís una sala) y a tu router (para abrir el puerto solo).
-- **Tu voz y tu chat viajan cifrados** con una clave que va dentro de la invitación: sin ella nadie puede escuchar ni entrar. Lo que sí ven los de la sala es tu dirección IP, como en cualquier llamada directa.
-- **Si querés verificarlo vos**: en PowerShell, `Get-FileHash .\voxmesh.exe` tiene que dar el mismo número que [voxmesh.exe.sha256](https://github.com/DrCoffee84/VoxMesh/releases/latest/download/voxmesh.exe.sha256) (no importan las mayúsculas). También podés subirlo a [VirusTotal](https://www.virustotal.com); que uno o dos antivirus poco conocidos marquen un programa nuevo sin firma es un falso positivo común.
+- **It's open source** ([MIT license](LICENSE)): all the code is in this repository and anyone can read it.
+- **GitHub builds it, not a person**: both the `.exe` and the phone app are built by GitHub Actions from this same public code. Every build is recorded in the [Actions](https://github.com/DrCoffee84/VoxMesh/actions) tab.
+- **Why do Windows and Android warn you?** Because the app isn't signed with a paid certificate (they cost hundreds of dollars a year) and it's not on the Play Store. Those warnings show up for any new unsigned program, not because something bad was detected.
+- **What it does on your PC**: it doesn't install, doesn't ask for administrator rights and has no accounts or ads. It only connects to the others in your room, to GitHub (to check for updates), to `api.ipify.org` (to find your public IP when you start a room) and to your router (to open the port by itself).
+- **Your voice and chat are encrypted** with a key that goes inside the invite: without it nobody can listen in or join. What the people in the room do see is your IP address, like in any direct call.
+- **If you want to verify it yourself**: in PowerShell, `Get-FileHash .\voxmesh.exe` has to give the same number as [voxmesh.exe.sha256](https://github.com/DrCoffee84/VoxMesh/releases/latest/download/voxmesh.exe.sha256) (upper/lower case doesn't matter). You can also upload it to [VirusTotal](https://www.virustotal.com); one or two little-known antivirus engines flagging a new unsigned program is a common false positive.
 
-## Problemas comunes
+## Common problems
 
-- **"Código incorrecto o host inalcanzable"**: la invitación es vieja (alguien volvió a tocar "Iniciar sala") o no se llega a la PC del host. Pedí una invitación nueva.
-- **Tus amigos se escuchan a sí mismos (eco)**: pasa si usás parlantes o la tele. Activá **"Uso parlantes: cancelar eco"** en Ajustes → Entrada → Configuración avanzada → Supresión de ruido y voz. Con auriculares no hace falta.
-- **Nadie puede entrar a tu sala**: algunos proveedores de internet (sobre todo de datos móviles y algunas fibras) no permiten conexiones directas, y la app lo avisa. La solución más fácil es que todos instalen [Tailscale](https://tailscale.com) (gratis) y que el host invite con **Invitar** → la opción que dice **Tailscale**. Si sabés configurar tu router, otra opción es abrir el puerto UDP 47830 hacia tu PC.
-- **Alguien no se puede conectar y los demás sí**: fijate que todos tengan la misma versión.
-- **Otra cosa anda mal**: el botón del documento (abajo a la derecha) o Ajustes → **Abrir carpeta de registros (logs)** abre la carpeta de logs. Mandale el del día a quien te pasó la app.
+- **"Wrong invite or host unreachable"**: the invite is old (someone clicked "Start room" again) or the host's PC can't be reached. Ask for a new invite.
+- **Your friends hear themselves (echo)**: it happens if you use speakers or a TV. Turn on **"Using speakers: cancel echo"** in Settings → Audio input → Advanced settings → Noise and voice suppression. Not needed with headphones.
+- **Nobody can join your room**: some internet providers (especially mobile data and some fiber ones) don't allow direct connections, and the app tells you so. The easiest fix is for everyone to install [Tailscale](https://tailscale.com) (free) and for the host to invite with **Invite** → the option that says **Tailscale**. If you know how to set up your router, another option is to forward UDP port 47830 to your PC.
+- **Someone can't connect and the others can**: check that everyone has the same version.
+- **Something else is wrong**: the document button (bottom right) or Settings → **Open logs folder** opens the logs folder. Send today's log to whoever gave you the app.
 
-## Más info
+## More info
 
-- [DESARROLLO.md](DESARROLLO.md): cómo funciona por dentro, cómo compilarlo y cómo publicar una versión.
-- [AGENT.md](AGENT.md): mapa técnico detallado del código.
-- [LICENSE](LICENSE): licencia MIT.
+- [DESARROLLO.md](DESARROLLO.md) (in Spanish): how it works inside, how to build it and how to publish a version.
+- [AGENT.md](AGENT.md): detailed technical map of the code.
+- [LICENSE](LICENSE): MIT license.

@@ -4,7 +4,6 @@ package ui
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"strconv"
 	"strings"
@@ -19,6 +18,7 @@ import (
 	"voxmesh/internal/audio"
 	"voxmesh/internal/config"
 	"voxmesh/internal/history"
+	"voxmesh/internal/i18n"
 	"voxmesh/internal/invite"
 	"voxmesh/internal/logging"
 	"voxmesh/internal/netinfo"
@@ -39,7 +39,7 @@ func (a *App) stopConnectionAsync() <-chan struct{} {
 	// ventana no cierran dos veces). Se suelta antes que el Engine, ver publishEngine.
 	udp := a.transport.Swap(nil)
 	if udp == nil {
-		a.setStatus("No hay una sala o conexión activa.")
+		a.setStatus(i18n.M("conn.none_active"))
 		close(done)
 		return done
 	}
@@ -47,6 +47,10 @@ func (a *App) stopConnectionAsync() <-chan struct{} {
 	// sobre una sala que se cerró (antes el monitor del cliente seguía y a los segundos se nombraba
 	// host de una sala fantasma).
 	a.connLife.stop()
+	// La pantalla compartida y el visor son de esta sala: nunca siguen en la próxima.
+	a.stopScreenShare(false)
+	a.stopWatching()
+	a.screenState.Store(nil)
 	start := time.Now()
 	oldEndpoint := a.endpointText()
 	logging.Infof("stopConnection: cerrando sala/conexión en %s", oldEndpoint)
@@ -66,6 +70,7 @@ func (a *App) stopConnectionAsync() <-chan struct{} {
 		if a.topHangupBtn != nil {
 			a.topHangupBtn.Disable()
 		}
+		a.setShareButtonEnabled(false)
 		if a.connectButton != nil {
 			a.connectButton.Enable()
 		}
@@ -77,7 +82,7 @@ func (a *App) stopConnectionAsync() <-chan struct{} {
 			a.endpointEntry.SetText(*rejoin)
 		}
 	})
-	a.setStatus("Sala detenida.")
+	a.setStatus(i18n.M("conn.stopped"))
 
 	go func() {
 		defer close(done)
@@ -132,19 +137,19 @@ func (a *App) createHost() {
 	var d dialog.Dialog
 
 	newRoomEntry := widget.NewEntry()
-	newRoomEntry.SetPlaceHolder("Ej: Charla, Gaming...")
+	newRoomEntry.SetPlaceHolder(i18n.T("conn.new_room_placeholder"))
 	newRoomEntry.SetText(a.conf().RoomName)
 
-	btnCreate := widget.NewButtonWithIcon("Crear y abrir", theme.ContentAddIcon(), func() {
+	btnCreate := widget.NewButtonWithIcon(i18n.T("conn.create_and_open"), theme.ContentAddIcon(), func() {
 		roomName := history.ClampRoomName(newRoomEntry.Text)
 		if roomName == "" {
-			a.setStatus("Escribe un nombre para la nueva sala.")
+			a.setStatus(i18n.M("conn.room_name_missing"))
 			return
 		}
 		d.Hide()
 		username := strings.TrimSpace(a.conf().Username)
 		if username == "" {
-			username = config.DefaultUsername
+			username = i18n.T("default.username")
 		}
 		go a.openHost(roomName, username)
 	})
@@ -156,7 +161,7 @@ func (a *App) createHost() {
 
 	if len(existingRooms) > 0 {
 		existingSelect := widget.NewSelect(existingRooms, nil)
-		existingSelect.PlaceHolder = "Seleccionar de la lista..."
+		existingSelect.PlaceHolder = i18n.T("conn.pick_saved_placeholder")
 		if savedRoom := a.conf().RoomName; savedRoom != "" {
 			for _, r := range existingRooms {
 				if r == savedRoom {
@@ -166,46 +171,46 @@ func (a *App) createHost() {
 			}
 		}
 
-		btnOpenExisting := widget.NewButtonWithIcon("Abrir seleccionada", theme.MediaPlayIcon(), func() {
+		btnOpenExisting := widget.NewButtonWithIcon(i18n.T("conn.open_selected"), theme.MediaPlayIcon(), func() {
 			roomName := strings.TrimSpace(existingSelect.Selected)
 			if roomName == "" {
-				a.setStatus("Selecciona una sala guardada de la lista.")
+				a.setStatus(i18n.M("conn.pick_saved_missing"))
 				return
 			}
 			d.Hide()
 			username := strings.TrimSpace(a.conf().Username)
 			if username == "" {
-				username = config.DefaultUsername
+				username = i18n.T("default.username")
 			}
 			go a.openHost(roomName, username)
 		})
 
 		content = container.NewVBox(
-			widget.NewLabelWithStyle("Salas guardadas", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+			widget.NewLabelWithStyle(i18n.T("conn.saved_rooms"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 			container.NewBorder(nil, nil, nil, btnOpenExisting, existingSelect),
 			widget.NewSeparator(),
-			widget.NewLabelWithStyle("Nueva sala", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+			widget.NewLabelWithStyle(i18n.T("conn.new_room"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 			container.NewBorder(nil, nil, nil, btnCreate, newRoomEntry),
 		)
 	} else {
 		content = container.NewVBox(
-			widget.NewLabelWithStyle("Nueva sala", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+			widget.NewLabelWithStyle(i18n.T("conn.new_room"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 			container.NewBorder(nil, nil, nil, btnCreate, newRoomEntry),
 		)
 	}
 
-	d = dialog.NewCustom("Iniciar Sala", "Cancelar", content, a.window)
+	d = dialog.NewCustom(i18n.T("conn.start_room_title"), i18n.T("common.cancel"), content, a.window)
 	d.Resize(fyne.NewSize(440, 220))
 	d.Show()
 }
 
 func (a *App) openHost(roomName, username string) {
 	if a.connected() {
-		a.setStatus("La sala ya está activa en " + a.endpointText())
+		a.setStatus(i18n.M("conn.already_active_at", a.endpointText()))
 		return
 	}
 
-	a.setStatus("Iniciando sala, por favor espera...")
+	a.setStatus(i18n.M("conn.starting"))
 
 	go func() {
 		start := time.Now()
@@ -216,7 +221,7 @@ func (a *App) openHost(roomName, username string) {
 		// Clave nueva en cada "Iniciar sala", solo en memoria: la invitación vieja deja de servir.
 		key, err := transport.NewKey()
 		if err != nil {
-			a.setStatus("No se pudo generar la clave de la sala: " + err.Error())
+			a.setStatus(i18n.M("conn.key_failed", err.Error()))
 			return
 		}
 		var udp *transport.UDP
@@ -228,7 +233,7 @@ func (a *App) openHost(roomName, username string) {
 			time.Sleep(200 * time.Millisecond)
 		}
 		if err != nil {
-			a.setStatus(fmt.Sprintf("No se pudo abrir el puerto %s: %s (comprueba que no haya otra copia abierta)", listenAddr, err.Error()))
+			a.setStatus(i18n.M("conn.port_failed", listenAddr, err.Error()))
 			return
 		}
 
@@ -236,7 +241,7 @@ func (a *App) openHost(roomName, username string) {
 		// openHost/connectClient ganó en el medio, este socket sobra.
 		if !a.transport.CompareAndSwap(nil, udp) {
 			_ = udp.Close()
-			a.setStatus("Ya existe una sala o conexión activa.")
+			a.setStatus(i18n.M("conn.already_active"))
 			return
 		}
 		a.hostMode.Store(true)
@@ -277,7 +282,7 @@ func (a *App) openHost(roomName, username string) {
 			}
 		}
 
-		a.setStatus("Sala abierta en UDP " + strconv.Itoa(port) + "; buscando IP pública...")
+		a.setStatus(i18n.M("conn.open_finding_ip", port))
 
 		failover.Hosting(a.roomState, time.Now())
 		go a.receiveLoop(udp, failover)
@@ -305,6 +310,7 @@ func (a *App) openHost(roomName, username string) {
 			if a.topHangupBtn != nil {
 				a.topHangupBtn.Enable()
 			}
+			a.setShareButtonEnabled(true)
 			a.hideConnectionPanels()
 		})
 	}()
@@ -354,10 +360,10 @@ func (a *App) configureHostNetwork(listenPort int, stop <-chan struct{}) {
 	if ipErr != nil {
 		logging.Errorf("obtener IP pública: %s", logging.FormatError(ipErr))
 		if mapErr == nil {
-			a.setStatus("UPnP activo. IP pública no disponible; usa la dirección local de la sala.")
+			a.setStatus(i18n.M("conn.upnp_no_public_ip"))
 			return
 		}
-		a.setStatus("UDP activo. No se pudo abrir UPnP ni obtener IP pública; revisa tu red.")
+		a.setStatus(i18n.M("conn.no_upnp_no_ip"))
 		return
 	}
 
@@ -378,10 +384,10 @@ func (a *App) configureHostNetwork(listenPort int, stop <-chan struct{}) {
 	logging.Infof("IP pública obtenida: %s en %s", ip.String(), endpoint)
 
 	if mapErr != nil {
-		a.setStatus(fmt.Sprintf("Comparte: %s (UPnP no funcionó: abrí a mano el puerto UDP %d del router hacia esta PC)", endpoint, listenPort))
+		a.setStatus(i18n.M("conn.share_no_upnp", endpoint, listenPort))
 		return
 	}
-	a.setStatus("Sala lista (UPnP): " + endpoint)
+	a.setStatus(i18n.M("conn.ready_upnp", endpoint))
 	a.publishRoomCloudFlare()
 }
 
@@ -408,24 +414,24 @@ func (a *App) publishRoomCloudFlare() {
 
 func (a *App) connectClient(raw string) {
 	if a.connected() {
-		a.setStatus("Ya existe una conexión UDP.")
+		a.setStatus(i18n.M("conn.udp_exists"))
 		return
 	}
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		a.setStatus("Pegá la invitación de la sala.")
+		a.setStatus(i18n.M("conn.paste_invite"))
 		return
 	}
 	code, err := invite.Parse(raw)
 	if err != nil {
-		a.setStatus("Invitación inválida: " + err.Error())
+		a.setStatus(i18n.M("conn.invite_invalid", errorMsg(err)))
 		return
 	}
 	raw = invite.Format(code.Addr, code.Key)
 	addr := net.UDPAddrFromAddrPort(code.Addr)
 	target := addr.String()
 
-	a.setStatus("Conectando con " + target + "...")
+	a.setStatus(i18n.M("conn.connecting_dots", target))
 
 	// Deshabilitar botones YA en el hilo de UI para feedback inmediato
 	if a.connectButton != nil {
@@ -450,7 +456,7 @@ func (a *App) connectClient(raw string) {
 				udp, err = transport.Listen(":0", code.Key)
 			}
 			if err != nil {
-				a.setStatus("No se pudo abrir UDP: " + err.Error())
+				a.setStatus(i18n.M("conn.udp_failed", err.Error()))
 				fyne.Do(func() {
 					if a.connectButton != nil {
 						a.connectButton.Enable()
@@ -468,7 +474,7 @@ func (a *App) connectClient(raw string) {
 
 		if !a.transport.CompareAndSwap(nil, udp) {
 			_ = udp.Close()
-			a.setStatus("Ya existe una conexión UDP.")
+			a.setStatus(i18n.M("conn.udp_exists"))
 			return
 		}
 		a.hostMode.Store(false)
@@ -507,7 +513,7 @@ func (a *App) connectClient(raw string) {
 		logging.Infof("Enviando PacketRoomHello a %s: usuario=%q, id=%s", addr.String(), participant.Username, participant.ID)
 		_ = udp.Send(addr, transport.Packet{Kind: transport.PacketRoomHello, Sequence: a.sequence.Add(1), Payload: payload})
 
-		a.setStatus("Conectando con " + target)
+		a.setStatus(i18n.M("conn.connecting", target))
 
 		// Audio (lo más pesado)
 		go a.startAudio(udp)
@@ -531,6 +537,7 @@ func (a *App) connectClient(raw string) {
 			if a.endpointEntry != nil {
 				a.endpointEntry.SetText(raw)
 			}
+			a.setShareButtonEnabled(true)
 			a.hideConnectionPanels()
 		})
 	}()

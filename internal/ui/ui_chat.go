@@ -25,6 +25,7 @@ import (
 	"voxmesh/internal/audio"
 	"voxmesh/internal/config"
 	"voxmesh/internal/history"
+	"voxmesh/internal/i18n"
 	"voxmesh/internal/imagefile"
 	"voxmesh/internal/logging"
 	"voxmesh/internal/room"
@@ -42,7 +43,7 @@ func isSystemMessage(m history.Message) bool {
 
 func (a *App) stageImage(ext string, data []byte, name string) {
 	if len(data) > assets.MaxBytes {
-		a.setStatus(fmt.Sprintf("La imagen supera el límite de %d MiB.", assets.MaxBytes/1024/1024))
+		a.setStatus(i18n.M("chat.image_over_limit", assets.MaxBytes/1024/1024))
 		return
 	}
 	a.stagedExt = ext
@@ -51,13 +52,13 @@ func (a *App) stageImage(ext string, data []byte, name string) {
 	kb := len(data) / 1024
 	fyne.Do(func() {
 		if a.stagedLabel != nil {
-			a.stagedLabel.SetText(fmt.Sprintf("Imagen lista para enviar: %s (%d KB)", name, kb))
+			a.stagedLabel.SetText(i18n.T("chat.image_staged_label", name, kb))
 		}
 		if a.stagedBar != nil {
 			a.stagedBar.Show()
 		}
 	})
-	a.setStatus(fmt.Sprintf("Imagen adjuntada (%s, %d KB). Presiona Enviar para transmitirla.", name, kb))
+	a.setStatus(i18n.M("chat.image_staged", name, kb))
 }
 
 func (a *App) clearStagedImage() {
@@ -93,7 +94,7 @@ func (a *App) submitChat() {
 	}
 
 	if !a.connected() {
-		a.setStatus("Conecta a una sala antes de enviar un mensaje.")
+		a.setStatus(i18n.M("chat.connect_first_message"))
 		return
 	}
 
@@ -114,7 +115,7 @@ func (a *App) submitChat() {
 	}
 }
 
-const unsupportedImageStatus = "Formato de imagen no soportado (PNG, JPG, GIF o WebP)."
+const unsupportedImageStatus = "chat.image_unsupported"
 
 // imageSendable rechaza antes de mandarla una imagen que los demás tirarían al recibirla
 // (handleAssetChunk): no decodificable o fuera de los topes de imagefile.
@@ -124,9 +125,9 @@ func (a *App) imageSendable(data []byte) bool {
 	case err == nil:
 		return true
 	case errors.Is(err, imagefile.ErrTooLarge):
-		a.setStatus(fmt.Sprintf("La imagen es demasiado grande (máximo %d MP y %d px por lado).", imagefile.MaxPixels/1_000_000, imagefile.MaxSide))
+		a.setStatus(i18n.M("chat.image_too_large", imagefile.MaxPixels/1_000_000, imagefile.MaxSide))
 	default:
-		a.setStatus(unsupportedImageStatus)
+		a.setStatus(i18n.M(unsupportedImageStatus))
 	}
 	logging.Infof("imagen no enviada: %s", logging.FormatError(err))
 	return false
@@ -142,7 +143,7 @@ func (a *App) sendChatImageBytes(ext string, data []byte, caption string) {
 	}
 	ext = strings.ToLower(ext)
 	if history.CheckImage(imageID, ext) != nil {
-		a.setStatus(unsupportedImageStatus)
+		a.setStatus(i18n.M(unsupportedImageStatus))
 		return
 	}
 	if !a.imageSendable(data) {
@@ -150,7 +151,7 @@ func (a *App) sendChatImageBytes(ext string, data []byte, caption string) {
 	}
 	if _, saveErr := a.historyStore.SaveImage(imageID, ext, data); saveErr != nil {
 		logging.Errorf("guardar imagen %q: %s", imageID, logging.FormatError(saveErr))
-		a.setStatus("No se pudo guardar la imagen: " + saveErr.Error())
+		a.setStatus(i18n.M("chat.image_save_failed", saveErr.Error()))
 		return
 	}
 	message := history.Message{
@@ -264,7 +265,7 @@ func buildChatSegments(m history.Message, userColor fyne.ThemeColorName) []widge
 
 	text := m.Text
 	if m.Kind == "image" && text == "" {
-		text = "Imagen compartida"
+		text = i18n.T("chat.image_shared")
 	}
 
 	matches := urlRegex.FindAllStringIndex(text, -1)
@@ -335,11 +336,11 @@ func (a *App) buildChatMessageObject(m history.Message, isMatch bool) fyne.Canva
 
 	copyText := m.Text
 	if copyText == "" && m.Kind == "image" {
-		copyText = "Imagen: " + m.ImageID + m.ImageExt
+		copyText = i18n.T("chat.copy_image", m.ImageID+m.ImageExt)
 	}
 	copyBtn := widget.NewButtonWithIcon("", theme.ContentCopyIcon(), func() {
 		_ = clipboard.WriteAll(copyText)
-		a.setStatus("Mensaje copiado al portapapeles.")
+		a.setStatus(i18n.M("chat.copied"))
 	})
 	copyBtn.Importance = widget.LowImportance
 	copyWrap := container.NewGridWrap(fyne.NewSize(28, 24), copyBtn)
@@ -502,20 +503,47 @@ func (a *App) addChatMessage(message history.Message) {
 	})
 }
 
-func (a *App) addSystemMessage(text string) {
-	a.addActivity(text)
+// addSystemMessage anota un aviso de la sala (key: "chat.sys.*") en el registro de actividad y,
+// si soy el host, lo difunde.
+func (a *App) addSystemMessage(key string, args ...string) {
+	message := newSystemMessage(key, args...)
+	a.addActivity(message.Text)
 	if udp := a.transport.Load(); udp != nil && a.roomState.HostID == a.participantID {
-		message := history.Message{
-			ID:        history.NewID("system"),
-			Timestamp: time.Now().UTC(),
-			Username:  "SISTEMA",
-			Kind:      "system",
-			Text:      text,
-			System:    true,
-		}
 		payload, _ := room.Encode(room.Envelope{Kind: room.SystemMessage, Message: &message})
 		udp.Broadcast(transport.Packet{Kind: transport.PacketChat, Sequence: a.sequence.Add(1), Payload: payload}, nil)
 	}
+}
+
+// newSystemMessage arma un aviso de la sala. Viaja como clave + datos para que cada uno lo lea en
+// su idioma (systemMessageText); Text lleva el aviso en el mío, de respaldo.
+func newSystemMessage(key string, args ...string) history.Message {
+	return history.Message{
+		ID:        history.NewID("system"),
+		Timestamp: time.Now().UTC(),
+		Username:  "SISTEMA",
+		Kind:      "system",
+		Text:      i18n.T(key, stringArgs(args)...),
+		System:    true,
+		Key:       key,
+		Args:      args,
+	}
+}
+
+// systemMessageText es el texto de un aviso recibido: en mi idioma si trae una clave de aviso que
+// conozco; si no, el Text que mandó el host.
+func systemMessageText(m history.Message) string {
+	if strings.HasPrefix(m.Key, "chat.sys.") && i18n.Has(m.Key) {
+		return i18n.T(m.Key, stringArgs(m.Args)...)
+	}
+	return m.Text
+}
+
+func stringArgs(args []string) []any {
+	values := make([]any, len(args))
+	for i, arg := range args {
+		values[i] = arg
+	}
+	return values
 }
 
 func (a *App) viewRoom(roomName string) {
@@ -530,7 +558,7 @@ func (a *App) viewRoom(roomName string) {
 	}
 	store, err := history.New(root, roomName)
 	if err != nil {
-		a.setStatus("No se pudo abrir el historial de " + roomName)
+		a.setStatus(i18n.M("chat.history_open_failed", roomName))
 		return
 	}
 	messages, _ := store.Load()
@@ -581,7 +609,7 @@ func (a *App) refreshRoomList(selected string) {
 
 func (a *App) selectChatImage() {
 	if a.historyStore == nil || !a.connected() {
-		a.setStatus("Conecta a una sala antes de enviar una imagen.")
+		a.setStatus(i18n.M("chat.connect_first_image"))
 		return
 	}
 	// El HWND se lee en el hilo de UI; el diálogo nativo corre en su propia goroutine (ver selectFile).
@@ -590,7 +618,7 @@ func (a *App) selectChatImage() {
 		defer func() {
 			if value := recover(); value != nil {
 				logging.Panic(value)
-				a.setStatus("No se pudo abrir el selector de imágenes.")
+				a.setStatus(i18n.M("chat.image_picker_failed"))
 			}
 		}()
 		path, err := selectImageFile(owner)
@@ -612,17 +640,17 @@ func (a *App) sendImageFile(path string) {
 	imageID := history.NewID(a.participantID)
 	extension := strings.ToLower(filepath.Ext(path))
 	if history.CheckImage(imageID, extension) != nil {
-		a.setStatus(unsupportedImageStatus)
+		a.setStatus(i18n.M(unsupportedImageStatus))
 		return
 	}
 	data, readErr := os.ReadFile(path)
 	if readErr != nil {
 		logging.Errorf("leer imagen %q: %s", path, logging.FormatError(readErr))
-		a.setStatus("No se pudo leer la imagen: " + readErr.Error())
+		a.setStatus(i18n.M("chat.image_read_failed", readErr.Error()))
 		return
 	}
 	if len(data) > assets.MaxBytes {
-		a.setStatus(fmt.Sprintf("El archivo supera el límite de %d MiB.", assets.MaxBytes/1024/1024))
+		a.setStatus(i18n.M("chat.file_over_limit", assets.MaxBytes/1024/1024))
 		return
 	}
 	if !a.imageSendable(data) {
@@ -630,7 +658,7 @@ func (a *App) sendImageFile(path string) {
 	}
 	if _, saveErr := a.historyStore.SaveImage(imageID, extension, data); saveErr != nil {
 		logging.Errorf("guardar imagen %q: %s", imageID, logging.FormatError(saveErr))
-		a.setStatus("No se pudo guardar la imagen: " + saveErr.Error())
+		a.setStatus(i18n.M("chat.image_save_failed", saveErr.Error()))
 		return
 	}
 	message := history.Message{ID: history.NewID(a.participantID), Timestamp: time.Now().UTC(), SenderID: a.participantID, Username: a.conf().Username, Kind: "image", ImageID: imageID, ImageExt: extension}

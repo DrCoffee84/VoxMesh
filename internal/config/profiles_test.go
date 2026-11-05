@@ -137,10 +137,10 @@ func TestApplyDefaultProfilesOnlyTouchesDefault(t *testing.T) {
 }
 
 func TestNextCustomProfileName(t *testing.T) {
-	if got := NextCustomProfileName(nil); got != "Personalizado" {
+	if got := NextCustomProfileName("Personalizado", nil); got != "Personalizado" {
 		t.Fatalf("primero: %q", got)
 	}
-	if got := NextCustomProfileName([]string{"personalizado", "Personalizado 2", "Mi configuración"}); got != "Personalizado 3" {
+	if got := NextCustomProfileName("Personalizado", []string{"personalizado", "Personalizado 2", "Mi configuración"}); got != "Personalizado 3" {
 		t.Fatalf("siguiente libre: %q", got)
 	}
 }

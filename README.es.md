@@ -1,0 +1,74 @@
+[English](README.md)
+
+# VoxMesh
+
+Chat de voz y texto para jugar o charlar con amigos, en **Windows**. Es un solo programa: sin instalador, sin cuentas y sin servidores de por medio. Uno abre una sala, pasa la invitación por WhatsApp y listo. Si el que abrió la sala se va o se le corta internet, la sala sigue sola con los demás.
+
+## Descargar
+
+- 💻 **PC (Windows 10 u 11):** [**Descargar VoxMesh para Windows**](https://github.com/DrCoffee84/VoxMesh/releases/latest/download/voxmesh.exe)
+- 📱 **Celular como micrófono** (Android, opcional): [**Descargar VoxMesh Mic**](https://github.com/DrCoffee84/VoxMesh/releases/download/v1.0.0/voxmesh-mic.apk)
+
+La app de la PC se actualiza sola: cuando sale una versión nueva, te pregunta si querés instalarla. **Todos los de la sala tienen que tener la misma versión.**
+
+## Instalar en la PC
+
+1. Creá una carpeta (por ejemplo `Documentos\VoxMesh`) y mové ahí `voxmesh.exe`. La app guarda su configuración al lado del `.exe`.
+2. Abrilo con doble clic. La primera vez pueden aparecer estos avisos, que son normales (más abajo se explica [por qué](#es-seguro)):
+   - **El navegador** dice que el archivo "no se descarga con frecuencia" → **Conservar**.
+   - **"Windows protegió su PC"** (cartel azul) → **Más información** → **Ejecutar de todas formas**.
+   - **Firewall de Windows** → **Permitir acceso**. Si no lo permitís, tus amigos no van a poder entrar a tu sala.
+
+## Instalar la app del celular (opcional)
+
+Sirve para usar el celular como micrófono de la PC. También se puede sin instalar nada: en la PC, Ajustes (⚙️) → **📱 Micrófono del Celular** → **Mostrar QR**, y escanealo con la cámara del celular (los dos tienen que estar en el mismo Wi-Fi).
+
+1. Abrí el link de descarga **desde el celular**.
+2. Android te va a pedir permiso para instalar apps desde el navegador → **Configuración** → activá **Permitir de esta fuente** → volvé atrás.
+3. Si aparece **Play Protect** avisando que la app es desconocida → **Más detalles** → **Instalar de todas formas**.
+4. Abrí *VoxMesh Mic*, tocá **Escanear Código QR** y apuntá al QR que muestra la PC.
+
+Si una versión nueva no se instala encima de la vieja, desinstalá la anterior y probá de nuevo.
+
+## Cómo se usa
+
+**Para abrir una sala:**
+1. Tocá **Iniciar sala** y elegí un nombre.
+2. Arriba, al lado del micrófono, tocá **Invitar** → **Internet**. La invitación (`VM1-…`) queda copiada.
+3. Pegala en WhatsApp para tus amigos.
+
+**Para entrar a una sala:**
+1. Copiá la invitación que te mandaron.
+2. Pegala en el cuadro de **Cliente** y tocá **Conectar**.
+
+**Bueno saber:**
+- **Pasá la invitación solo a gente de confianza**: cualquiera que la tenga puede entrar.
+- Cualquiera de la sala puede invitar con el mismo botón: sirve para el que llega tarde o para el que se cayó y quiere volver. La invitación deja de valer cuando alguien vuelve a tocar "Iniciar sala".
+- En Ajustes (⚙️) elegís tu nombre, micrófono y auriculares, el filtro de ruido y el volumen de cada amigo. Los cambios se escuchan al instante, pero se guardan recién con **Guardar**.
+- También tiene chat con imágenes y una botonera de sonidos con atajos de teclado.
+- **Compartir pantalla**, pensado para ayudar a un amigo a configurar algo: el botón **Compartir** de arriba comparte tu pantalla (si tenés varias, elegís cuál, y la resolución) y los demás tocan **Ver pantalla** en tu avatar para verla en una ventana aparte, ajustada o en tamaño real para leer letra chica. Solo la ve quien la abre, y mientras compartís una barra te lo recuerda (ahí podés cambiar la resolución) y un punto rojo aparece sobre el botón de VoxMesh en la barra de tareas, aunque esté minimizado.
+
+## ¿Es seguro?
+
+Sí, y no hace falta creerlo: se puede comprobar.
+
+- **Es código abierto** ([licencia MIT](LICENSE)): todo el código está en este repositorio y cualquiera lo puede leer.
+- **Lo compila GitHub, no una persona**: tanto el `.exe` como la app del celular los arma GitHub Actions a partir de este mismo código público. Cada compilación queda registrada en la pestaña [Actions](https://github.com/DrCoffee84/VoxMesh/actions).
+- **¿Por qué avisan Windows y Android?** Porque la app no está firmada con un certificado pago (cuestan cientos de dólares por año) y no está en Play Store. Esos avisos aparecen con cualquier programa nuevo sin firma, no porque se haya detectado algo malo.
+- **Qué hace en tu PC**: no se instala, no pide permisos de administrador y no tiene cuentas ni publicidad. Solo se conecta a los demás de tu sala, a GitHub (para buscar actualizaciones), a `api.ipify.org` (para saber tu IP pública cuando abrís una sala) y a tu router (para abrir el puerto solo).
+- **Tu voz y tu chat viajan cifrados** con una clave que va dentro de la invitación: sin ella nadie puede escuchar ni entrar. Lo que sí ven los de la sala es tu dirección IP, como en cualquier llamada directa.
+- **Si querés verificarlo vos**: en PowerShell, `Get-FileHash .\voxmesh.exe` tiene que dar el mismo número que [voxmesh.exe.sha256](https://github.com/DrCoffee84/VoxMesh/releases/latest/download/voxmesh.exe.sha256) (no importan las mayúsculas). También podés subirlo a [VirusTotal](https://www.virustotal.com); que uno o dos antivirus poco conocidos marquen un programa nuevo sin firma es un falso positivo común.
+
+## Problemas comunes
+
+- **"Código incorrecto o host inalcanzable"**: la invitación es vieja (alguien volvió a tocar "Iniciar sala") o no se llega a la PC del host. Pedí una invitación nueva.
+- **Tus amigos se escuchan a sí mismos (eco)**: pasa si usás parlantes o la tele. Activá **"Uso parlantes: cancelar eco"** en Ajustes → Entrada → Configuración avanzada → Supresión de ruido y voz. Con auriculares no hace falta.
+- **Nadie puede entrar a tu sala**: algunos proveedores de internet (sobre todo de datos móviles y algunas fibras) no permiten conexiones directas, y la app lo avisa. La solución más fácil es que todos instalen [Tailscale](https://tailscale.com) (gratis) y que el host invite con **Invitar** → la opción que dice **Tailscale**. Si sabés configurar tu router, otra opción es abrir el puerto UDP 47830 hacia tu PC.
+- **Alguien no se puede conectar y los demás sí**: fijate que todos tengan la misma versión.
+- **Otra cosa anda mal**: el botón del documento (abajo a la derecha) o Ajustes → **Abrir carpeta de registros (logs)** abre la carpeta de logs. Mandale el del día a quien te pasó la app.
+
+## Más info
+
+- [DESARROLLO.md](DESARROLLO.md): cómo funciona por dentro, cómo compilarlo y cómo publicar una versión.
+- [AGENT.md](AGENT.md): mapa técnico detallado del código.
+- [LICENSE](LICENSE): licencia MIT.

@@ -112,3 +112,50 @@ func TestCloneIsIndependent(t *testing.T) {
 		t.Fatalf("el clon comparte PeerVolumes con el original: %v", withVolumes.PeerVolumes)
 	}
 }
+
+// La resolución de pantalla elegida se guarda y se lee tal cual; un archivo de antes no la tiene
+// (vacía: screen.ParseResolution la lee como 1080p).
+func TestScreenResolutionRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "voxmesh.json")
+	cfg := Default()
+	if cfg.ScreenResolution != "" {
+		t.Fatalf("Default().ScreenResolution = %q, want empty", cfg.ScreenResolution)
+	}
+	cfg.ScreenResolution = "720p"
+	if err := Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.ScreenResolution != "720p" {
+		t.Fatalf("ScreenResolution = %q after save/load, want 720p", loaded.ScreenResolution)
+	}
+	if err := os.WriteFile(path, []byte(`{"username":"Coffee"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if loaded, err = Load(path); err != nil || loaded.ScreenResolution != "" {
+		t.Fatalf("old file: ScreenResolution = %q, err %v; want empty", loaded.ScreenResolution, err)
+	}
+}
+
+// Language vacío (archivo de antes) o desconocido arranca en inglés; "es" queda.
+func TestLoadLanguage(t *testing.T) {
+	for stored, want := range map[string]string{`"language":"",`: "en", `"language":"fr",`: "en", `"language":"es",`: "es", ``: "en"} {
+		path := filepath.Join(t.TempDir(), "voxmesh.json")
+		if err := os.WriteFile(path, []byte(`{`+stored+`"username":"Coffee"}`), 0600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Language != want {
+			t.Fatalf("%s → Language %q, quería %q", stored, cfg.Language, want)
+		}
+	}
+	if Default().Language != "en" {
+		t.Fatalf("Default().Language = %q", Default().Language)
+	}
+}

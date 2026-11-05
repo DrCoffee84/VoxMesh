@@ -11,14 +11,12 @@ import (
 	"fyne.io/fyne/v2/widget"
 	"github.com/atotto/clipboard"
 
+	"voxmesh/internal/i18n"
 	"voxmesh/internal/invite"
 	"voxmesh/internal/logging"
 	"voxmesh/internal/netinfo"
 	"voxmesh/internal/transport"
 )
-
-// inviteWarning acompaña cada invitación copiada: la invitación es la llave de la sala.
-const inviteWarning = "Quien tenga la invitación puede entrar."
 
 // inviteOption es una dirección para la invitación (la pública, o una de LAN/VPN).
 type inviteOption struct {
@@ -33,7 +31,7 @@ func (a *App) showInviteMenu(button *widget.Button) {
 	udp := a.transport.Load()
 	endpoint := a.endpointText()
 	if udp == nil || endpoint == "" {
-		a.setStatus("Primero creá una sala o entrá a una.")
+		a.setStatus(i18n.M("invite.no_room"))
 		return
 	}
 	key := udp.Key()
@@ -67,7 +65,7 @@ func (a *App) showInviteMenu(button *widget.Button) {
 func hostInviteOptions(endpoint string, listenPort int) []inviteOption {
 	var options []inviteOption
 	if addr, err := netip.ParseAddrPort(endpoint); err == nil && isInternetAddr(addr.Addr()) {
-		options = append(options, inviteOption{label: "Internet · " + endpoint, address: endpoint})
+		options = append(options, inviteOption{label: i18n.T("invite.internet", endpoint), address: endpoint})
 	}
 	interfaces, err := netinfo.LocalIPv4s()
 	if err != nil {
@@ -75,7 +73,7 @@ func hostInviteOptions(endpoint string, listenPort int) []inviteOption {
 	}
 	for _, iface := range interfaces {
 		address := net.JoinHostPort(iface.IP.String(), strconv.Itoa(listenPort))
-		options = append(options, inviteOption{label: "LAN/VPN · " + iface.Name + " · " + address, address: address})
+		options = append(options, inviteOption{label: i18n.T("invite.lan", iface.Name, address), address: address})
 	}
 	if len(options) == 0 {
 		options = append(options, inviteOption{label: endpoint, address: endpoint})
@@ -96,14 +94,15 @@ func isInternetAddr(ip netip.Addr) bool {
 func (a *App) copyInvite(address string, key transport.Key) {
 	addr, err := netip.ParseAddrPort(address)
 	if err != nil {
-		a.setStatus("La dirección de la sala todavía no está lista.")
+		a.setStatus(i18n.M("invite.address_not_ready"))
 		return
 	}
 	if err := clipboard.WriteAll(invite.Format(addr, key)); err != nil {
-		a.setStatus("No se pudo copiar: " + err.Error())
+		a.setStatus(i18n.M("invite.copy_failed", err.Error()))
 		return
 	}
-	a.setStatus("Invitación copiada (" + address + "). " + inviteWarning)
+	// Con el aviso: la invitación es la llave de la sala.
+	a.setStatus(i18n.M("invite.copied", address))
 }
 
 // setRejoinInvite guarda en memoria la invitación para volver a entrar (con la dirección de quien

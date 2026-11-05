@@ -15,6 +15,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"voxmesh/internal/i18n"
 	"voxmesh/internal/imagefile"
 	"voxmesh/internal/logging"
 	"voxmesh/internal/version"
@@ -31,6 +32,9 @@ var (
 	avatarColor = color.NRGBA{R: 60, G: 70, B: 85, A: 255}
 	// mutedTextColor es el texto secundario de los chips (lag, volumen).
 	mutedTextColor = color.NRGBA{R: 160, G: 170, B: 185, A: 255}
+	// sharingColor es el fondo del banner "Estás compartiendo tu pantalla" y la insignia del avatar
+	// de quien comparte: un naranja oscuro que se ve sin parecer un error.
+	sharingColor = color.NRGBA{R: 176, G: 84, B: 20, A: 255}
 )
 
 // voiceHold es cuánto queda prendido el indicador de voz propia después del último frame mandado.
@@ -130,35 +134,35 @@ func (e *chatInputEntry) TypedShortcut(s fyne.Shortcut) {
 }
 
 func (a *App) content() fyne.CanvasObject {
-	a.status = widget.NewLabel("Listo. Creá una sala o pegá una invitación.")
+	a.status = widget.NewLabel(i18n.T("main.ready"))
 	a.status.Truncation = fyne.TextTruncateEllipsis
 	buildVersion := widget.NewLabel(version.Value)
 	buildVersion.Importance = widget.LowImportance
 	openLogs := widget.NewButtonWithIcon("", theme.DocumentIcon(), func() {
 		if err := openLogsDirectory(); err != nil {
-			a.setStatus("No se pudo abrir la carpeta de logs: " + err.Error())
+			a.setStatus(i18n.M("status.open_logs_failed", err.Error()))
 		}
 	})
 	openLogs.Importance = widget.LowImportance
 	endpoint := widget.NewEntry()
-	endpoint.SetPlaceHolder("Pegá la invitación (VM1-…)")
+	endpoint.SetPlaceHolder(i18n.T("main.invite_placeholder"))
 	endpoint.OnSubmitted = func(text string) { a.connectClient(text) }
 	a.endpointEntry = endpoint
-	a.connectButton = widget.NewButton("Conectar", func() { a.connectClient(endpoint.Text) })
+	a.connectButton = widget.NewButton(i18n.T("main.connect"), func() { a.connectClient(endpoint.Text) })
 	a.connectButton.Importance = widget.HighImportance
-	a.leaveButton = widget.NewButton("Salir de la sala", a.stopConnection)
+	a.leaveButton = widget.NewButton(i18n.T("main.leave_room"), a.stopConnection)
 	a.leaveButton.Disable()
-	a.createButton = widget.NewButton("Iniciar sala", a.createHost)
+	a.createButton = widget.NewButton(i18n.T("main.start_room"), a.createHost)
 	a.createButton.Importance = widget.HighImportance
-	a.stopButton = widget.NewButton("Parar sala", a.stopConnection)
+	a.stopButton = widget.NewButton(i18n.T("main.stop_room"), a.stopConnection)
 	a.stopButton.Disable()
 
 	chatInput := newChatInputEntry(a)
-	chatInput.SetPlaceHolder("Escribí un mensaje…")
+	chatInput.SetPlaceHolder(i18n.T("chat.input_placeholder"))
 	chatInput.OnSubmitted = func(text string) { a.submitChat() }
 	a.chatInput = &chatInput.Entry
 
-	sendChat := widget.NewButtonWithIcon("Enviar", theme.MailSendIcon(), a.submitChat)
+	sendChat := widget.NewButtonWithIcon(i18n.T("chat.send"), theme.MailSendIcon(), a.submitChat)
 	sendChat.Importance = widget.HighImportance
 	attachImage := widget.NewButtonWithIcon("", theme.MailAttachmentIcon(), a.selectChatImage)
 
@@ -175,10 +179,10 @@ func (a *App) content() fyne.CanvasObject {
 	a.chatBox = container.NewVBox()
 	a.chatScroll = container.NewVScroll(a.chatBox)
 	a.roomSelect = widget.NewSelect(nil, func(selected string) { a.viewRoom(selected) })
-	a.roomSelect.PlaceHolder = "Ver otra sala…"
+	a.roomSelect.PlaceHolder = i18n.T("chat.view_other_room")
 
-	a.hostPanel = uiCard(container.NewVBox(cardTitle("Host"), a.createButton, a.stopButton))
-	a.clientPanel = uiCard(container.NewVBox(cardTitle("Cliente"), endpoint, a.connectButton, a.leaveButton))
+	a.hostPanel = uiCard(container.NewVBox(cardTitle(i18n.T("main.host_card")), a.createButton, a.stopButton))
+	a.clientPanel = uiCard(container.NewVBox(cardTitle(i18n.T("main.client_card")), endpoint, a.connectButton, a.leaveButton))
 	topControls := container.NewVBox(a.hostPanel, a.clientPanel)
 
 	a.activityBox = container.NewVBox()
@@ -193,7 +197,7 @@ func (a *App) content() fyne.CanvasObject {
 		})
 	})
 	clearLogsBtn.Importance = widget.LowImportance
-	activityCard := uiCard(container.NewBorder(cardHeader("Registro de actividad", clearLogsBtn), nil, nil, nil, a.activityScroll))
+	activityCard := uiCard(container.NewBorder(cardHeader(i18n.T("main.activity"), clearLogsBtn), nil, nil, nil, a.activityScroll))
 
 	a.connectionPanel = container.New(fixedWidthLayout{connectionPanelWidth}, container.NewBorder(topControls, nil, nil, nil, activityCard))
 
@@ -201,17 +205,17 @@ func (a *App) content() fyne.CanvasObject {
 	a.refreshPeerAvatars()
 	peerScroll := container.NewHScroll(a.peerHBox)
 	peerScroll.SetMinSize(fyne.NewSize(120, 38))
-	statusCard := uiCard(container.NewBorder(nil, nil, cardTitle("En sala"), nil, peerScroll))
+	statusCard := uiCard(container.NewBorder(nil, nil, cardTitle(i18n.T("main.in_room")), nil, peerScroll))
 
 	a.chatSearch = widget.NewEntry()
-	a.chatSearch.SetPlaceHolder("Buscar en el chat…")
+	a.chatSearch.SetPlaceHolder(i18n.T("chat.search_placeholder"))
 	a.chatSearch.OnChanged = func(string) { a.refreshChat() }
 	clearSearch := widget.NewButtonWithIcon("", theme.CancelIcon(), func() { a.chatSearch.SetText("") })
 	clearSearch.Importance = widget.LowImportance
 	a.chatSearch.ActionItem = clearSearch // como el buscador de la botonera
 	a.chatSearchCount = widget.NewLabel("")
 	searchBar := container.NewBorder(nil, nil, nil, a.chatSearchCount, a.chatSearch)
-	chatTop := container.NewBorder(nil, nil, cardTitle("Chat de la sala"), nil, a.roomSelect)
+	chatTop := container.NewBorder(nil, nil, cardTitle(i18n.T("chat.title")), nil, a.roomSelect)
 	chatHeader := container.NewVBox(chatTop, searchBar)
 
 	chatCard := uiCard(container.NewBorder(chatHeader, chatComposer, nil, nil, a.chatScroll))
@@ -236,7 +240,7 @@ func (a *App) content() fyne.CanvasObject {
 	settingsBtn := widget.NewButtonWithIcon("", theme.SettingsIcon(), a.showSettings)
 	settingsBtn.Importance = widget.LowImportance
 	count := 0
-	resetAudioBtn := widget.NewButtonWithIcon("Reiniciar audio", theme.ViewRefreshIcon(), func() {
+	resetAudioBtn := widget.NewButtonWithIcon(i18n.T("main.restart_audio"), theme.ViewRefreshIcon(), func() {
 		if count == 15 {
 			if u, err := url.Parse("https://www.youtube.com/watch?v=dQw4w9WgXcQ"); err == nil {
 				fyne.CurrentApp().OpenURL(u)
@@ -247,7 +251,7 @@ func (a *App) content() fyne.CanvasObject {
 	})
 	resetAudioBtn.Importance = widget.LowImportance
 
-	inviteBtn := widget.NewButtonWithIcon("Invitar", theme.ContentCopyIcon(), nil)
+	inviteBtn := widget.NewButtonWithIcon(i18n.T("main.invite"), theme.ContentCopyIcon(), nil)
 	inviteBtn.OnTapped = func() { a.showInviteMenu(inviteBtn) }
 	inviteBtn.Importance = widget.LowImportance
 
@@ -255,10 +259,13 @@ func (a *App) content() fyne.CanvasObject {
 	a.muteButton.Importance = widget.LowImportance
 	a.refreshMuteButton()
 
+	shareBtn, shareBanner := a.newShareControls()
+
 	leftTop := container.NewHBox(toggleRoomsBtn, title, widget.NewSeparator(), voiceDot)
 	// Controles de la llamada juntos; después los de la app.
-	rightTop := container.NewHBox(inviteBtn, a.muteButton, a.topHangupBtn, widget.NewSeparator(), resetAudioBtn, settingsBtn)
-	topBar := container.NewBorder(nil, nil, leftTop, rightTop, a.selfNameLabel)
+	rightTop := container.NewHBox(inviteBtn, shareBtn, a.muteButton, a.topHangupBtn, widget.NewSeparator(), resetAudioBtn, settingsBtn)
+	// El banner de "Estás compartiendo tu pantalla" va debajo, a todo el ancho (oculto si no).
+	topBar := container.NewVBox(container.NewBorder(nil, nil, leftTop, rightTop, a.selfNameLabel), shareBanner)
 	centerPanel := container.NewBorder(statusCard, nil, nil, nil, chatCard)
 	main := container.NewBorder(nil, nil, a.connectionPanel, a.soundPanel, centerPanel)
 	a.bottomBar = container.NewBorder(nil, nil, nil, container.NewHBox(buildVersion, openLogs), a.status)
@@ -266,7 +273,8 @@ func (a *App) content() fyne.CanvasObject {
 		a.bottomBar.Hide()
 	}
 	// La capa de la leyenda va encima de todo y no recibe eventos (ver tooltip).
-	a.mainView = container.NewStack(container.NewBorder(topBar, a.bottomBar, nil, nil, main), a.tooltip.layer)
+	a.mainFrame = container.NewBorder(topBar, a.bottomBar, nil, nil, main)
+	a.mainView = container.NewStack(a.mainFrame, a.tooltip.layer)
 	return a.mainView
 }
 
@@ -456,7 +464,7 @@ func (a *App) showLightbox(imagePath string) {
 
 	largeImg := &canvas.Image{FillMode: canvas.ImageFillContain}
 	largeImg.SetMinSize(fyne.NewSize(targetW, targetH))
-	loading := widget.NewLabel("Cargando imagen…")
+	loading := widget.NewLabel(i18n.T("chat.image_loading"))
 
 	var pop *widget.PopUp
 	tapImg := newTappableImage(largeImg, func() {
@@ -495,7 +503,7 @@ func (a *App) showLightbox(imagePath string) {
 				return
 			}
 			if err != nil {
-				loading.SetText("No se pudo abrir la imagen.")
+				loading.SetText(i18n.T("chat.image_open_failed"))
 				return
 			}
 			loading.Hide()
@@ -510,7 +518,7 @@ var lightboxDecode = make(chan struct{}, 1)
 
 func formatPeerLag(p peerView) (string, color.Color) {
 	if p.isSelf {
-		return "Local", speakingColor
+		return i18n.T("main.peer_local"), speakingColor
 	}
 	if p.lag <= 0 {
 		return "… ms", mutedTextColor
@@ -551,19 +559,37 @@ func newMuteBadge() *fyne.Container {
 	return container.NewWithoutLayout(badge)
 }
 
+// newScreenBadge es la insignia de pantalla compartida: un monitor blanco sobre un círculo de
+// sharingColor, arriba a la derecha del avatar (el mute va abajo). Mismo patrón que newMuteBadge.
+func newScreenBadge() *fyne.Container {
+	bg := canvas.NewCircle(sharingColor)
+	icon := canvas.NewImageFromResource(theme.NewColoredResource(theme.ComputerIcon(), theme.ColorNameForeground))
+	icon.FillMode = canvas.ImageFillContain
+	badge := container.NewStack(bg, icon)
+	const side = 15
+	badge.Resize(fyne.NewSquareSize(side))
+	badge.Move(fyne.NewPos(avatarSize-side, 0))
+	layer := container.NewWithoutLayout(badge)
+	layer.Hide()
+	return layer
+}
+
 // peerChip son los widgets de un participante en la barra de avatares. Los toca solo el hilo
 // de UI (dentro de los fyne.Do de refreshPeerAvatars y los callbacks del slider).
 type peerChip struct {
-	id        string
-	name      string // nombre vigente: el slider guarda el volumen por nombre
-	isSelf    bool
-	circle    *canvas.Circle
-	initial   *canvas.Text
-	badge     *fyne.Container
-	nameTxt   *canvas.Text
-	lagTxt    *canvas.Text
-	volumeTxt *canvas.Text // nil para el propio (no hay slider de uno mismo)
-	object    fyne.CanvasObject
+	id      string
+	name    string // nombre vigente: el slider guarda el volumen por nombre
+	isSelf  bool
+	circle  *canvas.Circle
+	initial *canvas.Text
+	badge   *fyne.Container
+	// screenBadge: insignia de pantalla compartida; viewBtn: "Ver pantalla" (nil para el propio).
+	screenBadge *fyne.Container
+	viewBtn     *widget.Button
+	nameTxt     *canvas.Text
+	lagTxt      *canvas.Text
+	volumeTxt   *canvas.Text // nil para el propio (no hay slider de uno mismo)
+	object      fyne.CanvasObject
 }
 
 func (a *App) refreshPeerAvatars() {
@@ -585,7 +611,7 @@ func (a *App) refreshPeerAvatars() {
 		}
 		if len(peers) == 0 {
 			a.peerChips = nil
-			empty := widget.NewLabel("Sin usuarios")
+			empty := widget.NewLabel(i18n.T("main.no_users"))
 			empty.Importance = widget.LowImportance
 			a.peerHBox.Objects = []fyne.CanvasObject{empty}
 			a.peerHBox.Refresh()
@@ -640,7 +666,8 @@ func (a *App) newPeerChip(peer peerView) *peerChip {
 	chip.initial.TextSize = 14
 	chip.initial.Alignment = fyne.TextAlignCenter
 	chip.badge = newMuteBadge()
-	avatarStack := container.NewStack(chip.circle, container.NewCenter(chip.initial), chip.badge)
+	chip.screenBadge = newScreenBadge()
+	avatarStack := container.NewStack(chip.circle, container.NewCenter(chip.initial), chip.badge, chip.screenBadge)
 	avatarBox := container.NewGridWrap(fyne.NewSquareSize(avatarSize), avatarStack)
 
 	chip.nameTxt = canvas.NewText("", theme.Color(theme.ColorNameForeground))
@@ -651,7 +678,11 @@ func (a *App) newPeerChip(peer peerView) *peerChip {
 
 	var content fyne.CanvasObject = container.NewHBox(avatarBox, container.NewVBox(chip.nameTxt, chip.lagTxt))
 	if !peer.isSelf {
-		content = container.NewVBox(content, a.newPeerVolumeSlider(chip))
+		// "Ver pantalla" solo mientras comparte (update lo muestra u oculta).
+		chip.viewBtn = widget.NewButtonWithIcon(i18n.T("screen.view"), theme.ComputerIcon(), func() { a.watchScreen(chip.id, chip.name) })
+		chip.viewBtn.Importance = widget.LowImportance
+		chip.viewBtn.Hide()
+		content = container.NewVBox(content, a.newPeerVolumeSlider(chip), chip.viewBtn)
 	}
 
 	pillBg := canvas.NewRectangle(theme.Color(colorNameChip))
@@ -714,6 +745,20 @@ func (c *peerChip) update(peer peerView, now time.Time) {
 			c.badge.Show()
 		} else {
 			c.badge.Hide()
+		}
+	}
+	if peer.sharing != c.screenBadge.Visible() {
+		if peer.sharing {
+			c.screenBadge.Show()
+		} else {
+			c.screenBadge.Hide()
+		}
+	}
+	if c.viewBtn != nil && peer.sharing != c.viewBtn.Visible() {
+		if peer.sharing {
+			c.viewBtn.Show()
+		} else {
+			c.viewBtn.Hide()
 		}
 	}
 

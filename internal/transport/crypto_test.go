@@ -155,7 +155,8 @@ func TestReceiveDropsWrongKey(t *testing.T) {
 	}
 }
 
-// El host reenvía los mismos bytes que recibió (voz con Relay, archivos con TryRelayBulk).
+// El host reenvía los mismos bytes que recibió (voz con Relay, archivos con TryRelayBulk,
+// pantalla con TryRelayScreen).
 func TestRelaySendsReceivedBytes(t *testing.T) {
 	host, err := Listen("127.0.0.1:0", testKey)
 	if err != nil {
@@ -173,6 +174,7 @@ func TestRelaySendsReceivedBytes(t *testing.T) {
 	}
 	defer listener.Close()
 	host.AddPeer(listener.LocalAddr().(*net.UDPAddr))
+	watchers := []*net.UDPAddr{listener.LocalAddr().(*net.UDPAddr)}
 
 	_ = host.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	_ = listener.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -187,6 +189,8 @@ func TestRelaySendsReceivedBytes(t *testing.T) {
 	for _, relay := range []func(Packet, *net.UDPAddr){
 		host.Relay,
 		func(p Packet, except *net.UDPAddr) { host.TryRelayBulk(p, except) },
+		func(p Packet, _ *net.UDPAddr) { host.TryRelayScreen(p, watchers) },
+		func(p Packet, _ *net.UDPAddr) { host.RelayTo(p, watchers) },
 	} {
 		if err := sender.Send(host.Address(), audioPacket()); err != nil {
 			t.Fatal(err)

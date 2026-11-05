@@ -12,6 +12,7 @@ import (
 	"voxmesh/internal/assets"
 	"voxmesh/internal/audio"
 	"voxmesh/internal/history"
+	"voxmesh/internal/i18n"
 	"voxmesh/internal/imagefile"
 	"voxmesh/internal/logging"
 	"voxmesh/internal/room"
@@ -27,7 +28,7 @@ func (a *App) handleChatPacket(payload []byte) {
 	case room.ChatMessage:
 		if envelope.Message != nil {
 			if isSystemMessage(*envelope.Message) {
-				a.addActivityAt(envelope.Message.Text, envelope.Message.Timestamp)
+				a.addActivityAt(systemMessageText(*envelope.Message), envelope.Message.Timestamp)
 			} else {
 				a.addChatMessage(*envelope.Message)
 				if envelope.Message.SenderID != a.participantID {
@@ -37,7 +38,7 @@ func (a *App) handleChatPacket(payload []byte) {
 		}
 	case room.SystemMessage:
 		if envelope.Message != nil {
-			a.addActivity(envelope.Message.Text)
+			a.addActivity(systemMessageText(*envelope.Message))
 		}
 	case room.SoundAddMessage:
 		if envelope.Sound != nil && a.netAssetOK(assets.KindSound, envelope.Sound.ID, envelope.Sound.Ext, "") {
@@ -47,7 +48,7 @@ func (a *App) handleChatPacket(payload []byte) {
 		// Sin reenviarlo: el host ya lo difunde en receiveLoop.
 		if envelope.Sound != nil {
 			if removed := a.dropSounds([]string{envelope.Sound.ID}); len(removed) > 0 {
-				a.setStatus("Sonido eliminado: " + removed[0].Name)
+				a.setStatus(i18n.M("sound.removed", removed[0].Name))
 			}
 		}
 	case room.SoundPlayMessage:
@@ -219,7 +220,7 @@ func containsIndex(indices []uint32, index uint32) bool {
 func (a *App) sendAsset(kind byte, id, ext string, data []byte) {
 	chunks, err := assets.Split(kind, id, ext, data)
 	if err != nil {
-		a.setStatus("No se pudo preparar el archivo: " + err.Error())
+		a.setStatus(i18n.M("status.asset_prepare_failed", err.Error()))
 		return
 	}
 	if !a.connected() {

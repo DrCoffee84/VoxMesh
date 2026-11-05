@@ -19,6 +19,8 @@ import (
 	"fyne.io/fyne/v2/driver"
 	"golang.org/x/image/bmp"
 	"golang.org/x/sys/windows"
+
+	"voxmesh/internal/i18n"
 )
 
 var (
@@ -164,11 +166,11 @@ func openFileDialog(owner uintptr, filterText, titleText string) (string, error)
 }
 
 func selectImageFile(owner uintptr) (string, error) {
-	return selectFile(owner, "Imágenes (*.png;*.jpg;*.jpeg;*.gif;*.webp\x00*.png;*.jpg;*.jpeg;*.gif;*.webp\x00Todos los archivos\x00*.*\x00", "Seleccionar imagen")
+	return selectFile(owner, i18n.T("file.images")+" (*.png;*.jpg;*.jpeg;*.gif;*.webp\x00*.png;*.jpg;*.jpeg;*.gif;*.webp\x00"+i18n.T("file.all_files")+"\x00*.*\x00", i18n.T("file.pick_image"))
 }
 
 func selectSoundFile(owner uintptr) (string, error) {
-	return selectFile(owner, "Sonidos (*.wav;*.mp3)\x00*.wav;*.mp3\x00Todos los archivos\x00*.*\x00", "Seleccionar sonido")
+	return selectFile(owner, i18n.T("file.sounds")+" (*.wav;*.mp3)\x00*.wav;*.mp3\x00"+i18n.T("file.all_files")+"\x00*.*\x00", i18n.T("file.pick_sound"))
 }
 
 // osPointer convierte una dirección que devolvió Windows (GlobalLock: memoria fuera del heap de
@@ -200,7 +202,7 @@ func readClipboardImage() (string, []byte, string, error) {
 						data := make([]byte, size)
 						copy(data, unsafe.Slice((*byte)(osPointer(ptr)), size))
 						globalUnlock.Call(hMem)
-						return ".png", data, "portapapeles.png", nil
+						return ".png", data, i18n.T("file.clipboard_image"), nil
 					}
 					globalUnlock.Call(hMem)
 				}
@@ -246,7 +248,7 @@ func readClipboardImage() (string, []byte, string, error) {
 					pngData, err := dibToPNG(dibData)
 					globalUnlock.Call(hMem)
 					if err == nil && len(pngData) > 0 {
-						return ".png", pngData, "captura.png", nil
+						return ".png", pngData, i18n.T("file.screenshot_image"), nil
 					}
 				} else {
 					globalUnlock.Call(hMem)

@@ -6,11 +6,25 @@ package audio
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 
 	"github.com/hajimehoshi/go-mp3"
+)
+
+// Errores de DecodeSoundFile por un archivo que no sirve (no por el sistema): la UI los reconoce
+// con errors.Is para mostrarlos en el idioma de la app.
+var (
+	ErrSoundFormat     = errors.New("formato no soportado (usá .wav o .mp3)")
+	ErrSoundMP3Invalid = errors.New("mp3 inválido")
+	ErrSoundWAVInvalid = errors.New("wav inválido")
+	ErrSoundWAVFmt     = errors.New("wav inválido: fmt corto")
+	ErrSoundWAVNoData  = errors.New("wav inválido: faltan datos")
+	ErrSoundWAVBits    = errors.New("wav no soportado: usá PCM de 16 bits")
+	ErrSoundEmpty      = errors.New("audio vacío")
+	ErrSoundTooShort   = errors.New("audio demasiado corto")
 )
 
 func DecodeSoundFile(extension string, data []byte) ([]byte, error) {
@@ -20,14 +34,14 @@ func DecodeSoundFile(extension string, data []byte) ([]byte, error) {
 	case ".wav":
 		return decodeWAVSound(data)
 	default:
-		return nil, fmt.Errorf("formato no soportado (usá .wav o .mp3)")
+		return nil, ErrSoundFormat
 	}
 }
 
 func decodeMP3Sound(data []byte) ([]byte, error) {
 	decoder, err := mp3.NewDecoder(bytes.NewReader(data))
 	if err != nil {
-		return nil, fmt.Errorf("mp3 inválido: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrSoundMP3Invalid, err)
 	}
 	var pcm []byte
 	totalBytes := decoder.Length()
@@ -50,7 +64,7 @@ func decodeMP3Sound(data []byte) ([]byte, error) {
 
 func decodeWAVSound(data []byte) ([]byte, error) {
 	if len(data) < 44 || string(data[0:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
-		return nil, fmt.Errorf("wav inválido")
+		return nil, ErrSoundWAVInvalid
 	}
 	offset := 12
 	var sampleRate, channels, bitsPerSample int
@@ -65,7 +79,7 @@ func decodeWAVSound(data []byte) ([]byte, error) {
 		switch chunkID {
 		case "fmt ":
 			if chunkSize < 16 {
-				return nil, fmt.Errorf("wav inválido: fmt corto")
+				return nil, ErrSoundWAVFmt
 			}
 			channels = int(binary.LittleEndian.Uint16(data[body+2 : body+4]))
 			sampleRate = int(binary.LittleEndian.Uint32(data[body+4 : body+8]))
@@ -79,10 +93,10 @@ func decodeWAVSound(data []byte) ([]byte, error) {
 		}
 	}
 	if pcm == nil || sampleRate == 0 || channels == 0 {
-		return nil, fmt.Errorf("wav inválido: faltan datos")
+		return nil, ErrSoundWAVNoData
 	}
 	if bitsPerSample != 16 {
-		return nil, fmt.Errorf("wav no soportado: usá PCM de 16 bits")
+		return nil, ErrSoundWAVBits
 	}
 	return resamplePCM(pcm, sampleRate, channels)
 }
@@ -96,7 +110,7 @@ func resamplePCM(pcm []byte, sourceRate, channels int) ([]byte, error) {
 	frameBytes := 2 * channels
 	totalFrames := len(pcm) / frameBytes
 	if totalFrames == 0 {
-		return nil, fmt.Errorf("audio vacío")
+		return nil, ErrSoundEmpty
 	}
 
 	if sourceRate == SampleRate && channels == 1 {
@@ -106,7 +120,7 @@ func resamplePCM(pcm []byte, sourceRate, channels int) ([]byte, error) {
 	ratio := float64(sourceRate) / float64(SampleRate)
 	outFrames := int(float64(totalFrames) / ratio)
 	if outFrames <= 0 {
-		return nil, fmt.Errorf("audio demasiado corto")
+		return nil, ErrSoundTooShort
 	}
 	out := make([]byte, outFrames*2)
 

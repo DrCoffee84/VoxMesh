@@ -4,6 +4,7 @@ package ui
 
 import (
 	"voxmesh/internal/config"
+	"voxmesh/internal/i18n"
 	"voxmesh/internal/logging"
 )
 
@@ -49,7 +50,7 @@ func (a *App) configSaver() {
 	for range a.cfgSave {
 		if err := a.writeConfig(); err != nil {
 			logging.Errorf("guardar configuración: %s", logging.FormatError(err))
-			a.setStatus("No se pudo guardar la configuración.")
+			a.setStatus(i18n.M("status.config_save_failed"))
 		}
 	}
 }
