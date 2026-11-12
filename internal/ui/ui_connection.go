@@ -5,6 +5,7 @@ package ui
 import (
 	"context"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -47,6 +48,7 @@ func (a *App) stopConnectionAsync() <-chan struct{} {
 	// sobre una sala que se cerró (antes el monitor del cliente seguía y a los segundos se nombraba
 	// host de una sala fantasma).
 	a.connLife.stop()
+	a.setHostNet(nil)
 	// La pantalla compartida y el visor son de esta sala: nunca siguen en la próxima.
 	a.stopScreenShare(false)
 	a.stopWatching()
@@ -244,6 +246,9 @@ func (a *App) openHost(roomName, username string) {
 			a.setStatus(i18n.M("conn.already_active"))
 			return
 		}
+		// Antes que hostMode: el menú "Invitar" del host nunca ve un estado de otra sala.
+		network := &hostNetwork{state: hostNetFinding}
+		a.setHostNet(network)
 		a.hostMode.Store(true)
 		a.rejoinInvite.Store(nil)
 		cfg := a.updateConfig(func(c *config.Config) {
@@ -282,8 +287,6 @@ func (a *App) openHost(roomName, username string) {
 			}
 		}
 
-		a.setStatus(i18n.M("conn.open_finding_ip", port))
-
 		failover.Hosting(a.roomState, time.Now())
 		go a.receiveLoop(udp, failover)
 		go a.failoverLoop(udp, failover, connStop)
@@ -292,7 +295,7 @@ func (a *App) openHost(roomName, username string) {
 
 		// Inicialización del hardware de audio (Suele ser lo que más traba)
 		go a.startAudio(udp)
-		go a.configureHostNetwork(port, hostStop)
+		go a.configureHostNetwork(port, hostStop, network)
 		a.playEventSound(audio.SFXConnect)
 		logging.Infof("openHost: sala %q iniciada en %s (tiempo de ejecución: %v)", roomName, a.endpointText(), time.Since(start))
 
@@ -328,9 +331,15 @@ const (
 // sala. El socket escucha en listenPort: si el router no acepta ese puerto afuera (otra regla lo
 // ocupa), se prueba otro puerto externo que apunte igual a listenPort y se anuncia ese. Antes se
 // probaba listenPort+1 → listenPort+1, donde nadie escuchaba, y la sala anunciaba un puerto
-// muerto. El mapeo se renueva hasta que se cierre la sala (stop).
-func (a *App) configureHostNetwork(listenPort int, stop <-chan struct{}) {
-	start := time.Now()
+// muerto. La regla no se renueva (ver upnpLeaseSeconds).
+//
+// start es el estado que guardó quien empezó a ser host (hostNetFinding): el resultado lo
+// reemplaza solo si sigue ahí. Si la sala se cerró o dejó de ser host mientras el router o ipify
+// respondían, no se toca nada (ni el estado, ni la dirección de la sala, ni el registro). Al
+// registro de actividad van dos líneas, la del principio y la del resultado; el detalle, al log.
+func (a *App) configureHostNetwork(listenPort int, stop <-chan struct{}, start *hostNetwork) {
+	a.reportHostNet(*start)
+	began := time.Now()
 	candidates := make([]uint16, 0, upnpPortAttempts)
 	for offset := range upnpPortAttempts {
 		candidates = append(candidates, uint16(listenPort+offset))
@@ -351,44 +360,60 @@ func (a *App) configureHostNetwork(listenPort int, stop <-chan struct{}) {
 		}
 		publicPort = int(mapping.External)
 		a.upnpMapping.Store(mapping)
-		logging.Infof("UPnP UDP activo: puerto externo %d → %d (tiempo: %v)", mapping.External, listenPort, time.Since(start))
+		logging.Infof("UPnP UDP activo: puerto externo %d → %d (tiempo: %v)", mapping.External, listenPort, time.Since(began))
 	}
 
+	result := &hostNetwork{state: hostNetNoIP}
 	ipContext, cancelIP := context.WithTimeout(context.Background(), 4*time.Second)
 	ip, ipErr := netinfo.PublicIP(ipContext)
 	cancelIP()
 	if ipErr != nil {
 		logging.Errorf("obtener IP pública: %s", logging.FormatError(ipErr))
-		if mapErr == nil {
-			a.setStatus(i18n.M("conn.upnp_no_public_ip"))
-			return
+	} else {
+		public, _ := netip.AddrFromSlice(ip) // PublicIP ya validó la IP
+		result.public = netip.AddrPortFrom(public.Unmap(), uint16(publicPort))
+		result.state = hostNetReady
+		if mapErr != nil {
+			result.state = hostNetNoUPnP
+			if local, err := netinfo.LocalIPv4(); err == nil {
+				result.localIP, _ = netip.AddrFromSlice(local) // To4: sin el prefijo IPv4-mapped
+			}
 		}
-		a.setStatus(i18n.M("conn.no_upnp_no_ip"))
-		return
+		logging.Infof("IP pública obtenida: %s en %s", result.public.Addr(), result.public)
 	}
 
-	endpoint := net.JoinHostPort(ip.String(), strconv.Itoa(publicPort))
-	a.setEndpoint(endpoint)
-	for i := range a.roomState.Participants {
-		if a.roomState.Participants[i].ID == a.participantID {
-			a.roomState.Participants[i].Address = endpoint
-			break
+	if !a.hostNet.CompareAndSwap(start, result) {
+		return // la sala se cerró o este ya no es host: el resultado no es de la sala actual
+	}
+	a.refreshInviteButton()
+	if result.public.IsValid() {
+		endpoint := result.public.String()
+		a.setEndpoint(endpoint)
+		for i := range a.roomState.Participants {
+			if a.roomState.Participants[i].ID == a.participantID {
+				a.roomState.Participants[i].Address = endpoint
+				break
+			}
+		}
+		// Que todos tengan la dirección alcanzable del host (la que usan si después hay que migrar).
+		if udp := a.transport.Load(); udp != nil && a.hostMode.Load() {
+			a.broadcastRoomState(udp, nil)
+		} else if a.roomStore != nil {
+			a.roomStore.Replace(a.roomState)
 		}
 	}
-	// Que todos tengan la dirección alcanzable del host (la que usan si después hay que migrar).
-	if udp := a.transport.Load(); udp != nil && a.hostMode.Load() {
-		a.broadcastRoomState(udp, nil)
-	} else if a.roomStore != nil {
-		a.roomStore.Replace(a.roomState)
+	a.reportHostNet(*result)
+	if result.state == hostNetReady {
+		a.publishRoomCloudFlare()
 	}
-	logging.Infof("IP pública obtenida: %s en %s", ip.String(), endpoint)
+}
 
-	if mapErr != nil {
-		a.setStatus(i18n.M("conn.share_no_upnp", endpoint, listenPort))
-		return
-	}
-	a.setStatus(i18n.M("conn.ready_upnp", endpoint))
-	a.publishRoomCloudFlare()
+// reportHostNet escribe el estado de la red del host en la barra de estado y en el registro de
+// actividad. Solo local: addSystemMessage lo difundiría a la sala, y lleva datos de la red de esta PC.
+func (a *App) reportHostNet(network hostNetwork) {
+	msg := hostNetMsg(network)
+	a.setStatus(msg)
+	a.addActivity(msg.String())
 }
 
 // releaseHostPort borra la regla UPnP de la sala, si hay (al cerrar la sala o al dejar de ser host).

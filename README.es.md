@@ -34,7 +34,7 @@ Si una versión nueva no se instala encima de la vieja, desinstalá la anterior 
 
 **Para abrir una sala:**
 1. Tocá **Iniciar sala** y elegí un nombre.
-2. Arriba, al lado del micrófono, tocá **Invitar** → **Internet**. La invitación (`VM1-…`) queda copiada.
+2. Arriba, al lado del micrófono, tocá **Invitar**. La invitación (`VM1-…`) queda copiada. Si el botón tiene un reloj naranja, esperá unos segundos: la app está obteniendo tu IP pública y abriendo el puerto del router (el registro de actividad dice cuándo está lista).
 3. Pegala en WhatsApp para tus amigos.
 
 **Para entrar a una sala:**
@@ -43,6 +43,8 @@ Si una versión nueva no se instala encima de la vieja, desinstalá la anterior 
 
 **Bueno saber:**
 - **Pasá la invitación solo a gente de confianza**: cualquiera que la tenga puede entrar.
+- **Si Invitar muestra un renglón naranja o rojo**, por internet todavía no pueden entrar, y el registro de actividad dice qué hacer. *Naranja*: la está obteniendo (esperá), o el router no abrió el puerto solo (activá UPnP en el router o abrí a mano el puerto UDP que dice el aviso hacia tu PC). *Rojo*: no se pudo obtener tu IP pública (revisá internet y volvé a iniciar la sala).
+- **Invitar por LAN, Radmin, Tailscale o ZeroTier**: activá **Mostrar direcciones LAN/VPN al invitar** en Ajustes → Interfaz y Sistema, y en **Invitar** elegí la de esa red. Solo sirve si están en la misma red o VPN; por internet no hace falta.
 - Cualquiera de la sala puede invitar con el mismo botón: sirve para el que llega tarde o para el que se cayó y quiere volver. La invitación deja de valer cuando alguien vuelve a tocar "Iniciar sala".
 - En Ajustes (⚙️) elegís tu nombre, micrófono y auriculares, el filtro de ruido y el volumen de cada amigo. Los cambios se escuchan al instante, pero se guardan recién con **Guardar**.
 - También tiene chat con imágenes y una botonera de sonidos con atajos de teclado.
@@ -63,7 +65,7 @@ Sí, y no hace falta creerlo: se puede comprobar.
 
 - **"Código incorrecto o host inalcanzable"**: la invitación es vieja (alguien volvió a tocar "Iniciar sala") o no se llega a la PC del host. Pedí una invitación nueva.
 - **Tus amigos se escuchan a sí mismos (eco)**: pasa si usás parlantes o la tele. Activá **"Uso parlantes: cancelar eco"** en Ajustes → Entrada → Configuración avanzada → Supresión de ruido y voz. Con auriculares no hace falta.
-- **Nadie puede entrar a tu sala**: algunos proveedores de internet (sobre todo de datos móviles y algunas fibras) no permiten conexiones directas, y la app lo avisa. La solución más fácil es que todos instalen [Tailscale](https://tailscale.com) (gratis) y que el host invite con **Invitar** → la opción que dice **Tailscale**. Si sabés configurar tu router, otra opción es abrir el puerto UDP 47830 hacia tu PC.
+- **Nadie puede entrar a tu sala**: mirá tu registro de actividad, que dice si se pudo abrir el puerto. Si el router no lo abrió solo (UPnP), activá UPnP en el router o abrí a mano el puerto UDP que dice el aviso (47830 si no lo cambiaste) hacia la IP local de tu PC, que también está en el aviso. Algunos proveedores de internet (sobre todo de datos móviles y algunas fibras) no permiten conexiones directas: que cree la sala otro, o que todos instalen [Tailscale](https://tailscale.com) (gratis) y el host, con **Mostrar direcciones LAN/VPN al invitar** activado, invite con **Invitar** → la opción que dice **Tailscale**.
 - **Alguien no se puede conectar y los demás sí**: fijate que todos tengan la misma versión.
 - **Otra cosa anda mal**: el botón del documento (abajo a la derecha) o Ajustes → **Abrir carpeta de registros (logs)** abre la carpeta de logs. Mandale el del día a quien te pasó la app.
 

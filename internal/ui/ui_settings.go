@@ -583,6 +583,7 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 	resetOutputFilters := widget.NewButton("↺", outputProfileBar.loadDefault)
 	profileBars = append(profileBars, outputProfileBar)
 	showStatusBarCheck := otherControls.control("show_status_bar")
+	showLANInvitesCheck := otherControls.control("show_lan_invites")
 	profileCard := uiCard(container.NewVBox(
 		widget.NewLabelWithStyle(i18n.T("settings.card.profile"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		widget.NewLabel(i18n.T("settings.username")),
@@ -667,6 +668,7 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 		languageSelect,
 		languageHint,
 		showStatusBarCheck,
+		showLANInvitesCheck,
 		eventSoundsCheck,
 		logLevelLabel,
 		logLevelSelect,

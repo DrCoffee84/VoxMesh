@@ -30,6 +30,15 @@ Cada tarea tiene un **ID** (`S7`, `F1`...) y está escrita para que un chat nuev
 5. Al terminar: marcar `[x]`, dejar una línea **"Hecho:"** (archivos/funciones y qué quedó afuera) y **actualizar AGENT.md** si cambió una regla, un protocolo o la estructura. Si cambió algo visible para el usuario, también [README.md](README.md) (para principiantes) y/o [DESARROLLO.md](DESARROLLO.md) (detalle técnico).
 6. Un commit por tarea, mensaje en castellano. No commitear si los tests fallan.
 
+### Prioridad (2026-11-11)
+
+Va antes que la tabla de abajo. Salió de usarla con los pibes: invitar tiene que andar a la primera. Detalle en "Prioridad: invitar sin errores".
+
+| # | ID | Qué, en simple | Tamaño |
+|---|----|----------------|--------|
+| 1 | **C6 + C7** | "Invitar": "Obteniendo IP pública…" en naranja mientras se abre el puerto; el registro de actividad dice en una o dos líneas si se pudo abrir y qué hacer si no; las IPs LAN/VPN ocultas salvo que se activen en Ajustes | Mediano. Mismo chat (los tres tocan el mismo estado y `hostInviteOptions`) |
+| 2 | **R8** | Por qué al amigo le salió "Código incorrecto o host inalcanzable" (pedir los logs **ya**: se borran a las 48 h) y que el que entra vea qué hacer. Con C7 la causa más probable (copiar una LAN/VPN) casi deja de pasar | Chico. El diagnóstico se puede adelantar |
+
 ### Orden
 
 | # | ID | Qué, en simple | Tamaño |
@@ -69,6 +78,63 @@ Solo si aparece el problema: **R1** (data race del estado de la sala, ver "Si ap
   - Quien escucha: `cortes=N (X ms)` por emisor en la línea `Audio de …` (`frases` son pausas, no cortes).
   - Quien habla: `Envío: capturados=… (50.0/s) descartados=… cola máx=…`. Menos de 50/s, descartados o cola alta = su PC o micrófono pierde audio (típico del Bluetooth).
   - Con nivel 2 queda `%AppData%\VoxMesh\llegadas-*.csv`: `VOXMESH_ARRIVALS=<csv> go test -run TestJitterReplayArrivals -v ./internal/audio/` reproduce esa red por el jitter buffer.
+
+# Prioridad: invitar sin errores (2026-11-11)
+
+**Contexto común.** Al apretar "Iniciar sala", `openHost` ([ui_connection.go](internal/ui/ui_connection.go)) publica primero la IP **local** como dirección de la sala (`netinfo.LocalIPv4`, la de la ruta por defecto) y lanza `configureHostNetwork` en segundo plano: UPnP (`netinfo.MapUDP`, hasta 15 s) y después la IP pública (`netinfo.PublicIP`, ipify, hasta 4 s). Recién ahí la dirección pasa a ser la pública. Lo mismo al quedar de host por migración (`takeOverHost`, [network_failover.go](internal/ui/network_failover.go)). Mientras tanto, el menú "Invitar" (`showInviteMenu` → `hostInviteOptions`, [ui_invite.go](internal/ui/ui_invite.go)) solo muestra "Internet · …" si la dirección actual pasa `isInternetAddr`: durante esos segundos ofrece **solo** las LAN/VPN y no avisa que falta la de Internet. Captura del 2026-11-11: el menú con "LAN/VPN · Radmin VPN · 26.77.45.242:47830" y "LAN/VPN · Ethernet 4 · 192.168.1.37:47830", sin "Internet". El único aviso es "Sala abierta en UDP %d; buscando IP pública..." en la barra de estado, fácil de no ver (y se puede apagar con `show_status_bar`).
+
+**Internet es el camino principal (decisión de Coffee).** Sin el check de C7, la gente va a usar "Internet", que es lo cómodo. LAN/VPN es una alternativa para quien no puede recibir conexiones por internet (router sin UPnP, CGNAT) y sí o sí quiere usar la app. Por eso: mientras se obtiene la IP pública no se sugiere LAN/VPN (es cuestión de esperar), y cuando internet falla, los avisos dicen primero cómo arreglarlo y recién al final mencionan LAN/VPN como última opción.
+
+### C6. "Invitar": "Obteniendo IP pública…" en naranja mientras se abre el puerto
+
+- [x] **Pedido (Coffee)**: mientras obtiene la IP pública y abre el puerto, que aparezca en naranja "Obteniendo IP pública…".
+  - **Hecho** (2026-11-12): estado `a.hostNet` (`atomic.Pointer[hostNetwork]`, [host_network.go](internal/ui/host_network.go)): `hostNetFinding` → `hostNetReady` / `hostNetNoUPnP` / `hostNetNoIP`, con la IP pública guardada en el mismo estado. Lo crean `openHost` y `takeOverHost` antes de `hostMode`; `configureHostNetwork` lo cierra con `CompareAndSwap`: si la sala se cerró o dejó de ser host mientras respondían el router o ipify, no escribe nada (antes ponía la dirección pública en una sala ya cerrada). Vuelve a nil en `stopConnectionAsync` y `stepDown`. Menú: popup propio (`showInvitePopup` + `inviteRow`, [ui_invite.go](internal/ui/ui_invite.go)) con `canvas.Text` de los colores del tema, porque `fyne.Menu` pinta todos los textos igual y un ítem deshabilitado queda gris con ícono incluido. Botón "Invitar": reloj naranja mientras busca (`refreshInviteButton`). Registro: dos líneas por inicio de sala o por quedar de host (`reportHostNet`, solo `addActivity`), con las mismas claves que la barra de estado (`conn.net_finding/ready/no_upnp/no_ip`; se borraron `conn.open_finding_ip`, `upnp_no_public_ip`, `no_upnp_no_ip`, `share_no_upnp` y `ready_upnp`). Al copiar con el puerto sin abrir, `invite.copied_port_closed`. Funciones puras con tests: `inviteOptions`, `copiesDirectly`, `hostNetMsg` (`TestInviteOptions`, `TestInviteOptionsPortClosed`, `TestHostNetMsg`). De paso: al quedar de host por migración, "Invitar" ofrecía como "Internet" la IP del host viejo, que seguía en el endpoint hasta que terminaba `configureHostNetwork`. **Quedó afuera**: el popup abierto no se rearma solo cuando cambia el estado (el reloj se va y al reabrir ya dice "Internet"), y el botón no cambia en las fallas (solo mientras busca).
+- **Arreglo propuesto** (confirmar en el plan):
+  - **Estado de la red del host** en `App`, atómico (por ejemplo `hostNet atomic.Int32`): `buscando` → `listo` (UPnP + IP pública), `sinUPnP` (hay IP pública pero el puerto no se abrió: hoy `conn.share_no_upnp`) o `sinIP` (falló ipify: hoy `conn.upnp_no_public_ip` / `conn.no_upnp_no_ip`). Lo pone en `buscando` quien lanza `configureHostNetwork` (`openHost` y `takeOverHost`); `configureHostNetwork` lo cierra en cada salida (también en el `return` de "la sala se cerró mientras el router respondía"); vuelve a cero al cerrar la sala o dejar de ser host.
+  - **La IP pública se guarda aparte**, con el estado. No deducir "Internet" de `isInternetAddr(endpoint)`: Radmin usa `26.0.0.0/8`, que es pública, y si la ruta por defecto pasara por la VPN y fallara ipify, el menú ofrecería la de Radmin como "Internet".
+  - **Menú Invitar del host**, primer renglón según el estado: `buscando` → "Obteniendo IP pública…" en naranja, que no copia nada; `listo` → "Internet · IP:puerto" como hoy; `sinUPnP` → "Internet · IP:puerto (puerto sin abrir)" en naranja y, al copiar, el aviso de abrir a mano el puerto UDP; `sinIP` → "Internet: no se pudo obtener la IP pública" en rojo. El cliente no cambia (copia la dirección del host tal como la ve él).
+  - **Indicador fuera del menú**: mientras dure `buscando`, algo naranja al lado de "Invitar" en la barra de arriba (un punto o el texto corto) que se va solo al terminar, para verlo sin abrir el menú. Refresco con `fyne.Do` al cambiar el estado.
+  - **Color**: el naranja de advertencia del tema (`theme.ColorNameWarning`, [ui_theme.go](internal/ui/ui_theme.go)). `fyne.MenuItem` no tiene color de texto: ver si alcanza con un ícono de advertencia o si hace falta un popup propio con `canvas.Text` de color (como la leyenda de C3, `tooltip`, capa propia). Lo más simple que se vea naranja.
+  - **Registro de actividad** (pedido de Coffee): que se vea cómo quedó la red del host, **sin llenarlo**: una línea al empezar y una con el resultado, nada más (sin reintentos ni detalles; eso queda en el log). Con `a.addActivity` ([ui_chat.go](internal/ui/ui_chat.go)), solo local: **no** `addSystemMessage`, que siendo host lo difundiría a la sala, y estos avisos llevan datos de la red de esta PC. Textos tentativos (que cada falla diga qué hacer):
+    - Al empezar: "Obteniendo IP pública y abriendo el puerto…".
+    - `listo`: "Sala lista por internet: ya podés invitar."
+    - `sinUPnP`: "No se pudo abrir el puerto automáticamente (UPnP). Para que entren por internet: activá UPnP en el router, o abrí a mano el puerto UDP N hacia esta PC (IP local X). Si no se puede, que cree la sala otro, o usen LAN/VPN (Ajustes)." La IP local va solo acá, porque es lo que pide el router para abrir el puerto a mano.
+    - `sinIP`: "No se pudo obtener la IP pública. Revisá tu conexión a internet y volvé a iniciar la sala."
+    - CGNAT (si R8 lo detecta): "Tu proveedor de internet (CGNAT) no deja que entren a tu sala por internet. Que cree la sala otro, o usen LAN/VPN (Ajustes)."
+    - Al quedar de host por migración, lo mismo (el que queda de host puede tener otro router).
+    - Mismas claves de i18n que la barra de estado cuando se pueda (`conn.share_no_upnp`, `conn.upnp_no_public_ip`, `conn.no_upnp_no_ip`, `conn.ready_upnp`): hoy dicen cosas parecidas con otras palabras. Unificar en vez de tener dos versiones.
+- **Tests**: sacar a una función pura el armado de las opciones a partir de (estado, IP pública, puerto, interfaces, opción de C7); hoy `hostInviteOptions` lee la red adentro (`netinfo.LocalIPv4s`). Todos los estados × C7 prendido/apagado. A mano: Iniciar sala y abrir Invitar enseguida (naranja) y esperar (pasa a "Internet"); router sin UPnP o con UPnP apagado ("puerto sin abrir"); sin internet (rojo); migración: el que queda de host ve lo mismo.
+- **Docs**: README (qué significa el naranja) y AGENT.md, donde describe "Invitar" (§3, F3).
+
+### C7. Ocultar las IPs LAN/VPN en "Invitar" (opción en Ajustes para mostrarlas)
+
+- [x] **Pedido (Coffee)**: ocultar las IPs locales y que haya un check en Ajustes para mostrarlas.
+  - **Hecho** (2026-11-12): `show_lan_invites` (default 0): campo en `LiveSettings`, fila en `config.Params` y `param.show_lan_invites.label/.help`. El check está en "Interfaz y Sistema", debajo de la barra de estado. Apagado: `inviteOptions` no lista interfaces y nunca copia la IP local (se sacó el fallback `options = endpoint`). Mientras busca, solo el renglón naranja. Con una falla (`sinUPnP` o `sinIP`) agrega abajo el renglón gris "Otra opción: invitar por LAN/VPN (activalo en Ajustes)". Prendido: Internet arriba y todas las LAN/VPN abajo, también mientras busca. El socket sigue escuchando en todas las interfaces. El texto que mandaba a "la dirección local de la sala" ya no existe: `conn.net_no_upnp` nombra "LAN/VPN (Ajustes)". README: el naranja, el check y qué hacer si no se abre el puerto.
+- **Hoy** el host ve un renglón por cada IPv4 de cada interfaz (`netinfo.LocalIPv4s`): Ethernet, Wi-Fi, Radmin, Tailscale, ZeroTier y también adaptadores virtuales (Hyper-V, WSL, VirtualBox). Para el uso normal (internet) sobran y llevan a copiar la que no sirve (ver R8).
+- **Arreglo**:
+  - Opción nueva en Ajustes → "Interfaz y Sistema": **"Mostrar direcciones LAN/VPN al invitar"**, apagada por defecto. Fila en `config.Params` (por ejemplo `show_lan_invites`, default 0) siguiendo AGENT.md §3.I "Adding a setting", como `show_status_bar`.
+  - Apagada: `hostInviteOptions` no lista interfaces. Con "Internet" listo y nada más se copia directo, sin menú (ya pasa con `len(options) == 1`). Si "Internet" no está listo, **no copiar la IP local**: con `buscando`, solo el renglón naranja de C6 (es esperar unos segundos, no sugerir LAN/VPN); con una falla (`sinIP`, CGNAT), el renglón de C6 y abajo uno gris "Otra opción: invitar por LAN/VPN (activalo en Ajustes)". Sacar el fallback de hoy (`options = endpoint` cuando no hay nada), que con la sala recién abierta es la IP local.
+  - Prendida: como hoy ("Internet" arriba y las LAN/VPN abajo).
+  - Revisar los textos que mandan a "la dirección local" (`conn.upnp_no_public_ip`: "usa la dirección local de la sala"): que nombren la opción.
+- **Tests**: los de la función pura de C6 con la opción prendida y apagada. A mano: apagada, no aparece ninguna 192.168.x ni 26.x en el menú; prendida, aparecen; queda guardada al reabrir la app.
+- **Docs**: README (para invitar por Radmin, Tailscale o ZeroTier, activar la opción).
+
+### R8. "Código incorrecto o host inalcanzable" al entrar a la sala de un amigo
+
+- [ ] **Qué pasó (2026-11-11)**: un amigo creó la sala y otro, al pegar la invitación, vio a los 10 s "Código incorrecto o host inalcanzable." (registro de actividad, 21:36). Sin logs todavía.
+- **Por qué el mensaje no ayuda**: desde S4 el host descarta en silencio lo que no abre con la clave, así que el que entra no distingue "invitación de otra sesión" de "al host no le llega nada". El `ActGiveUp` sale de `Failover` a los `Join` (10 s) sin ningún estado ([failover.go](internal/room/failover.go), `JoinFailedKey`).
+- **Hipótesis** (de más a menos probable):
+  1. **Copió una invitación LAN/VPN** (`192.168.x` o Radmin `26.x`), porque "Internet" todavía no aparecía o por elegir mal. Solo sirve en la misma red o VPN. **Con C7 casi deja de pasar**: las LAN/VPN están ocultas por defecto, así que solo puede copiar una quien activó el check a propósito, y mientras se obtiene la IP pública el menú no copia nada. Las que quedan son las fallas del camino por internet (2 a 4).
+  2. **UPnP no funcionó** en el router del host: "Internet" se ofrece igual, con el puerto cerrado. Hoy solo lo dice la barra de estado (`conn.share_no_upnp`). Con C6 lo marca el menú en naranja y el registro de actividad dice qué hacer.
+  3. **CGNAT del proveedor del host**: UPnP "anda" pero la IP WAN del router es `100.64.x` o privada, distinta de la de ipify, y nadie de afuera llega. Hoy no se detecta. Arreglo posible: pedirle `GetExternalIPAddress` al mismo cliente UPnP que abrió el puerto (`netinfo.Mapping`) y compararla con la de ipify; si es privada/CGNAT o distinta → estado nuevo en C6: "Tu proveedor no deja recibir conexiones (CGNAT): usá LAN/VPN (Radmin, Tailscale)". A largo plazo, F4.
+  4. **Firewall de Windows** en la PC del host: la app no crea regla y depende del cartel de Windows la primera vez. Si lo cerró, o la red está como "Pública" y solo permitió "Privada", no entra nada por UDP. Comprobar: `netsh advfirewall firewall show rule name=all verbose | findstr /i voxmesh`, o Seguridad de Windows → Firewall → "Permitir una aplicación". Crear la regla desde la app pide admin: solo si resulta ser la causa; si no, una línea en el README ("marcá redes privadas y públicas").
+  5. **Versiones distintas**: el magic `VM02` y el `VM1-` de la invitación no cambiaron con la pantalla compartida, así que 1.0.0 y la actual deberían entenderse. Confirmar igual qué versión tenía cada uno.
+- **Diagnóstico (primer paso, pedirlo ya)**: el log de esa sesión de los dos, `%AppData%\VoxMesh\log-AAAA-MM-DD.log`. **Se borra a las 48 h** (`logging.prune`). Del host: `UPnP UDP activo` o `ERROR UPnP UDP puerto …`, `IP pública obtenida` o `ERROR obtener IP pública`, `Invitación copiada (…)` (**la dirección que copió**: `setStatus` también va al log; la invitación con la clave no) y si aparece `Paquetes descartados` (llegaron paquetes con otra clave = invitación de otra sesión; si no aparece, no llegó nada = inalcanzable). Del que entra: `connectClient: conexión iniciada hacia …`.
+- **Arreglo mínimo del lado del que entra**: en vez del mensaje genérico, uno según la dirección de la invitación, con una función pura y su test. El caso principal es el de internet (con C7 casi todas las invitaciones van a ser públicas):
+  - Pública: "El host no responde. Pedile que mire su registro de actividad: ahí dice si pudo abrir el puerto y qué hacer. Si la sala sigue abierta y el puerto está abierto, revisá que la invitación sea de esta sesión." Se apoya en los avisos de C6: el host ya tiene la respuesta en su pantalla.
+  - Privada, CGNAT (`100.64.0.0/10`) o Radmin (`26.0.0.0/8`), solo si el host activó el check de C7: "Esta invitación es de LAN/VPN (IP): solo sirve en la misma red o VPN. Si no están en la misma, pedile al host la de Internet."
+  - Opcional: al pegar una invitación LAN/VPN, aviso en naranja antes de conectar (sin bloquear).
+- **Hecho cuando**: se sabe la causa (o los logs descartan las anteriores) y el que entra ve un mensaje que le dice qué hacer.
 
 # 1. Tareas (en el orden de la tabla)
 
@@ -253,6 +319,15 @@ Sobre el puerto UPnP: la app borra el mapeo al cerrar la sala o la app. Si se ci
 ## Pruebas manuales pendientes
 
 Las anteriores se hicieron todas el 2026-11-02 y salieron bien (resumen en "Historial").
+
+- [ ] **C6 + C7. "Invitar" con el estado de la red del host** (2026-11-12, con el exe nuevo y el check de LAN/VPN apagado salvo que se diga):
+  - Iniciar sala y tocar "Invitar" enseguida: el popup dice "Obteniendo IP pública…" en naranja y no copia nada; el botón tiene un reloj naranja que se va solo. Al terminar, el registro de actividad tiene **solo dos líneas** ("Obteniendo IP pública y abriendo el puerto…" y "Sala lista por internet: ya podés invitar.") y "Invitar" copia directo, sin popup. La otra instancia (cliente) no ve esas líneas.
+  - Router sin UPnP o con UPnP apagado: "Internet · IP:puerto (puerto sin abrir)" en naranja y el renglón gris de LAN/VPN abajo. Al copiar, la barra avisa del puerto; el registro dice qué hacer, con el puerto UDP y la IP local.
+  - Sin internet (cable o Wi-Fi desconectado antes de iniciar la sala): renglón rojo "Internet: no se pudo obtener la IP pública" + el gris; el registro dice "No se pudo obtener la IP pública…".
+  - Migración: el que queda de host ve el reloj, sus dos líneas y nunca la IP del host viejo como "Internet".
+  - Cerrar la sala mientras todavía busca (antes de 15 s): no aparece la línea del resultado y el botón vuelve al ícono de copiar.
+  - Apagado: no aparece ninguna 192.168.x ni 26.x en el popup. Prendido: aparecen debajo de Internet (también mientras busca), y la opción queda guardada al reabrir la app. "Descartar" en Ajustes la vuelve atrás.
+  - El popup: los renglones que copian se resaltan con el mouse, un clic afuera lo cierra, no se sale de la ventana por la derecha, y se ve bien en inglés y en español.
 
 - [ ] **F5. Pantalla compartida**, lo que no se pudo probar en una sola PC (incluye la segunda vuelta del 2026-11-04: por internet el log tiene que decir "ritmo de internet"; el cursor tiene que verse fluido y en el lugar justo, también el de texto, que va negro con borde blanco):
   - Windows al **125 % y 150 %** (Configuración → Pantalla → Escala) en quien comparte y en quien mira: la captura sale entera y del tamaño físico (`go test -run TestMonitorsArePhysicalPixels -v ./internal/screen/` con ese escalado) y en "Tamaño real (1:1)" la letra chica se lee igual que en la pantalla original.

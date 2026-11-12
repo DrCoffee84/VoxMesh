@@ -34,7 +34,7 @@ If a new version won't install over the old one, uninstall the old one and try a
 
 **To start a room:**
 1. Click **Start room** and pick a name.
-2. At the top, next to the microphone, click **Invite** → **Internet**. The invite (`VM1-…`) is copied.
+2. At the top, next to the microphone, click **Invite**. The invite (`VM1-…`) is copied. If the button shows an orange clock, wait a few seconds: the app is getting your public IP and opening the port on your router (the activity log says when it's ready).
 3. Paste it on WhatsApp for your friends.
 
 **To join a room:**
@@ -43,6 +43,8 @@ If a new version won't install over the old one, uninstall the old one and try a
 
 **Good to know:**
 - **Only share the invite with people you trust**: anyone who has it can join.
+- **If Invite shows an orange or red line**, people can't join over the internet yet, and the activity log says what to do. *Orange*: it's still getting it (wait), or the router didn't open the port by itself (turn on UPnP on your router, or forward the UDP port the notice gives to your PC). *Red*: your public IP couldn't be found (check your internet and start the room again).
+- **Inviting over LAN, Radmin, Tailscale or ZeroTier**: turn on **Show LAN/VPN addresses when inviting** in Settings → Interface and system, and pick that network's address in **Invite**. It only works on the same network or VPN; it's not needed over the internet.
 - Anyone in the room can invite with the same button: handy for someone who arrives late or dropped out and wants back in. The invite stops working when someone clicks "Start room" again.
 - In Settings (⚙️) you pick your name, microphone and headphones, the noise filter and each friend's volume. Changes are heard right away, but they're only saved with **Save**.
 - It also has chat with images and a soundboard with keyboard shortcuts.
@@ -63,7 +65,7 @@ Yes, and you don't have to take our word for it: you can check.
 
 - **"Wrong invite or host unreachable"**: the invite is old (someone clicked "Start room" again) or the host's PC can't be reached. Ask for a new invite.
 - **Your friends hear themselves (echo)**: it happens if you use speakers or a TV. Turn on **"Using speakers: cancel echo"** in Settings → Audio input → Advanced settings → Noise and voice suppression. Not needed with headphones.
-- **Nobody can join your room**: some internet providers (especially mobile data and some fiber ones) don't allow direct connections, and the app tells you so. The easiest fix is for everyone to install [Tailscale](https://tailscale.com) (free) and for the host to invite with **Invite** → the option that says **Tailscale**. If you know how to set up your router, another option is to forward UDP port 47830 to your PC.
+- **Nobody can join your room**: check your activity log, it says whether the port could be opened. If the router didn't open it by itself (UPnP), turn on UPnP on your router or forward the UDP port the notice gives (47830 unless you changed it) to your PC's local IP, which is in the notice too. Some internet providers (especially mobile data and some fiber ones) don't allow direct connections: have someone else start the room, or have everyone install [Tailscale](https://tailscale.com) (free) and the host, with **Show LAN/VPN addresses when inviting** on, invite with **Invite** → the option that says **Tailscale**.
 - **Someone can't connect and the others can**: check that everyone has the same version.
 - **Something else is wrong**: the document button (bottom right) or Settings → **Open logs folder** opens the logs folder. Send today's log to whoever gave you the app.
 

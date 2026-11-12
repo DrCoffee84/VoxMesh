@@ -150,6 +150,7 @@ type LiveSettings struct {
 	// Fuera de los perfiles.
 	LiveMonitoring     bool `json:"live_monitoring"`
 	ShowStatusBar      bool `json:"show_status_bar"`
+	ShowLANInvites     bool `json:"show_lan_invites"` // "Invitar" del host: también las direcciones LAN/VPN
 	EventSoundsEnabled bool `json:"event_sounds_enabled"`
 	AllowHostMigration bool `json:"allow_host_migration"`
 	LogLevel           int  `json:"log_level"`

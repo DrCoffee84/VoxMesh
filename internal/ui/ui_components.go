@@ -254,6 +254,7 @@ func (a *App) content() fyne.CanvasObject {
 	inviteBtn := widget.NewButtonWithIcon(i18n.T("main.invite"), theme.ContentCopyIcon(), nil)
 	inviteBtn.OnTapped = func() { a.showInviteMenu(inviteBtn) }
 	inviteBtn.Importance = widget.LowImportance
+	a.inviteButton = inviteBtn
 
 	a.muteButton = widget.NewButtonWithIcon("", micIcon, a.toggleMute)
 	a.muteButton.Importance = widget.LowImportance

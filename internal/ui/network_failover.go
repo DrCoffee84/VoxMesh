@@ -124,6 +124,11 @@ func (a *App) takeOverHost(udp *transport.UDP, fo *room.Failover, state room.Sta
 	if a.roomStore == nil {
 		a.roomStore = room.NewStore(state)
 	}
+	// El que queda de host puede tener otro router: su red se averigua de nuevo. Antes que
+	// hostMode, así "Invitar" no ofrece la dirección del host viejo (sigue en el endpoint hasta
+	// que configureHostNetwork termina).
+	network := &hostNetwork{state: hostNetFinding}
+	a.setHostNet(network)
 	a.hostMode.Store(true)
 	for _, participant := range state.Participants {
 		if participant.ID == a.participantID || !participant.Connected {
@@ -135,7 +140,7 @@ func (a *App) takeOverHost(udp *transport.UDP, fo *room.Failover, state room.Sta
 	}
 	hostStop := a.hostRole.start()
 	go a.pingPeers(udp, hostStop)
-	go a.configureHostNetwork(udp.Address().Port, hostStop)
+	go a.configureHostNetwork(udp.Address().Port, hostStop, network)
 	a.refreshPeersFromRoom()
 	a.broadcastRoomState(udp, nil)
 }
@@ -161,6 +166,7 @@ func (a *App) stepDown(udp *transport.UDP, address *net.UDPAddr, state room.Stat
 		udp.Broadcast(transport.Packet{Kind: transport.PacketRoomState, Sequence: a.sequence.Add(1), Payload: payload}, address)
 	}
 	a.hostMode.Store(false)
+	a.setHostNet(nil)
 	a.hostRole.stop() // pingPeers
 	go a.releaseHostPort()
 	for _, peer := range udp.Peers() {
