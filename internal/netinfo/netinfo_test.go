@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"testing"
 
@@ -23,6 +24,8 @@ type fakeRule struct {
 type fakeRouter struct {
 	rules   map[uint16]fakeRule
 	deleted []uint16
+	wan     string // respuesta de GetExternalIPAddress
+	wanErr  error
 }
 
 func upnpFault(code int) error {
@@ -54,6 +57,10 @@ func (r *fakeRouter) GetSpecificPortMappingEntryCtx(_ context.Context, _ string,
 		return 0, "", false, "", 0, upnpFault(714)
 	}
 	return rule.internalPort, rule.client, true, "VoxMesh", 3600, nil
+}
+
+func (r *fakeRouter) GetExternalIPAddressCtx(context.Context) (string, error) {
+	return r.wan, r.wanErr
 }
 
 func mapOn(t *testing.T, router *fakeRouter, candidates ...uint16) *Mapping {
@@ -124,5 +131,58 @@ func TestMappingUnmap(t *testing.T) {
 	}
 	if _, ok := router.rules[47826]; !ok {
 		t.Fatal("Unmap borró la regla ajena 47826")
+	}
+}
+
+// La IP externa se le pide al mismo cliente que abrió el puerto.
+func TestMappingExternalIP(t *testing.T) {
+	router := &fakeRouter{rules: map[uint16]fakeRule{}, wan: " 100.70.1.2 "}
+	mapping := mapOn(t, router, 47826)
+	ip, err := mapping.ExternalIP(context.Background())
+	if err != nil || ip != netip.MustParseAddr("100.70.1.2") {
+		t.Fatalf("ExternalIP = %v, %v; quería 100.70.1.2", ip, err)
+	}
+	router.wan = ""
+	if _, err := mapping.ExternalIP(context.Background()); err == nil {
+		t.Fatal("una respuesta vacía tiene que ser un error")
+	}
+	router.wanErr = upnpFault(501)
+	if _, err := mapping.ExternalIP(context.Background()); err == nil {
+		t.Fatal("el error del router tiene que llegar")
+	}
+}
+
+func TestIsInternet(t *testing.T) {
+	cases := []struct {
+		ip       string
+		internet bool
+		cgnat    bool
+	}{
+		{"181.10.20.30", true, false},
+		{"8.8.8.8", true, false},
+		{"::ffff:181.10.20.30", true, false},
+		{"192.168.1.37", false, false},
+		{"10.0.0.1", false, false},
+		{"172.16.5.4", false, false},
+		{"100.64.0.1", false, true},  // CGNAT
+		{"100.101.2.3", false, true}, // Tailscale
+		{"100.127.255.255", false, true},
+		{"100.128.0.1", true, false},
+		{"26.77.45.242", false, false}, // Radmin
+		{"127.0.0.1", false, false},
+		{"169.254.1.1", false, false},
+		{"0.0.0.0", false, false},
+	}
+	for _, c := range cases {
+		ip := netip.MustParseAddr(c.ip)
+		if got := IsInternet(ip); got != c.internet {
+			t.Errorf("IsInternet(%s) = %v", c.ip, got)
+		}
+		if got := IsCGNAT(ip); got != c.cgnat {
+			t.Errorf("IsCGNAT(%s) = %v", c.ip, got)
+		}
+	}
+	if IsInternet(netip.Addr{}) {
+		t.Error("una IP vacía no es de internet")
 	}
 }

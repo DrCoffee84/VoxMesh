@@ -33,7 +33,7 @@ func (a *App) showInviteMenu(button *widget.Button) {
 	}
 	key := udp.Key()
 	if !a.hostMode.Load() {
-		a.copyInvite(endpoint, key, 0)
+		a.copyInvite(endpoint, key, i18n.M("invite.copied", endpoint))
 		return
 	}
 	var network hostNetwork // nil (recién quedó de host): buscando
@@ -53,7 +53,7 @@ func (a *App) showInviteMenu(button *widget.Button) {
 		options := inviteOptions(network, interfaces, port, showLAN)
 		fyne.Do(func() {
 			if copiesDirectly(options) {
-				a.copyInvite(options[0].address, key, 0)
+				a.copyInvite(options[0].address, key, options[0].copied)
 				return
 			}
 			a.showInvitePopup(button, options, key)
@@ -76,7 +76,7 @@ func (a *App) showInvitePopup(button *widget.Button, options []inviteOption, key
 		if option.address != "" {
 			onTap = func() {
 				pop.Hide()
-				a.copyInvite(option.address, key, option.closedPort)
+				a.copyInvite(option.address, key, option.copied)
 			}
 		}
 		rows = append(rows, newInviteRow(option.label, inviteToneColor(option.tone), onTap))
@@ -175,10 +175,10 @@ func (a *App) refreshInviteButton() {
 	})
 }
 
-// copyInvite (hilo de UI) copia al portapapeles la invitación con address y la clave de la sala.
-// La invitación nunca va al log ni a la barra de estado: lleva la clave. closedPort != 0: el router
-// no abrió ese puerto y el aviso lo dice.
-func (a *App) copyInvite(address string, key transport.Key, closedPort uint16) {
+// copyInvite (hilo de UI) copia al portapapeles la invitación con address y la clave de la sala, y
+// muestra copied ("Invitación copiada (…)", o con el aviso del puerto). La invitación nunca va al
+// log ni a la barra de estado: lleva la clave.
+func (a *App) copyInvite(address string, key transport.Key, copied i18n.Msg) {
 	addr, err := netip.ParseAddrPort(address)
 	if err != nil {
 		a.setStatus(i18n.M("invite.address_not_ready"))
@@ -188,12 +188,7 @@ func (a *App) copyInvite(address string, key transport.Key, closedPort uint16) {
 		a.setStatus(i18n.M("invite.copy_failed", err.Error()))
 		return
 	}
-	if closedPort != 0 {
-		a.setStatus(i18n.M("invite.copied_port_closed", address, closedPort))
-		return
-	}
-	// Con el aviso: la invitación es la llave de la sala.
-	a.setStatus(i18n.M("invite.copied", address))
+	a.setStatus(copied)
 }
 
 // setRejoinInvite guarda en memoria la invitación para volver a entrar (con la dirección de quien

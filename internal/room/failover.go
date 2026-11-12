@@ -1,11 +1,13 @@
 package room
 
 import (
+	"net/netip"
 	"sort"
 	"sync"
 	"time"
 
 	"voxmesh/internal/i18n"
+	"voxmesh/internal/netinfo"
 )
 
 // Failover decide qué hace un participante cuando pierde a su host, y qué hace un host cuando
@@ -382,7 +384,7 @@ func (f *Failover) Tick(now time.Time) {
 func (f *Failover) tickJoining(now time.Time) {
 	if now.Sub(f.joinedAt) > f.timings.Join {
 		f.phase = phaseIdle
-		f.emit(Action{Kind: ActGiveUp, Msg: i18n.M(JoinFailedKey)})
+		f.emit(Action{Kind: ActGiveUp, Msg: JoinFailedMsg(f.hostAddr)})
 		return
 	}
 	if now.Sub(f.lastHello) >= f.timings.Ping {
@@ -391,9 +393,17 @@ func (f *Failover) tickJoining(now time.Time) {
 	}
 }
 
-// JoinFailedKey es la clave del aviso al cliente que no pudo entrar: el host no contestó nada que
-// se pudiera abrir con la clave de la invitación ("Código incorrecto o host inalcanzable.").
-const JoinFailedKey = "room.join_failed"
+// JoinFailedMsg es el aviso al cliente que no pudo entrar: el host no contestó nada que se pudiera
+// abrir con la clave de la invitación. Desde afuera "invitación de otra sesión" y "al host no le
+// llega nada" se ven igual, así que el aviso depende de la dirección de la invitación (hostAddr):
+// una de internet manda a mirar el registro de actividad del host, que dice si pudo abrir el puerto
+// y qué hacer; una de LAN/VPN (privada, CGNAT/Tailscale o Radmin) solo sirve en la misma red o VPN.
+func JoinFailedMsg(hostAddr string) i18n.Msg {
+	if addr, err := netip.ParseAddrPort(hostAddr); err == nil && !netinfo.IsInternet(addr.Addr()) {
+		return i18n.M("room.join_failed_lan", addr.Addr().Unmap().String())
+	}
+	return i18n.M("room.join_failed_internet")
+}
 
 func (f *Failover) startMigration(now time.Time, candidates []Participant, onPurpose bool, msg i18n.Msg) {
 	f.phase = phaseMigrating

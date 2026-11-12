@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -46,6 +47,7 @@ type portMapper interface {
 	AddPortMappingCtx(context.Context, string, uint16, string, uint16, string, bool, string, uint32) error
 	DeletePortMappingCtx(context.Context, string, uint16, string) error
 	GetSpecificPortMappingEntryCtx(context.Context, string, uint16, string) (uint16, string, bool, string, uint32, error)
+	GetExternalIPAddressCtx(context.Context) (string, error)
 }
 
 type clientFactory func(*goupnp.RootDevice, *url.URL) ([]portMapper, error)
@@ -63,6 +65,43 @@ type Mapping struct {
 // Unmap borra la regla del router.
 func (m *Mapping) Unmap(ctx context.Context) error {
 	return m.mapper.DeletePortMappingCtx(ctx, "", m.External, "UDP")
+}
+
+// ExternalIP es la IP que el router dice tener hacia afuera (GetExternalIPAddress), pedida al
+// mismo cliente que abrió el puerto: un solo pedido. Si no es pública, el router no está
+// directamente en internet (CGNAT del proveedor, o conectado detrás de otro router) y abrirle el
+// puerto no alcanza.
+func (m *Mapping) ExternalIP(ctx context.Context) (netip.Addr, error) {
+	text, err := m.mapper.GetExternalIPAddressCtx(ctx)
+	if err != nil {
+		return netip.Addr{}, err
+	}
+	ip, err := netip.ParseAddr(strings.TrimSpace(text))
+	if err != nil {
+		return netip.Addr{}, fmt.Errorf("IP externa del router %q: %w", text, err)
+	}
+	return ip.Unmap(), nil
+}
+
+var (
+	// cgnatPrefix es 100.64.0.0/10: la usan los proveedores con CGNAT y Tailscale; nunca se llega
+	// desde internet.
+	cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
+	// radminPrefix es 26.0.0.0/8: Radmin VPN la usa para su red. Es espacio público, pero no se
+	// anuncia en internet.
+	radminPrefix = netip.MustParsePrefix("26.0.0.0/8")
+)
+
+// IsCGNAT dice si ip es de 100.64.0.0/10 (CGNAT del proveedor o Tailscale).
+func IsCGNAT(ip netip.Addr) bool {
+	return cgnatPrefix.Contains(ip.Unmap())
+}
+
+// IsInternet dice si a ip se llega desde internet: unicast global, no privada, no CGNAT/Tailscale y
+// no Radmin. Lo demás solo sirve en la misma red o VPN.
+func IsInternet(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	return ip.IsGlobalUnicast() && !ip.IsPrivate() && !cgnatPrefix.Contains(ip) && !radminPrefix.Contains(ip)
 }
 
 // MapUDP abre por UPnP el primer puerto externo de candidates que el router acepte, siempre hacia

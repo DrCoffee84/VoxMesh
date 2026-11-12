@@ -380,6 +380,9 @@ func (a *App) configureHostNetwork(listenPort int, stop <-chan struct{}, start *
 			}
 		}
 		logging.Infof("IP pública obtenida: %s en %s", result.public.Addr(), result.public)
+		if mapErr == nil {
+			checkRouterWAN(mapping, result)
+		}
 	}
 
 	if !a.hostNet.CompareAndSwap(start, result) {
@@ -405,6 +408,29 @@ func (a *App) configureHostNetwork(listenPort int, stop <-chan struct{}, start *
 	a.reportHostNet(*result)
 	if result.state == hostNetReady {
 		a.publishRoomCloudFlare()
+	}
+}
+
+// checkRouterWAN le pide al router que abrió el puerto su IP externa: si es CGNAT o privada (un
+// router detrás de otro), abrirle el puerto no alcanza y result pasa a ese estado (routerWANState).
+// Si no responde, queda como estaba: no todos los routers lo contestan.
+func checkRouterWAN(mapping *netinfo.Mapping, result *hostNetwork) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	wan, err := mapping.ExternalIP(ctx)
+	cancel()
+	if err != nil {
+		logging.Infof("IP externa del router: no respondió (%s)", logging.FormatError(err))
+		return
+	}
+	result.routerWAN = wan
+	result.state = routerWANState(wan)
+	switch {
+	case result.state == hostNetCGNAT:
+		logging.Infof("IP externa del router: %s (CGNAT del proveedor; IP pública %s)", wan, result.public.Addr())
+	case result.state == hostNetDoubleNAT:
+		logging.Infof("IP externa del router: %s (router detrás de otro; IP pública %s)", wan, result.public.Addr())
+	case wan != result.public.Addr():
+		logging.Infof("IP externa del router: %s, distinta de la IP pública %s", wan, result.public.Addr())
 	}
 }
 

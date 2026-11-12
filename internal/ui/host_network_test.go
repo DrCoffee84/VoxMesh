@@ -21,11 +21,16 @@ const testListenPort = 47830
 
 func testNetwork(state hostNetState) hostNetwork {
 	n := hostNetwork{state: state}
-	if state == hostNetReady || state == hostNetNoUPnP {
+	if state != hostNetFinding && state != hostNetNoIP {
 		n.public = netip.MustParseAddrPort("181.10.20.30:47831")
 	}
-	if state == hostNetNoUPnP {
+	switch state {
+	case hostNetNoUPnP:
 		n.localIP = netip.MustParseAddr("192.168.1.37")
+	case hostNetCGNAT:
+		n.routerWAN = netip.MustParseAddr("100.70.1.2")
+	case hostNetDoubleNAT:
+		n.routerWAN = netip.MustParseAddr("192.168.0.10")
 	}
 	return n
 }
@@ -48,6 +53,8 @@ func TestInviteOptions(t *testing.T) {
 		{hostNetReady, want{first: toneNormal, copyFirst: true, direct: true}},
 		{hostNetNoUPnP, want{first: toneWarning, copyFirst: true, lanHint: true}},
 		{hostNetNoIP, want{first: toneError, lanHint: true}},
+		{hostNetCGNAT, want{first: toneError, lanHint: true}},
+		{hostNetDoubleNAT, want{first: toneWarning, copyFirst: true, lanHint: true}},
 	}
 	for _, c := range cases {
 		for _, showLAN := range []bool{false, true} {
@@ -103,19 +110,30 @@ func TestInviteOptions(t *testing.T) {
 	}
 }
 
-// Con el puerto sin abrir, copiar avisa qué puerto falta abrir.
-func TestInviteOptionsPortClosed(t *testing.T) {
-	options := inviteOptions(testNetwork(hostNetNoUPnP), nil, testListenPort, false)
-	if options[0].closedPort != 47831 {
-		t.Fatalf("closedPort = %d, quería el puerto externo 47831", options[0].closedPort)
+// Al copiar: el aviso normal, o el del puerto que falta abrir (en el router, o también en el módem).
+func TestInviteOptionsCopyNotice(t *testing.T) {
+	cases := []struct {
+		state hostNetState
+		key   string
+	}{
+		{hostNetReady, "invite.copied"},
+		{hostNetNoUPnP, "invite.copied_port_closed"},
+		{hostNetDoubleNAT, "invite.copied_double_nat"},
 	}
-	ready := inviteOptions(testNetwork(hostNetReady), testInterfaces, testListenPort, true)
-	for _, option := range ready {
-		if option.closedPort != 0 {
-			t.Fatalf("listo: %+v avisaría de un puerto cerrado", option)
+	for _, c := range cases {
+		first := inviteOptions(testNetwork(c.state), nil, testListenPort, false)[0]
+		if first.copied.Key != c.key || len(first.copied.Args) == 0 || first.copied.Args[0] != first.address {
+			t.Errorf("estado %d: aviso %s %v, quería %s con %s", c.state, first.copied.Key, first.copied.Args, c.key, first.address)
+		}
+		if c.key != "invite.copied" && (len(first.copied.Args) != 2 || first.copied.Args[1] != uint16(47831)) {
+			t.Errorf("estado %d: aviso %v sin el puerto externo 47831", c.state, first.copied.Args)
 		}
 	}
+	ready := inviteOptions(testNetwork(hostNetReady), testInterfaces, testListenPort, true)
 	lan := ready[1]
+	if lan.copied.Key != "invite.copied" {
+		t.Fatalf("renglón LAN: aviso %s", lan.copied.Key)
+	}
 	if lan.address != "192.168.1.37:47830" || lan.label != i18n.T("invite.lan", "Ethernet 4", "192.168.1.37:47830") {
 		t.Fatalf("renglón LAN %+v: quería la IP de la interfaz con el puerto del socket", lan)
 	}
@@ -133,6 +151,8 @@ func TestHostNetMsg(t *testing.T) {
 		{testNetwork(hostNetNoUPnP), "conn.net_no_upnp", []any{uint16(47831), "192.168.1.37"}},
 		{hostNetwork{state: hostNetNoUPnP, public: netip.MustParseAddrPort("181.10.20.30:47830")}, "conn.net_no_upnp", []any{uint16(47830), "?"}},
 		{testNetwork(hostNetNoIP), "conn.net_no_ip", nil},
+		{testNetwork(hostNetCGNAT), "conn.net_cgnat", nil},
+		{testNetwork(hostNetDoubleNAT), "conn.net_double_nat", []any{"192.168.0.10", uint16(47831)}},
 	}
 	for _, c := range cases {
 		msg := hostNetMsg(c.network)
@@ -150,5 +170,32 @@ func TestHostNetMsg(t *testing.T) {
 				t.Errorf("estado %d en %s: %q", c.network.state, lang, text)
 			}
 		}
+	}
+}
+
+// IP externa del router (UPnP) → estado: CGNAT no deja entrar, privada = router detrás de otro, lo
+// demás (pública aunque sea otra, sin respuesta) queda listo.
+func TestRouterWANState(t *testing.T) {
+	cases := []struct {
+		wan  string
+		want hostNetState
+	}{
+		{"100.64.0.1", hostNetCGNAT},
+		{"100.127.255.254", hostNetCGNAT},
+		{"192.168.0.10", hostNetDoubleNAT},
+		{"10.0.0.2", hostNetDoubleNAT},
+		{"172.16.5.4", hostNetDoubleNAT},
+		{"::ffff:192.168.0.10", hostNetDoubleNAT},
+		{"181.10.20.30", hostNetReady},
+		{"190.1.2.3", hostNetReady}, // otra pública: solo se loguea
+		{"0.0.0.0", hostNetReady},   // algunos routers la contestan con el WAN caído
+	}
+	for _, c := range cases {
+		if got := routerWANState(netip.MustParseAddr(c.wan)); got != c.want {
+			t.Errorf("%s: estado %d, quería %d", c.wan, got, c.want)
+		}
+	}
+	if got := routerWANState(netip.Addr{}); got != hostNetReady {
+		t.Errorf("sin respuesta: estado %d", got)
 	}
 }

@@ -2,6 +2,7 @@ package room
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -356,11 +357,43 @@ func TestFailover_JoinWithoutAnswerGivesUp(t *testing.T) {
 		t.Fatalf("antes del plazo solo reintenta el RoomHello: %+v", actions)
 	}
 	actions = run(f, timings.Join, timings.Join+time.Second, nil)
-	if giveUp := find(t, actions, ActGiveUp); giveUp.Msg.String() != "Código incorrecto o host inalcanzable." {
-		t.Fatalf("aviso %q", giveUp.Msg)
+	if giveUp := find(t, actions, ActGiveUp); giveUp.Msg.Key != "room.join_failed_internet" {
+		t.Fatalf("aviso %q: la invitación es de internet", giveUp.Msg)
 	}
 	if actions := run(f, timings.Join+time.Second, time.Minute, nil); len(actions) != 0 {
 		t.Fatalf("después de rendirse no hace nada más: %+v", actions)
+	}
+}
+
+// El aviso al no poder entrar depende de la dirección de la invitación: por internet, que el host
+// mire su registro de actividad; LAN/VPN (privada, CGNAT/Tailscale, Radmin), que solo sirve en la
+// misma red o VPN, con la IP.
+func TestJoinFailedMsg(t *testing.T) {
+	cases := []struct {
+		addr string
+		key  string
+		ip   string
+	}{
+		{"186.57.0.1:47825", "room.join_failed_internet", ""},
+		{"[::ffff:186.57.0.1]:47825", "room.join_failed_internet", ""},
+		{"192.168.1.37:47830", "room.join_failed_lan", "192.168.1.37"},
+		{"10.147.17.5:47830", "room.join_failed_lan", "10.147.17.5"},   // ZeroTier
+		{"100.101.2.3:47830", "room.join_failed_lan", "100.101.2.3"},   // Tailscale / CGNAT
+		{"26.77.45.242:47830", "room.join_failed_lan", "26.77.45.242"}, // Radmin
+		{"no es una dirección", "room.join_failed_internet", ""},
+	}
+	for _, c := range cases {
+		msg := JoinFailedMsg(c.addr)
+		if msg.Key != c.key {
+			t.Errorf("%s: %s, quería %s", c.addr, msg.Key, c.key)
+			continue
+		}
+		if c.ip != "" && (len(msg.Args) != 1 || msg.Args[0] != c.ip) {
+			t.Errorf("%s: args %v, quería la IP %s", c.addr, msg.Args, c.ip)
+		}
+		if text := msg.In(i18n.ES); strings.Contains(text, "%!") || (c.ip != "" && !strings.Contains(text, c.ip)) {
+			t.Errorf("%s: %q", c.addr, text)
+		}
 	}
 }
 
