@@ -196,6 +196,60 @@ func TestEngine_PlaysOpusStreamWithVolume(t *testing.T) {
 	}
 }
 
+// TestEngine_DeafenedMixIsSilent: ensordecido, la voz de red no suena (ceros exactos después de la
+// rampa de un buffer) pero su jitter buffer sigue avanzando y marcando quién habla, así que no se
+// acumula nada; los sonidos de eventos (Play) siguen; al volver, la voz suena de nuevo.
+func TestEngine_DeafenedMixIsSilent(t *testing.T) {
+	packets := encodeSine(t, 40, 8000)
+	e := newEngineState()
+	setPlayback(e, 40, nil)
+	for n := 0; n < 20; n++ {
+		e.PlayStreamSeq("peer", uint32(n), 0, packets[n])
+	}
+	if rms := frameRMS(mixFrames(e, 6)[3*FrameSamples:]); rms < 2000 {
+		t.Fatalf("la voz no sonó antes de ensordecer: RMS %.0f", rms)
+	}
+	before := e.JitterReport()["peer"]
+
+	e.SetDeafened(true)
+	ramp := mixFrames(e, 1)
+	if head := frameRMS(ramp[:FrameSamples/4]); head < 1000 || ramp[FrameSamples-1] != 0 {
+		t.Fatalf("rampa de bajada: RMS del principio %.0f, última muestra %d", head, ramp[FrameSamples-1])
+	}
+	for i, sample := range mixFrames(e, 8) {
+		if sample != 0 {
+			t.Fatalf("ensordecido: muestra %d = %d, quería silencio", i, sample)
+		}
+	}
+	after := e.JitterReport()["peer"]
+	if played := after.Played - before.Played; played < 8 {
+		t.Fatalf("ensordecido el jitter buffer tiene que seguir leyendo: avanzó %d frames", played)
+	}
+	if after.BufferedFrames > before.BufferedFrames {
+		t.Fatalf("se acumularon frames: %d antes, %d después", before.BufferedFrames, after.BufferedFrames)
+	}
+	if ids := e.AudibleStreams(nil, time.Second); len(ids) != 1 || ids[0] != "peer" {
+		t.Fatalf("el indicador de quién habla sigue andando ensordecido, got %v", ids)
+	}
+
+	sfx := make([]int16, FrameSamples)
+	for i := range sfx {
+		sfx[i] = int16(8000 * math.Sin(2*math.Pi*440*float64(i)/SampleRate))
+	}
+	e.Play(EncodePCM(sfx))
+	if rms := frameRMS(mixFrames(e, 1)); rms < 2000 {
+		t.Fatalf("los sonidos de eventos tienen que sonar ensordecido: RMS %.0f", rms)
+	}
+
+	e.SetDeafened(false)
+	for n := 20; n < 40; n++ {
+		e.PlayStreamSeq("peer", uint32(n), 0, packets[n])
+	}
+	if rms := frameRMS(mixFrames(e, 8)[4*FrameSamples:]); rms < 2000 {
+		t.Fatalf("la voz no volvió a sonar: RMS %.0f", rms)
+	}
+}
+
 func TestEngine_CaptureQueueReportsDrops(t *testing.T) {
 	e := newEngineState()
 	frame := func(value byte) []byte {

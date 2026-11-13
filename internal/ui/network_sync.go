@@ -158,7 +158,7 @@ func (a *App) handleAssetChunk(payload []byte, origin string) {
 					logging.Errorf("guardar sonido recibido %q: %s", chunk.ID, logging.FormatError(saveErr))
 				}
 			}
-			if pending && time.Since(requested) < pendingPlayTTL {
+			if pending && time.Since(requested) < pendingPlayTTL && !a.isDeafened.Load() {
 				a.playSoundPCM(data)
 			}
 			return

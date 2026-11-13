@@ -33,13 +33,13 @@ Cada tarea tiene un **ID** (`S7`, `F1`...) y está escrita para que un chat nuev
 
 ### Prioridad (2026-11-13)
 
-Va antes que todo lo demás. Detalle en "Próximo: cómoda para usuarios comunes". **Un chat por fila**, en este orden. C8 + C9 y C10 + C11 + C12 hechos el 2026-11-13 (falta probarlos a mano); de paso apareció C17 (el registro de actividad queda oculto dentro de la sala).
+Va antes que todo lo demás. Detalle en "Próximo: cómoda para usuarios comunes". **Un chat por fila**, en este orden. C8 + C9, C10 + C11 + C12 y F6 + F7 hechos el 2026-11-13 (falta probarlos a mano); de paso apareció C17 (el registro de actividad queda oculto dentro de la sala).
 
 | # | IDs | Qué, en simple | Tamaño |
 |---|-----|----------------|--------|
 | 1 | **C8 + C9** | "Invitar" muestra todas las direcciones de entrada, dice "Abriendo puerto…" y el error del puerto va en rojo; en Ajustes, cuánto dura el puerto abierto (8 h por defecto) y el registro avisa cuándo vence | Mediano. Mismos archivos que C6 (`host_network.go`, `configureHostNetwork`, `Params`) |
 | 2 | **C10 + C11 + C12** | "Acerca de" (versión, commit, autor); al abrir la app con el nombre "Usuario", pedir uno (con "No volver a preguntar"); cruz para cerrar la imagen ampliada | Chico |
-| 3 | **F6 + F7** | "Detener" corta el sonido para todos; botón para ensordecer (no escuchar lo que llega sin salir de la llamada) | Mediano. F6 suma un mensaje de red; F7 toca el Engine |
+| 3 | **F6 + F7** | "Detener para todos" corta el sonido en toda la sala; botón para ensordecer (no escuchar lo que llega sin salir de la llamada) | Mediano. F6 suma un mensaje de red; F7 toca el Engine |
 | 4 | **C13 + C14** | El registro de actividad avisa el lag largo (desde cuándo y cuánto duró) y los problemas que hoy solo van al log o a la barra (dispositivo, celular, micrófono que pierde audio…), cada uno con cómo arreglarlo | Mediano |
 | 5 | **C15** | Paletas de colores en Ajustes: naranja para lo que resalta, plantillas y paletas propias | Grande. Antes que C16 |
 | 6 | **C16** | Lavado de cara de toda la app (botones, Ajustes) sin perder el estilo clásico de escritorio | Grande. Al final: cubre los botones nuevos de las filas anteriores |
@@ -186,8 +186,9 @@ Solo si aparece el problema: **R1** (data race del estado de la sala, ver "Si ap
 
 ### F7. Ensordecer (no escuchar lo que llega sin salir de la llamada)
 
-- [ ] **Pedido (Coffee)**: un botón para dejar de escuchar el audio que llega, por ejemplo para escuchar otro audio sin salir de la llamada. Es lo único de esta tanda que cambia la funcionalidad a propósito.
-- **Hoy**: solo existe el mute del micrófono (`isMuted`, `toggleMute`, `PacketRoomMute`, insignia en el avatar, AGENT.md §3.E2). Las voces suenan por el mix del Engine; la botonera, por el `audio.Player` aparte; los sonidos de eventos, por `Engine.Play` o ese player.
+- [x] **Pedido (Coffee)**: un botón para dejar de escuchar el audio que llega, por ejemplo para escuchar otro audio sin salir de la llamada. Es lo único de esta tanda que cambia la funcionalidad a propósito.
+  - **Hecho** (2026-11-13): decidido con Coffee al ver el plan: auriculares al lado del mic que se tachan en rojo como él; ensordecido no suenan **las voces ni la botonera** ("quiero escuchar un audio de WhatsApp y los demás tiran sonidos"); los sonidos de eventos siguen. `Engine.SetDeafened` ([engine.go](internal/audio/engine.go)): `mix` sigue leyendo cada voz de su jitter buffer (avanza, mide y marca quién habla) pero no la suma; el cambio es una rampa de un buffer (`voiceGain`) para que no haga clic; `__sfx__` no cambia. [ui_components.go](internal/ui/ui_components.go): `isDeafened`, `preDeafenMuted`, `toggleDeafen` / `setDeafened` / `setMuted`, íconos Material `headset` / `headset_off`, botón entre el mute y colgar. Como Discord: ensordecer mutea y al volver deja el mute de antes; tocar el mic ensordecido vuelve a escuchar y hablar. Los demás ven la insignia de mute de siempre (sin cambio de protocolo). Botonera: `playOrFetchSound` no hace nada ensordecido (el `sound_play` propio sale igual), `handleAssetChunk` no toca un pendiente, y al ensordecer `cancelSounds`. "Escuchar mi voz en vivo" no suena (lo corta el mute; `sendOutgoingPCM` también mira `isDeafened`). `startAudio` se lo aplica a cada Engine nuevo (antes y después de publicarlo). Tests `TestEngine_DeafenedMixIsSilent` (ceros exactos, el jitter buffer avanza sin acumular, los SFX suenan, la voz vuelve), `TestDeafenRestoresMute` y `TestDeafenedSoundboardIsSilent`. **Quedó afuera**: atajo de teclado; una insignia propia de "ensordecido" para los demás (pediría `Participant.Deafened`); la vista previa del recorte y las pruebas de Ajustes suenan igual (las toca uno a propósito).
+- **Hoy** (antes de F7): solo existe el mute del micrófono (`isMuted`, `toggleMute`, `PacketRoomMute`, insignia en el avatar, AGENT.md §3.E2). Las voces suenan por el mix del Engine; la botonera, por el `audio.Player` aparte; los sonidos de eventos, por `Engine.Play` o ese player.
 - **Arreglo propuesto**:
   - `App.isDeafened atomic.Bool` (solo en memoria, como el mute) y un botón con ícono de auriculares en la barra de arriba, al lado del mute.
   - `Engine.SetDeafened` (atómico): `mix` sigue leyendo cada stream (los jitter buffers siguen su tiempo y sus medidas, así no se acumula nada) pero saca silencio.
@@ -567,6 +568,14 @@ Las anteriores se hicieron todas el 2026-11-02 y salieron bien (resumen en "Hist
   - "Detener" (y su atajo) sigue cortando solo en la PC propia; la vista previa del recorte ("⏹ Detener") no corta a nadie más.
   - Un sonido que la otra instancia todavía no tiene (recién agregado y borrado de su carpeta, o uno largo por internet): tocarlo y enseguida "Detener para todos" mientras se baja → no arranca cuando termina de llegar; tocarlo de nuevo después suena desde el disco.
   - El botón se ve entero en inglés y en español.
+
+- [ ] **F7. Ensordecer** (2026-11-13), con dos instancias en sala y un sonido largo de la botonera:
+  - Sin mute: tocar los auriculares → se tachan en rojo, el mic también; dejás de escuchar al otro sin clic ni ruido; el otro ve tu insignia de mute. Volver → auriculares y mic normales, se escucha enseguida (sin audio viejo acumulado ni retraso) y el otro te escucha.
+  - Con mute previo: ensordecer y volver → el mic sigue muteado.
+  - Ensordecido, tocar el mic → vuelven el sonido y el micrófono juntos.
+  - Ensordecido: un sonido que estaba sonando se corta; los que tira el otro no suenan (tampoco después, al volver, uno que se estaba bajando); el que tocás vos no suena acá pero el otro lo escucha. Los sonidos de aviso (alguien entra, un mensaje) sí suenan. Mientras habla el otro, su avatar sigue marcando que habla.
+  - Con "Escuchar mi voz en vivo" prendido: ensordecido no te escuchás.
+  - "Reiniciar audio" y una migración de host estando ensordecido: sigue ensordecido.
 
 - [ ] **F5. Pantalla compartida**, lo que no se pudo probar en una sola PC (incluye la segunda vuelta del 2026-11-04: por internet el log tiene que decir "ritmo de internet"; el cursor tiene que verse fluido y en el lugar justo, también el de texto, que va negro con borde blanco):
   - Windows al **125 % y 150 %** (Configuración → Pantalla → Escala) en quien comparte y en quien mira: la captura sale entera y del tamaño físico (`go test -run TestMonitorsArePhysicalPixels -v ./internal/screen/` con ese escalado) y en "Tamaño real (1:1)" la letra chica se lee igual que en la pantalla original.

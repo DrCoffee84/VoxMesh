@@ -111,7 +111,8 @@ func (a *App) sendOutgoingPCM(frame audio.CapturedFrame, udp *transport.UDP) {
 		flags |= transport.FlagShout
 		a.markPeerShouting(a.participantID)
 	}
-	if engine := a.engine(); engine != nil && a.conf().LiveMonitoring {
+	// "Escuchar mi voz en vivo": ensordecido no (igual ya cortó el mute, que viene con ensordecer).
+	if engine := a.engine(); engine != nil && a.conf().LiveMonitoring && !a.isDeafened.Load() {
 		for _, samples := range frames {
 			engine.Play(audio.EncodePCM(samples))
 		}

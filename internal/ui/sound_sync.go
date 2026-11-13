@@ -235,9 +235,10 @@ func (a *App) dropSounds(ids []string) []room.Sound {
 
 // playOrFetchSound reproduce el sonido si el audio está en disco. Si no, lo deja pendiente y lo
 // pide: handleAssetChunk lo reproduce cuando termina de llegar. Devuelve true si hubo que pedirlo.
+// Ensordecido no hace nada: no suena ni el propio (a los demás el sound_play les llega igual).
 func (a *App) playOrFetchSound(sound room.Sound) bool {
 	store := a.historyStore
-	if store == nil {
+	if store == nil || a.isDeafened.Load() {
 		return false
 	}
 	if data, err := store.ReadSound(sound.ID, sound.Ext); err == nil {

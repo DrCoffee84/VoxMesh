@@ -290,12 +290,16 @@ func (a *App) startAudio(udp *transport.UDP) {
 		return
 	}
 	engine.SetPlaybackSettings(a.playbackSettings)
+	engine.SetDeafened(a.isDeafened.Load())
 	a.applyPeerVolumes(engine)
 	input, output := engine.Devices()
 	notice := a.applyResolvedDevices(inputWant, outputWant, input, output)
 	if !a.publishEngine(engine, udp) {
 		return
 	}
+	// De nuevo ya publicado: si se tocó el botón mientras se abría, toggleDeafen todavía no veía
+	// este Engine.
+	engine.SetDeafened(a.isDeafened.Load())
 	a.setStatus(i18n.Join(notice, i18n.M("audio.ready", audioDevicesText(cfg, input, output))))
 }
 

@@ -12,12 +12,13 @@ Para descargar e instalar, ver el [README](README.es.md). Acá está el detalle 
 - Buffer de recepción adaptativo por participante: se agranda solo si la red de alguien es inestable y oculta los paquetes perdidos.
 - Medidor en Ajustes que muestra qué pasa con tu voz: gris = silencio, amarillo = hay sonido pero no se manda, verde = se manda, rojo = modo grito. Avisa si el micrófono satura.
 - Volumen por participante (se recuerda por nombre), botón de mute e indicador de quién habla, con ping, pérdida y jitter de cada uno.
+- **Ensordecer** (auriculares, al lado del mute): dejás de escuchar las voces y la botonera sin salir de la llamada, por ejemplo para escuchar otro audio. Como en Discord, también te mutea y al volver te deja el mute que tenías. Los demás ven tu insignia de mute. Los sonidos de aviso siguen sonando.
 - **Celular como micrófono**: por la página web que abre el QR (misma red Wi-Fi) o con la app Android *VoxMesh Mic* (link en el [README](README.es.md#descargar); el código está en [apk/](apk/)).
 - Si se desenchufa un dispositivo o la PC vuelve de suspender, el audio se reabre solo. Si el dispositivo guardado ya no existe, se usa el predeterminado de Windows.
 
 **Texto y sonidos**
 - Chat con imágenes (botón 📎 o pegar con Ctrl+V; PNG, JPG, GIF o WebP, hasta 8 MiB) e historial por sala que se sincroniza al reconectar.
-- Botonera de sonidos (MP3/WAV, con recorte de hasta ~87 s) con atajos de teclado globales, que también funcionan con un juego en primer plano. Se sincroniza con la sala: los audios se bajan cuando alguien los usa.
+- Botonera de sonidos (MP3/WAV, con recorte de hasta ~87 s) con atajos de teclado globales, que también funcionan con un juego en primer plano. Se sincroniza con la sala: los audios se bajan cuando alguien los usa. **Detener** corta en tu PC; **Detener para todos** corta en toda la sala (también un sonido que todavía se estaba bajando).
 
 **Pantalla compartida** (para dar soporte: ayudar a alguien a configurar algo viendo su escritorio)
 - Botón **Compartir** arriba: elegís el monitor (si hay más de uno) y confirmás. Nunca empieza sola, y mientras compartís una barra naranja dice quién la está mirando, con un botón **Detener**.

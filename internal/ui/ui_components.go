@@ -261,12 +261,15 @@ func (a *App) content() fyne.CanvasObject {
 	a.muteButton = widget.NewButtonWithIcon("", micIcon, a.toggleMute)
 	a.muteButton.Importance = widget.LowImportance
 	a.refreshMuteButton()
+	a.deafenButton = widget.NewButtonWithIcon("", headsetIcon, a.toggleDeafen)
+	a.deafenButton.Importance = widget.LowImportance
+	a.refreshDeafenButton()
 
 	shareBtn, shareBanner := a.newShareControls()
 
 	leftTop := container.NewHBox(toggleRoomsBtn, title, widget.NewSeparator(), voiceDot)
 	// Controles de la llamada juntos; después los de la app.
-	rightTop := container.NewHBox(inviteBtn, shareBtn, a.muteButton, a.topHangupBtn, widget.NewSeparator(), resetAudioBtn, settingsBtn)
+	rightTop := container.NewHBox(inviteBtn, shareBtn, a.muteButton, a.deafenButton, a.topHangupBtn, widget.NewSeparator(), resetAudioBtn, settingsBtn)
 	// El banner de "Estás compartiendo tu pantalla" va debajo, a todo el ancho (oculto si no).
 	topBar := container.NewVBox(container.NewBorder(nil, nil, leftTop, rightTop, a.selfNameLabel), shareBanner)
 	centerPanel := container.NewBorder(statusCard, nil, nil, nil, chatCard)
@@ -343,10 +346,58 @@ var (
 	micOffIcon = theme.NewErrorThemedResource(fyne.NewStaticResource("mic_off.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z"/></svg>`)))
 )
 
+// Íconos del botón de ensordecer (Material "headset" / "headset_off"), como los del mute.
+var (
+	headsetIcon    = theme.NewThemedResource(fyne.NewStaticResource("headset.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path d="M12 1c-4.97 0-9 4.03-9 9v7c0 1.66 1.34 3 3 3h3v-8H5v-2c0-3.87 3.13-7 7-7s7 3.13 7 7v2h-4v8h3c1.66 0 3-1.34 3-3v-7c0-4.97-4.03-9-9-9z"/></svg>`)))
+	headsetOffIcon = theme.NewErrorThemedResource(fyne.NewStaticResource("headset_off.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path d="M12 4c3.87 0 7 3.13 7 7v2h-2.92L21 17.92V11c0-4.97-4.03-9-9-9-1.95 0-3.76.62-5.23 1.68l1.44 1.44C9.3 4.41 10.6 4 12 4zM2.27 1.72L1 3l3.33 3.32C3.49 7.68 3 9.29 3 11v7c0 1.66 1.34 3 3 3h3v-8H5v-2c0-1.17.29-2.26.79-3.22L15 17v4h3c.3 0 .59-.06.86-.14L21 23l1.27-1.27-20-20.01z"/></svg>`)))
+)
+
 // toggleMute corre en el hilo de UI (botón). El corte del audio es inmediato: el callback de
 // captura lee isMuted en el próximo frame. La señalización a la sala va en una goroutine.
+// Ensordecido, tocar el micrófono es volver a escuchar y hablar (como Discord).
 func (a *App) toggleMute() {
-	muted := !a.isMuted.Load()
+	if a.isDeafened.Load() {
+		a.setDeafened(false, false)
+		return
+	}
+	a.setMuted(!a.isMuted.Load())
+}
+
+// toggleDeafen corre en el hilo de UI (botón de los auriculares). Ensordecer también mutea el
+// micrófono (si no escuchás, que no hables sin saber qué pasa) y al volver queda el mute de antes.
+// Los demás ven la insignia de mute de siempre: no hay estado nuevo en la sala.
+func (a *App) toggleDeafen() {
+	if a.isDeafened.Load() {
+		a.setDeafened(false, a.preDeafenMuted)
+		return
+	}
+	a.preDeafenMuted = a.isMuted.Load()
+	a.setDeafened(true, true)
+}
+
+// setDeafened aplica ensordecido y mute juntos (hilo de UI). El Engine calla las voces desde el
+// próximo callback; la botonera se corta acá (cancelSounds) y no vuelve a sonar mientras dure
+// (playOrFetchSound). startAudio se lo aplica a cada Engine nuevo.
+func (a *App) setDeafened(deafened, muted bool) {
+	a.isDeafened.Store(deafened)
+	if engine := a.engine(); engine != nil {
+		engine.SetDeafened(deafened)
+	}
+	a.refreshDeafenButton()
+	if deafened {
+		logging.Infof("Ensordecido: no suenan las voces ni la botonera")
+		a.cancelSounds() // locks cortos, como "Detener": acá y no en una goroutine que llegue tarde
+	} else {
+		logging.Infof("Ya no ensordecido")
+	}
+	a.setMuted(muted)
+}
+
+// setMuted cambia el mute propio (hilo de UI) y, si cambió, lo avisa a la sala.
+func (a *App) setMuted(muted bool) {
+	if a.isMuted.Load() == muted {
+		return
+	}
 	a.isMuted.Store(muted)
 	a.refreshMuteButton()
 	if muted {
@@ -355,6 +406,17 @@ func (a *App) toggleMute() {
 		logging.Infof("Micrófono activo")
 	}
 	go a.publishMuteState()
+}
+
+func (a *App) refreshDeafenButton() {
+	if a.deafenButton == nil {
+		return
+	}
+	if a.isDeafened.Load() {
+		a.deafenButton.SetIcon(headsetOffIcon)
+	} else {
+		a.deafenButton.SetIcon(headsetIcon)
+	}
 }
 
 func (a *App) refreshMuteButton() {

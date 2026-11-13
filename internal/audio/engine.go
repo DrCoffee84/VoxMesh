@@ -44,6 +44,7 @@ type streamWorkItem struct {
 	hasGap      bool
 	volume      float64
 	fx          *Effects // nil = sin cadena de salida (SFX, monitor local)
+	voice       bool     // emisor de red (lo calla SetDeafened)
 }
 
 // PlaybackProvider devuelve la configuración de salida (filtro por emisor, jitter buffer, limitador
@@ -83,6 +84,11 @@ type Engine struct {
 	// Limitador con envolvente del bus de mezcla; solo lo toca el callback de playback.
 	mixLimiter        peakLimiter
 	mixLimiterRelease float64
+
+	// Ensordecido (SetDeafened): las voces de red no suenan. voiceGain es la ganancia de las voces
+	// al final del último callback (1 o 0; el cambio es una rampa de un buffer); solo la toca mix.
+	deafened  atomic.Bool
+	voiceGain float64
 
 	// Medición del lado que envía (TakeCaptureStats): la escriben el callback de captura y la
 	// goroutine de envío.
@@ -196,6 +202,7 @@ func newEngineState() *Engine {
 			defaultPlayback.BusLimiterReleaseMS,
 		),
 		mixLimiterRelease: defaultPlayback.BusLimiterReleaseMS,
+		voiceGain:         1,
 		echoRef:           new(echoReference),
 	}
 	e.echoDelayMS.Store(-1)
@@ -383,6 +390,10 @@ func (e *Engine) SetArrivalRecorder(rec *ArrivalRecorder) {
 // mix es el callback de playback: arma output (S16LE) con la suma de todos los streams. at
 // (UnixNano) es la hora del callback: con la cancelación de eco activa, la salida se copia a
 // echoRef con esa hora.
+//
+// Ensordecido (SetDeafened), cada voz de red se sigue leyendo de su jitter buffer (avanza, mide y
+// marca quién habla igual, así no se acumula nada) pero no se suma; los SFX y el monitor local
+// suenan. Al cambiar, las voces van de 1 a 0 (o al revés) en rampa a lo largo del buffer: sin clic.
 func (e *Engine) mix(output []byte, at int64) {
 	samples := len(output) / 2
 	if samples == 0 {
@@ -390,6 +401,12 @@ func (e *Engine) mix(output []byte, at int64) {
 	}
 
 	settings := e.currentPlaybackSettings()
+	voiceFrom, voiceTo := e.voiceGain, 1.0
+	if e.deafened.Load() {
+		voiceTo = 0
+	}
+	e.voiceGain = voiceTo
+	muteVoices := voiceFrom == 0 && voiceTo == 0
 
 	// --- Lock corto: inspección de streams y extracción de chunks ---
 	e.playbackMu.Lock()
@@ -424,12 +441,16 @@ func (e *Engine) mix(output []byte, at int64) {
 				continue
 			}
 			stream.lastAudible = now
+			if muteVoices {
+				continue // leído y descartado: el lugar en scratchBuffer lo usa el próximo
+			}
 			scratchOffset += samples
 			e.workItems = append(e.workItems, streamWorkItem{
 				chunk:   chunk,
 				samples: samples,
 				volume:  stream.volume,
 				fx:      stream.fx,
+				voice:   true,
 			})
 			continue
 		}
@@ -531,10 +552,15 @@ func (e *Engine) mix(output []byte, at int64) {
 			item.fx.ApplyOutput(chunk, filterSettings)
 		}
 
+		ramp := item.voice && voiceFrom != voiceTo
 		for i, val := range chunk {
-			if item.volume != 1.0 {
+			switch {
+			case ramp:
+				gain := voiceFrom + (voiceTo-voiceFrom)*float64(i+1)/float64(samples)
+				e.mixBuffer[i] += int32(float64(val) * item.volume * gain)
+			case item.volume != 1.0:
 				e.mixBuffer[i] += int32(float64(val) * item.volume)
-			} else {
+			default:
 				e.mixBuffer[i] += int32(val)
 			}
 		}
@@ -735,6 +761,16 @@ func (e *Engine) PlayStreamSeq(senderID string, seq uint32, talkspurt uint8, pac
 	}
 	stream.jitter.Push(seq, talkspurt, packet, now)
 	stream.lastActive = now
+}
+
+// SetDeafened ensordece (true) o no la salida: las voces de red dejan de sonar desde el próximo
+// callback; los sonidos de eventos y el monitor local (Play) siguen. Atómico: se puede llamar
+// desde cualquier goroutine.
+func (e *Engine) SetDeafened(deafened bool) {
+	if e == nil {
+		return
+	}
+	e.deafened.Store(deafened)
 }
 
 // SetPlaybackSettings registra de dónde sale la configuración de salida. Sin proveedor se usan

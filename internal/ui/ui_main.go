@@ -99,6 +99,10 @@ type App struct {
 	voiceActive     atomic.Bool
 	isMuted         atomic.Bool // mute del micrófono: lo lee el callback de captura por frame (sendOutgoingPCM)
 	muteButton      *widget.Button
+	// Ensordecido (toggleDeafen): no suenan las voces ni la botonera. Solo en memoria, como el mute.
+	isDeafened      atomic.Bool
+	preDeafenMuted  bool // el mute de antes de ensordecer, para dejarlo al volver; solo el hilo de UI
+	deafenButton    *widget.Button
 	peerVolumeMu    sync.RWMutex       // volumen por participante (slider de cada avatar)
 	peerVolumes     map[string]float64 // por ID de participante; persistido por nombre en config.PeerVolumes
 	peerChips       []*peerChip        // widgets de la barra de avatares; solo el hilo de UI
