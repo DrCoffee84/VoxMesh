@@ -623,6 +623,7 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 	))
 	eventSoundsCheck := otherControls.control("event_sounds_enabled")
 	allowHostCheck := otherControls.control("allow_host_migration")
+	upnpLeaseControl := otherControls.control("upnp_lease_hours")
 
 	networkCard := uiCard(container.NewVBox(
 		widget.NewLabelWithStyle(i18n.T("settings.card.network"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
@@ -631,6 +632,7 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 		widget.NewLabel(i18n.T("settings.phone_port", config.DefaultPhoneMicPort)),
 		phonePortEntry,
 		allowHostCheck,
+		upnpLeaseControl,
 	))
 	openDataDirButton := widget.NewButtonWithIcon(i18n.T("settings.open_data"), theme.FolderOpenIcon(), func() {
 		if err := openDataDirectory(); err != nil {

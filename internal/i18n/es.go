@@ -105,6 +105,8 @@ var es = map[string]string{
 	"param.show_lan_invites.help":          "Para invitar por la misma red o por Radmin, Tailscale o ZeroTier. Por internet no hace falta: si no las usás, podés ocultarlas.",
 	"param.event_sounds_enabled.label":     "Sonidos de eventos (conexión, desconexión, chat)",
 	"param.allow_host_migration.label":     "Permitir ser Host de respaldo si el Host se desconecta",
+	"param.upnp_lease_hours.label":         "Tiempo que queda abierto el puerto (UPnP)",
+	"param.upnp_lease_hours.help":          "Cuando se cumple, el router cierra el puerto: la llamada se puede cortar y hay que volver a iniciar la sala. Se aplica la próxima vez que inicies una sala.",
 	"param.log_level.label":                "Nivel de registros",
 
 	// Migración de host (room/failover.go) y sala llena.
@@ -232,6 +234,9 @@ var es = map[string]string{
 	"conn.net_no_ip":              "No se pudo obtener la IP pública. Revisá tu conexión a internet y volvé a iniciar la sala.",
 	"conn.net_cgnat":              "Tu proveedor de internet usa CGNAT: no deja que entren a tu sala por internet, aunque el puerto esté abierto. Que cree la sala otro, o usen LAN/VPN (Ajustes).",
 	"conn.net_double_nat":         "Tu router está conectado detrás de otro (el módem del proveedor; tu router es %s para él): el puerto se abrió solo en el tuyo. Para que entren por internet: abrí también el puerto UDP %d en el módem hacia tu router (o activá DMZ o modo bridge). Si no se puede, que cree la sala otro, o usen LAN/VPN (Ajustes).",
+	"conn.port_until":             "El puerto queda abierto hasta las %s (%d h).",
+	"conn.port_until_tomorrow":    "El puerto queda abierto hasta mañana a las %s (%d h).",
+	"conn.port_expired":           "Se cumplió el tiempo del puerto abierto (%d h): si alguien no puede entrar o se corta, volvé a iniciar la sala. En Ajustes → Red y Conectividad podés subir la duración.",
 	"conn.udp_exists":             "Ya existe una conexión UDP.",
 	"conn.paste_invite":           "Pegá la invitación de la sala.",
 	"conn.invite_invalid":         "Invitación inválida: %s",

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
+	"time"
 
 	"voxmesh/internal/i18n"
 	"voxmesh/internal/netinfo"
@@ -35,6 +36,10 @@ type hostNetwork struct {
 	public    netip.AddrPort // IP pública : puerto externo (todos menos hostNetFinding y hostNetNoIP)
 	localIP   netip.Addr     // IP de esta PC en la LAN (con hostNetNoUPnP: la pide el router para abrir el puerto)
 	routerWAN netip.Addr     // IP externa del router (con hostNetDoubleNAT: adonde apunta el puerto en el módem)
+	// Regla UPnP con la que se invita (hostNetReady y hostNetDoubleNAT; 0 = ninguna): cuándo la
+	// aceptó el router y cuánto dura (upnp_lease_hours). Al vencer, el router cierra el puerto.
+	portOpened time.Time
+	portLease  time.Duration
 }
 
 // routerWANState: con el puerto abierto por UPnP, qué dice la IP externa del router (pedida al
@@ -55,8 +60,36 @@ func routerWANState(wan netip.Addr) hostNetState {
 }
 
 // hostNetMsg es el texto del estado para la barra de estado y el registro de actividad: el mismo
-// en los dos. Cada falla dice qué hacer y menciona LAN/VPN recién al final.
+// en los dos. Cada falla dice qué hacer y menciona LAN/VPN recién al final. Si se invita con un
+// puerto abierto por UPnP, también dice hasta cuándo queda abierto.
 func hostNetMsg(n hostNetwork) i18n.Msg {
+	msg := hostNetStateMsg(n)
+	if n.portLease > 0 {
+		return i18n.Join(msg, i18n.Plain(" "), portLeaseMsg(n.portOpened, n.portLease))
+	}
+	return msg
+}
+
+// portLeaseMsg: hasta qué hora queda abierto el puerto que se abrió en opened y dura lease. Con
+// hasta 24 h vence hoy o mañana (en la hora local de opened).
+func portLeaseMsg(opened time.Time, lease time.Duration) i18n.Msg {
+	until := opened.Add(lease)
+	hours := int(lease / time.Hour)
+	clock := until.Format("15:04")
+	openedYear, openedMonth, openedDay := opened.Date()
+	untilYear, untilMonth, untilDay := until.Date()
+	if openedYear == untilYear && openedMonth == untilMonth && openedDay == untilDay {
+		return i18n.M("conn.port_until", clock, hours)
+	}
+	return i18n.M("conn.port_until_tomorrow", clock, hours)
+}
+
+// portExpiredMsg es el aviso de cuando venció el puerto (una vez por regla).
+func portExpiredMsg(lease time.Duration) i18n.Msg {
+	return i18n.M("conn.port_expired", int(lease/time.Hour))
+}
+
+func hostNetStateMsg(n hostNetwork) i18n.Msg {
 	switch n.state {
 	case hostNetReady:
 		return i18n.M("conn.net_ready")

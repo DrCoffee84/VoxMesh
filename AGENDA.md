@@ -33,7 +33,7 @@ Cada tarea tiene un **ID** (`S7`, `F1`...) y está escrita para que un chat nuev
 
 ### Prioridad (2026-11-13)
 
-Va antes que todo lo demás. Detalle en "Próximo: cómoda para usuarios comunes". **Un chat por fila**, en este orden.
+Va antes que todo lo demás. Detalle en "Próximo: cómoda para usuarios comunes". **Un chat por fila**, en este orden. C8 + C9 hechos el 2026-11-13 (falta probarlos a mano); de paso apareció C17 (el registro de actividad queda oculto dentro de la sala).
 
 | # | IDs | Qué, en simple | Tamaño |
 |---|-----|----------------|--------|
@@ -124,7 +124,8 @@ Solo si aparece el problema: **R1** (data race del estado de la sala, ver "Si ap
 
 ### C9. Duración del puerto abierto (UPnP) en Ajustes y en el registro
 
-- [ ] **Pedido (Coffee)**: en Ajustes, cuánto tiempo queda abierto el puerto. Por defecto 8 h (él lo va a cambiar), con una descripción: al vencer se puede cortar la sala y hay que volver a iniciarla. Que también lo diga el registro de actividad, así la gente lo puede arreglar sola.
+- [x] **Pedido (Coffee)**: en Ajustes, cuánto tiempo queda abierto el puerto. Por defecto 8 h (él lo va a cambiar), con una descripción: al vencer se puede cortar la sala y hay que volver a iniciarla. Que también lo diga el registro de actividad, así la gente lo puede arreglar sola.
+  - **Hecho** (2026-11-13): `upnp_lease_hours` (default 8, de 1 a 24 h, paso 1, "Fuera de los perfiles") en `LiveSettings` + `config.Params` + `param.upnp_lease_hours.label/.help`, con slider y ayuda en "Red y Conectividad", debajo de "Host de respaldo" ([ui_settings.go](internal/ui/ui_settings.go)). Se borró `upnpLeaseSeconds`. `configureHostNetwork` ([ui_connection.go](internal/ui/ui_connection.go)) lee la duración al abrir el puerto (al iniciar la sala y en `takeOverHost`). Cuando se invita con esa regla (lista o doble NAT), guarda en `hostNetwork` cuándo la aceptó el router y cuánto dura, y la línea del resultado suma "El puerto queda abierto hasta las HH:MM (8 h)." o "hasta mañana a las…" (`hostNetMsg` + `portLeaseMsg`, [host_network.go](internal/ui/host_network.go), `i18n.Join`). Después espera en `waitPortLease`: mira la hora del reloj una vez por minuto (el router cuenta el tiempo real, también con la PC suspendida) y, si la sala sigue y el estado es el mismo, escribe **una** línea `conn.port_expired` en la barra y en el registro; termina con el `stop` del rol de host. Tests `TestPortLeaseMsg`, `TestHostNetMsgWithLease` y `TestNetworkParamDefaults` (esta también cubre la fila de `show_lan_invites` de C8). **Quedó afuera**: renovar la regla antes de que venza (borrar + agregar en plena llamada es lo que falló en el router de Coffee; si falla el agregar, el puerto se cierra antes de tiempo); que el menú "Invitar" cambie al vencer (sigue mostrando "Internet" normal); el puerto vencido no se saca de `a.upnpMapping`, así que al cerrar la sala el log puede tener un ERROR de "borrar UPnP" sin consecuencias.
 - **Hoy**: `upnpLeaseSeconds = 8 * 3600` es una constante en [ui_connection.go](internal/ui/ui_connection.go) y la regla no se renueva: el router contesta 718 si se vuelve a agregar una regla que ya existe (AGENT.md §3.E3). Con el lease viejo de 1 h, el 2026-10-26 el puerto se cerró en plena llamada. Nada avisa cuándo vence.
 - **Arreglo propuesto**:
   - Param `upnp_lease_hours`: default 8, mín 1, máx 24, paso 1, unidad "h", en `LiveSettings` ("Fuera de los perfiles"). Va en la tarjeta "Red y Conectividad", con ayuda: "Cuando se cumple, el router cierra el puerto: la llamada se puede cortar y hay que volver a iniciar la sala. Se aplica la próxima vez que inicies una sala."
@@ -539,6 +540,13 @@ Las anteriores se hicieron todas el 2026-11-02 y salieron bien (resumen en "Hist
   - Router sin UPnP (o UPnP apagado): renglón rojo "Error al abrir el puerto: mirá el registro de actividad" y abajo "Internet · IP:puerto (puerto sin abrir)" en naranja. Con la columna izquierda oculta, tocar el rojo cierra el popup y la muestra con el registro; el naranja copia con el aviso del puerto.
   - Sin internet y CGNAT: tocar el renglón rojo también muestra el registro.
   - Apagando el check: como antes (sin IPs locales y el renglón gris tras una falla). Todo en inglés también.
+
+- [ ] **C9. Duración del puerto (UPnP)** (2026-11-13, con el exe nuevo y un router con UPnP):
+  - Ajustes → Red y Conectividad: "Tiempo que queda abierto el puerto (UPnP): 8 h" con la ayuda; el slider va de 1 a 24; "Descartar" lo vuelve atrás y "Guardar" lo deja al reabrir la app.
+  - Con 1 h: iniciar sala → la línea del resultado dice "Sala lista por internet: ya podés invitar. El puerto queda abierto hasta las HH:MM (1 h)." con la hora de ahora + 1 h (en la barra de estado también); el log dice `UPnP UDP activo: … por 1h0m0s`. Iniciando cerca de la medianoche dice "hasta mañana a las…".
+  - Dejar la sala abierta esa hora: a lo sumo un minuto después del vencimiento aparece **una** línea "Se cumplió el tiempo del puerto abierto (1 h)…" (y el log `venció el puerto externo`); comprobar si alguien de afuera todavía puede entrar (depende del router).
+  - Cerrar la sala o pasar a cliente antes de que venza: no aparece la línea. Al quedar de host por migración, el que queda usa su propia duración.
+  - Sin UPnP, sin IP o con CGNAT: la línea del resultado no dice nada del puerto y nunca aparece la de vencido. Todo en inglés también.
 
 - [ ] **F5. Pantalla compartida**, lo que no se pudo probar en una sola PC (incluye la segunda vuelta del 2026-11-04: por internet el log tiene que decir "ritmo de internet"; el cursor tiene que verse fluido y en el lugar justo, también el de texto, que va negro con borde blanco):
   - Windows al **125 % y 150 %** (Configuración → Pantalla → Escala) en quien comparte y en quien mira: la captura sale entera y del tamaño físico (`go test -run TestMonitorsArePhysicalPixels -v ./internal/screen/` con ese escalado) y en "Tamaño real (1:1)" la letra chica se lee igual que en la pantalla original.

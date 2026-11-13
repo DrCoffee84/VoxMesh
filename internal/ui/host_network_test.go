@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"voxmesh/internal/i18n"
 	"voxmesh/internal/netinfo"
@@ -204,6 +205,64 @@ func TestHostNetMsg(t *testing.T) {
 				t.Errorf("estado %d en %s: %q", c.network.state, lang, text)
 			}
 		}
+	}
+}
+
+// Inicio + duración → hasta cuándo queda abierto el puerto: hoy, o mañana si pasa la medianoche
+// (en la hora local de cuando se abrió).
+func TestPortLeaseMsg(t *testing.T) {
+	zone := time.FixedZone("UTC-3", -3*3600)
+	cases := []struct {
+		opened time.Time
+		hours  int
+		key    string
+		clock  string
+	}{
+		{time.Date(2026, 11, 13, 9, 15, 0, 0, zone), 8, "conn.port_until", "17:15"},
+		{time.Date(2026, 11, 13, 21, 34, 0, 0, zone), 8, "conn.port_until_tomorrow", "05:34"},
+		{time.Date(2026, 11, 13, 15, 59, 30, 0, zone), 8, "conn.port_until", "23:59"},
+		{time.Date(2026, 11, 13, 16, 0, 0, 0, zone), 8, "conn.port_until_tomorrow", "00:00"},
+		{time.Date(2026, 11, 13, 0, 0, 0, 0, zone), 24, "conn.port_until_tomorrow", "00:00"},
+		{time.Date(2026, 12, 31, 22, 0, 0, 0, zone), 1, "conn.port_until", "23:00"},
+		{time.Date(2026, 12, 31, 23, 30, 0, 0, zone), 1, "conn.port_until_tomorrow", "00:30"},
+	}
+	for _, c := range cases {
+		msg := portLeaseMsg(c.opened, time.Duration(c.hours)*time.Hour)
+		if msg.Key != c.key || len(msg.Args) != 2 || msg.Args[0] != c.clock || msg.Args[1] != c.hours {
+			t.Errorf("%s + %d h: %s %v, quería %s [%s %d]", c.opened.Format("02/01 15:04"), c.hours, msg.Key, msg.Args, c.key, c.clock, c.hours)
+		}
+		for _, lang := range []i18n.Lang{i18n.ES, i18n.EN} {
+			if text := msg.In(lang); strings.Contains(text, "%!") || !strings.Contains(text, c.clock) {
+				t.Errorf("%s en %s: %q", c.key, lang, text)
+			}
+		}
+	}
+	expired := portExpiredMsg(8 * time.Hour)
+	if expired.Key != "conn.port_expired" || len(expired.Args) != 1 || expired.Args[0] != 8 {
+		t.Errorf("vencido: %s %v", expired.Key, expired.Args)
+	}
+	for _, lang := range []i18n.Lang{i18n.ES, i18n.EN} {
+		if text := expired.In(lang); strings.Contains(text, "%!") || !strings.Contains(text, "8 h") {
+			t.Errorf("vencido en %s: %q", lang, text)
+		}
+	}
+}
+
+// Con el puerto de UPnP, la línea del resultado suma hasta cuándo queda abierto; sin regla, no.
+func TestHostNetMsgWithLease(t *testing.T) {
+	opened := time.Date(2026, 11, 13, 21, 34, 0, 0, time.Local)
+	for _, state := range []hostNetState{hostNetReady, hostNetDoubleNAT} {
+		network := testNetwork(state)
+		network.portOpened, network.portLease = opened, 8*time.Hour
+		for _, lang := range []i18n.Lang{i18n.ES, i18n.EN} {
+			want := hostNetStateMsg(network).In(lang) + " " + portLeaseMsg(opened, 8*time.Hour).In(lang)
+			if got := hostNetMsg(network).In(lang); got != want {
+				t.Errorf("estado %d en %s: %q, quería %q", state, lang, got, want)
+			}
+		}
+	}
+	if got, want := hostNetMsg(testNetwork(hostNetReady)).In(i18n.ES), i18n.M("conn.net_ready").In(i18n.ES); got != want {
+		t.Errorf("sin regla: %q, quería %q", got, want)
 	}
 }
 

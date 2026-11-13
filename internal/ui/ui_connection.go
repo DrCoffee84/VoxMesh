@@ -319,34 +319,36 @@ func (a *App) openHost(roomName, username string) {
 	}()
 }
 
-// UPnP: lease de 8 h, más que cualquier llamada, y sin renovar (este router rechaza volver a
-// agregar una regla que ya existe: la renovación fallaba y el puerto se cerraba a la hora). La
-// regla se borra al cerrar la sala o la app; si quedó de un cierre forzado, vence sola.
-const (
-	upnpLeaseSeconds = 8 * 3600
-	upnpPortAttempts = 6 // puerto del socket y los 5 siguientes como puerto externo
-)
+// UPnP: el lease es upnp_lease_hours (Ajustes, 8 h por defecto, hasta 24) y no se renueva (este
+// router rechaza volver a agregar una regla que ya existe: la renovación fallaba y el puerto se
+// cerraba a la hora). La regla se borra al cerrar la sala o la app; si quedó de un cierre forzado,
+// vence sola. Al vencer con la sala abierta, el registro de actividad lo avisa (waitPortLease).
+const upnpPortAttempts = 6 // puerto del socket y los 5 siguientes como puerto externo
 
 // configureHostNetwork abre el puerto en el router (UPnP) y publica la dirección pública de la
 // sala. El socket escucha en listenPort: si el router no acepta ese puerto afuera (otra regla lo
 // ocupa), se prueba otro puerto externo que apunte igual a listenPort y se anuncia ese. Antes se
 // probaba listenPort+1 → listenPort+1, donde nadie escuchaba, y la sala anunciaba un puerto
-// muerto. La regla no se renueva (ver upnpLeaseSeconds).
+// muerto. La regla dura upnp_lease_hours y no se renueva.
 //
 // start es el estado que guardó quien empezó a ser host (hostNetFinding): el resultado lo
 // reemplaza solo si sigue ahí. Si la sala se cerró o dejó de ser host mientras el router o ipify
 // respondían, no se toca nada (ni el estado, ni la dirección de la sala, ni el registro). Al
-// registro de actividad van dos líneas, la del principio y la del resultado; el detalle, al log.
+// registro de actividad van dos líneas, la del principio y la del resultado (con la hora a la que
+// vence el puerto); el detalle, al log. Si se invita con el puerto de UPnP, después espera a que
+// venza para avisarlo (waitPortLease), hasta que la sala se cierre o deje de ser host (stop).
 func (a *App) configureHostNetwork(listenPort int, stop <-chan struct{}, start *hostNetwork) {
 	a.reportHostNet(*start)
 	began := time.Now()
+	lease := time.Duration(a.conf().UPnPLeaseHours) * time.Hour
 	candidates := make([]uint16, 0, upnpPortAttempts)
 	for offset := range upnpPortAttempts {
 		candidates = append(candidates, uint16(listenPort+offset))
 	}
 	mapContext, cancelMap := context.WithTimeout(context.Background(), 15*time.Second)
-	mapping, mapErr := netinfo.MapUDP(mapContext, candidates, uint16(listenPort), upnpLeaseSeconds)
+	mapping, mapErr := netinfo.MapUDP(mapContext, candidates, uint16(listenPort), uint32(lease/time.Second))
 	cancelMap()
+	mapped := time.Now()
 	publicPort := listenPort
 	if mapErr != nil {
 		logging.Errorf("UPnP UDP puerto %d: %s", listenPort, logging.FormatError(mapErr))
@@ -360,7 +362,7 @@ func (a *App) configureHostNetwork(listenPort int, stop <-chan struct{}, start *
 		}
 		publicPort = int(mapping.External)
 		a.upnpMapping.Store(mapping)
-		logging.Infof("UPnP UDP activo: puerto externo %d → %d (tiempo: %v)", mapping.External, listenPort, time.Since(began))
+		logging.Infof("UPnP UDP activo: puerto externo %d → %d por %v (tiempo: %v)", mapping.External, listenPort, lease, time.Since(began))
 	}
 
 	result := &hostNetwork{state: hostNetNoIP}
@@ -382,6 +384,10 @@ func (a *App) configureHostNetwork(listenPort int, stop <-chan struct{}, start *
 		logging.Infof("IP pública obtenida: %s en %s", result.public.Addr(), result.public)
 		if mapErr == nil {
 			checkRouterWAN(mapping, result)
+			if result.state == hostNetReady || result.state == hostNetDoubleNAT {
+				// Se invita con este puerto: el registro dice hasta cuándo queda abierto.
+				result.portOpened, result.portLease = mapped, lease
+			}
 		}
 	}
 
@@ -408,6 +414,37 @@ func (a *App) configureHostNetwork(listenPort int, stop <-chan struct{}, start *
 	a.reportHostNet(*result)
 	if result.state == hostNetReady {
 		a.publishRoomCloudFlare()
+	}
+	if result.portLease > 0 {
+		a.waitPortLease(stop, result)
+	}
+}
+
+// waitPortLease espera a que venza el puerto de network y lo avisa una vez en la barra de estado y
+// en el registro de actividad, si sigue siendo el estado de la red del host (stop: la sala se
+// cerró o este dejó de ser host). Mira la hora del reloj una vez por minuto en vez de usar un
+// timer: el router cuenta el tiempo real, también el que la PC estuvo suspendida.
+func (a *App) waitPortLease(stop <-chan struct{}, network *hostNetwork) {
+	until := network.portOpened.Add(network.portLease).Round(0) // Round(0): sin el reloj monotónico
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case now := <-ticker.C:
+			if now.Round(0).Before(until) {
+				continue
+			}
+			if a.hostNet.Load() != network {
+				return
+			}
+			logging.Infof("UPnP UDP: venció el puerto externo %d (%v)", network.public.Port(), network.portLease)
+			msg := portExpiredMsg(network.portLease)
+			a.setStatus(msg)
+			a.addActivity(msg.String())
+			return
+		}
 	}
 }
 

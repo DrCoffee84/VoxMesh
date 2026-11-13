@@ -105,6 +105,8 @@ var en = map[string]string{
 	"param.show_lan_invites.help":          "To invite over the same network or Radmin, Tailscale or ZeroTier. Not needed over the internet: if you don't use them, you can hide them.",
 	"param.event_sounds_enabled.label":     "Event sounds (join, leave, chat)",
 	"param.allow_host_migration.label":     "Allow being backup host if the host disconnects",
+	"param.upnp_lease_hours.label":         "How long the port stays open (UPnP)",
+	"param.upnp_lease_hours.help":          "When it runs out, the router closes the port: the call may drop and you'll have to start the room again. Applies the next time you start a room.",
 	"param.log_level.label":                "Log level",
 
 	// Migración de host (room/failover.go) y sala llena.
@@ -232,6 +234,9 @@ var en = map[string]string{
 	"conn.net_no_ip":              "Couldn't get the public IP. Check your internet connection and start the room again.",
 	"conn.net_cgnat":              "Your internet provider uses CGNAT: it doesn't let people join your room over the internet, even with the port open. Have someone else start the room, or use LAN/VPN (Settings).",
 	"conn.net_double_nat":         "Your router is connected behind another one (your provider's modem; to it, your router is %s): the port was only opened on yours. For people to join over the internet: also forward UDP port %d on the modem to your router (or turn on DMZ or bridge mode). If you can't, have someone else start the room, or use LAN/VPN (Settings).",
+	"conn.port_until":             "The port stays open until %s (%d h).",
+	"conn.port_until_tomorrow":    "The port stays open until tomorrow at %s (%d h).",
+	"conn.port_expired":           "The open port's time is up (%d h): if someone can't join or the call drops, start the room again. You can make it longer in Settings → Network.",
 	"conn.udp_exists":             "A UDP connection already exists.",
 	"conn.paste_invite":           "Paste the room invite.",
 	"conn.invite_invalid":         "Invalid invite: %s",

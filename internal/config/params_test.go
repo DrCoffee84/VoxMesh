@@ -131,3 +131,24 @@ func TestParamTextsHaveParams(t *testing.T) {
 		}
 	}
 }
+
+// Red (C8, C9): "Invitar" muestra las LAN/VPN por defecto y el puerto de UPnP dura 8 h, de 1 a
+// 24 h de a una, fuera de los perfiles.
+func TestNetworkParamDefaults(t *testing.T) {
+	cfg := Default()
+	if !cfg.ShowLANInvites {
+		t.Error("show_lan_invites tiene que venir prendido")
+	}
+	if cfg.UPnPLeaseHours != 8 {
+		t.Errorf("upnp_lease_hours por defecto = %d, quería 8", cfg.UPnPLeaseHours)
+	}
+	lease := ParamByKey("upnp_lease_hours")
+	if lease.Min != 1 || lease.Max != 24 || lease.Step != 1 || lease.Unit != "h" || lease.Profile != "" {
+		t.Errorf("fila de upnp_lease_hours: %+v", lease)
+	}
+	var s LiveSettings
+	lease.Set(&s, 0) // sin "para siempre"
+	if s.UPnPLeaseHours != 1 {
+		t.Errorf("0 h quedó en %d, quería 1", s.UPnPLeaseHours)
+	}
+}

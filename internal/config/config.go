@@ -153,6 +153,7 @@ type LiveSettings struct {
 	ShowLANInvites     bool `json:"show_lan_invites"` // "Invitar" del host: también las direcciones LAN/VPN
 	EventSoundsEnabled bool `json:"event_sounds_enabled"`
 	AllowHostMigration bool `json:"allow_host_migration"`
+	UPnPLeaseHours     int  `json:"upnp_lease_hours"` // cuánto dura el puerto que abre UPnP al iniciar la sala
 	LogLevel           int  `json:"log_level"`
 }
 

@@ -118,6 +118,9 @@ var Params = []Param{
 	{Key: "show_lan_invites", Default: 1},
 	{Key: "event_sounds_enabled", Default: 1},
 	{Key: "allow_host_migration", Default: 1},
+	// Lease de la regla UPnP. Sin 0 ("para siempre"): algunos routers lo toman como regla fija y, si
+	// la app se cierra mal, el puerto queda abierto. 24 h alcanza para cualquier sesión.
+	{Key: "upnp_lease_hours", Default: 8, Min: 1, Max: 24, Step: 1, Unit: "h"},
 	// Sin nivel 0: un 0 guardado por una versión anterior queda fuera de rango y pasa a 1 al cargar.
 	{Key: "log_level", Default: 1, Min: 1, Max: 2, Step: 1},
 }
