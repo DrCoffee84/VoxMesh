@@ -48,6 +48,9 @@ type Config struct {
 	// "900p" | "720p"). Se guarda tal cual: vacía o desconocida se lee como 1080p con
 	// screen.ParseResolution. La escribe el diálogo de "Compartir"; Ajustes no la toca.
 	ScreenResolution string `json:"screen_resolution,omitempty"`
+	// UsernamePromptOff es el "No volver a preguntar" del diálogo que pide el nombre al abrir la
+	// app cuando es uno de fábrica. Lo escribe ese diálogo; Ajustes no lo toca.
+	UsernamePromptOff bool `json:"username_prompt_off,omitempty"`
 }
 
 // Tamaño de ventana por defecto y mínimo aceptado al cargar (más chico = archivo roto).

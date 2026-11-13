@@ -32,6 +32,8 @@ If a new version won't install over the old one, uninstall the old one and try a
 
 ## How to use it
 
+The first time you open the app it asks for your name (that's how others see you); you can change it anytime in Settings.
+
 **To start a room:**
 1. Click **Start room** and pick a name.
 2. At the top, next to the microphone, click **Invite** and pick the first line, **Internet**. The invite (`VM1-…`) is copied. If the button shows an orange clock, wait a few seconds: the app is opening the port on your router and getting your public IP (the activity log says when it's ready).

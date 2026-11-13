@@ -158,6 +158,13 @@ var en = map[string]string{
 	"update.updating_title":            "Updating VoxMesh",
 	"update.failed":                    "couldn't finish the update: %s",
 
+	// Nombre al abrir la app si es el de fábrica (ui_username_prompt.go).
+	"main.name_prompt.title":       "What's your name?",
+	"main.name_prompt.text":        "That's how others see you in the room. You can change it later in Settings.",
+	"main.name_prompt.placeholder": "Your name",
+	"main.name_prompt.dont_ask":    "Don't ask again",
+	"main.name_prompt.later":       "Not now",
+
 	// Ventana principal (ui_components.go).
 	"main.ready":              "Ready. Start a room or paste an invite.",
 	"status.open_logs_failed": "Couldn't open the logs folder: %s",

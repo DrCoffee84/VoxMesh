@@ -279,12 +279,6 @@ func (a *App) Run() {
 	a.startHotkeyListener()
 	a.startUIWatchdog()
 	go a.audioMonitorLoop()
-	if !version.IsDev() { // el manual (Ajustes) sigue andando en builds locales
-		go func() {
-			time.Sleep(1 * time.Second)
-			a.checkForUpdates(false)
-		}()
-	}
 	// Tope blando de memoria en vez del debug.FreeOSMemory() cada 30 s: ese GC completo forzado
 	// frenaba las goroutines que asignan (también la de envío de audio) y competía con el hilo de
 	// UI. El runtime devuelve sola la memoria libre al sistema, de a poco.
@@ -296,7 +290,22 @@ func (a *App) Run() {
 	if cfg.WindowMaximized {
 		a.maximizeWindow()
 	}
+	// Primero el nombre, si es el de fábrica; las actualizaciones se buscan cuando se cierra ese
+	// diálogo, así su aviso nunca lo tapa.
+	a.askUsernameAtStart(a.startUpdateCheck)
 	application.Run()
+}
+
+// startUpdateCheck busca actualizaciones en segundo plano al arrancar. Los builds locales no
+// (version.IsDev); el botón de Ajustes sigue andando en ellos.
+func (a *App) startUpdateCheck() {
+	if version.IsDev() {
+		return
+	}
+	go func() {
+		time.Sleep(1 * time.Second)
+		a.checkForUpdates(false)
+	}()
 }
 
 // rememberWindowState guarda tamaño y maximizado para el próximo inicio. Hilo de UI (lee el
