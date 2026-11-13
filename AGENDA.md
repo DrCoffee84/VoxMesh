@@ -11,6 +11,7 @@ Criterios para decidir qué se hace:
 - **Simple y que funcione**: nada de features "por las dudas". Cada cosa de más es un lugar más donde aparecen errores. Lo que no aporta al flujo de arriba va a "Descartado / quizás".
 - **Sin compatibilidad hacia atrás**: una versión nueva no tiene que hablar con la anterior ni leer datos viejos (salas, historial, manifests, config, perfiles). Hoy existe una sola sala real. Se borra lo viejo sin transición, sin shims y sin migraciones; si un dato viejo no carga, se ignora. **Única excepción**: el updater de la versión instalada tiene que poder bajar e instalar la nueva.
 - Principalmente por internet. LAN/VPN (Tailscale, ZeroTier, Radmin) también tiene que funcionar, porque es la forma de usarla sin abrir puertos.
+- **Para usuarios comunes** (2026-11-13): la tiene que poder usar alguien que no es técnico sin que le cueste. Un amigo de Coffee es la vara: si algo le resulta "una paja", es un error de la app.
 
 ## Cómo usar esta agenda (leer antes de tomar una tarea)
 
@@ -30,9 +31,22 @@ Cada tarea tiene un **ID** (`S7`, `F1`...) y está escrita para que un chat nuev
 5. Al terminar: marcar `[x]`, dejar una línea **"Hecho:"** (archivos/funciones y qué quedó afuera) y **actualizar AGENT.md** si cambió una regla, un protocolo o la estructura. Si cambió algo visible para el usuario, también [README.md](README.md) (para principiantes) y/o [DESARROLLO.md](DESARROLLO.md) (detalle técnico).
 6. Un commit por tarea, mensaje en castellano. No commitear si los tests fallan.
 
-### Prioridad (2026-11-11)
+### Prioridad (2026-11-13)
 
-Va antes que la tabla de abajo. Salió de usarla con los pibes: invitar tiene que andar a la primera. Detalle en "Prioridad: invitar sin errores".
+Va antes que todo lo demás. Detalle en "Próximo: cómoda para usuarios comunes". **Un chat por fila**, en este orden.
+
+| # | IDs | Qué, en simple | Tamaño |
+|---|-----|----------------|--------|
+| 1 | **C8 + C9** | "Invitar" muestra todas las direcciones de entrada, dice "Abriendo puerto…" y el error del puerto va en rojo; en Ajustes, cuánto dura el puerto abierto (8 h por defecto) y el registro avisa cuándo vence | Mediano. Mismos archivos que C6 (`host_network.go`, `configureHostNetwork`, `Params`) |
+| 2 | **C10 + C11 + C12** | "Acerca de" (versión, commit, autor); al abrir la app con el nombre "Usuario", pedir uno (con "No volver a preguntar"); cruz para cerrar la imagen ampliada | Chico |
+| 3 | **F6 + F7** | "Detener" corta el sonido para todos; botón para ensordecer (no escuchar lo que llega sin salir de la llamada) | Mediano. F6 suma un mensaje de red; F7 toca el Engine |
+| 4 | **C13 + C14** | El registro de actividad avisa el lag largo (desde cuándo y cuánto duró) y los problemas que hoy solo van al log o a la barra (dispositivo, celular, micrófono que pierde audio…), cada uno con cómo arreglarlo | Mediano |
+| 5 | **C15** | Paletas de colores en Ajustes: naranja para lo que resalta, plantillas y paletas propias | Grande. Antes que C16 |
+| 6 | **C16** | Lavado de cara de toda la app (botones, Ajustes) sin perder el estilo clásico de escritorio | Grande. Al final: cubre los botones nuevos de las filas anteriores |
+
+### Prioridad anterior (2026-11-11)
+
+C6 + C7 hechos el 2026-11-12. De R8 se hizo el código; queda el diagnóstico con los logs. Detalle en "Prioridad: invitar sin errores".
 
 | # | ID | Qué, en simple | Tamaño |
 |---|----|----------------|--------|
@@ -73,17 +87,186 @@ Solo si aparece el problema: **R1** (data race del estado de la sala, ver "Si ap
     2. Instrumentar: hora del último `pollEvents` y `GetQueueStatus(QS_ALLINPUT)` cuando el propio HWND da `IsHungAppWindow`.
     3. Probar sin minimizar (otra ventana encima o un juego en pantalla completa) y en una sala con audio.
     4. Los dos `AppHang` del 24/09 (`C:\ProgramData\Microsoft\Windows\WER\ReportArchive`) ya cargaban `nvoglv64.dll`: probablemente pasa desde las primeras versiones.
-- [ ] **Crashes del amigo (cliente)**: pedirle el final del log de la sesión sin `=== cierre` y el "Error de aplicación" del Visor de eventos. Su log mostraba bloqueos de UI con la goroutine 1 `[runnable]` (la CPU ocupada). El watchdog nuevo ya registra CPUs, heap, GC y las goroutines que ocupan CPU. Desde el cambio del lease UPnP (1 h → 8 h) **no hubo más crashes**: si vuelven, ver R1.
+  - (2026-11-13) Coffee: con la versión actual "nunca más falló, se reinició ni nada". Si sigue así un tiempo, pasar a "Historial".
+- [ ] **Crashes del amigo (cliente)**: pedirle el final del log de la sesión sin `=== cierre` y el "Error de aplicación" del Visor de eventos. Su log mostraba bloqueos de UI con la goroutine 1 `[runnable]` (la CPU ocupada). El watchdog nuevo ya registra CPUs, heap, GC y las goroutines que ocupan CPU. Desde el cambio del lease UPnP (1 h → 8 h) **no hubo más crashes**: si vuelven, ver R1. (2026-11-13) Sigue sin fallar.
 - [ ] **Cortes de audio**: el audio quedó muy bien. Si alguien vuelve a notar cortes, medir con log nivel 1:
   - Quien escucha: `cortes=N (X ms)` por emisor en la línea `Audio de …` (`frases` son pausas, no cortes).
   - Quien habla: `Envío: capturados=… (50.0/s) descartados=… cola máx=…`. Menos de 50/s, descartados o cola alta = su PC o micrófono pierde audio (típico del Bluetooth).
   - Con nivel 2 queda `%AppData%\VoxMesh\llegadas-*.csv`: `VOXMESH_ARRIVALS=<csv> go test -run TestJitterReplayArrivals -v ./internal/audio/` reproduce esa red por el jitter buffer.
 
+# Próximo: cómoda para usuarios comunes (2026-11-13)
+
+**Contexto común.** La app anda estable (Coffee, 2026-11-13: "nunca más falló, se reinició ni nada"). Lo que sigue es que la use gente que no es técnica: un amigo de Coffee es la vara ("hay cosas que eran una paja"). Si algo le cuesta, es un error de la app. Casi todo es UI. Cambian la funcionalidad F7 (ensordecer, a propósito), F6 (un mensaje de red nuevo, `sound_stop`) y C9 (la duración del puerto pasa a ser configurable). El orden y los grupos están en la tabla "Prioridad (2026-11-13)".
+
+**Regla del registro de actividad** (C8, C9, C13, C14; la misma que C6):
+- Solo local: `addActivity`, nunca `addSystemMessage`.
+- Una línea por evento, sin repetir: tope por tipo.
+- Cada problema dice qué hacer, en simple.
+- Mismas claves de i18n que la barra de estado (unificar, no duplicar), en es y en. El detalle técnico va al log.
+- El registro siempre está a la vista (columna izquierda, también dentro de la sala; ☰ la oculta). La barra de estado se puede apagar.
+
+### C8. "Invitar": todas las direcciones por defecto, "Abriendo puerto…" y el error del puerto en rojo
+
+- [ ] **Pedido (Coffee)**: que "Invitar" muestre todas las invitaciones de entrada, también las LAN/VPN. Le gusta el renglón naranja de espera, pero que diga también que está abriendo el puerto. Si el puerto no se abre, que salga en rojo en el mismo menú, algo simple tipo "Error al abrir el puerto: mirá el registro".
+- **Hoy** (C6 + C7):
+  - `show_lan_invites` tiene default 0 (`config.Params`).
+  - `inviteOptions` ([host_network.go](internal/ui/host_network.go)): con `hostNetFinding`, "Obteniendo IP pública…" (`invite.finding`) en naranja; con `hostNetNoUPnP`, "Internet · IP:puerto (puerto sin abrir)" en naranja y copiable (`invite.internet_port_closed`; al copiar, `invite.copied_port_closed`).
+  - El renglón gris `invite.lan_hint` solo aparece con el check apagado.
+- **Arreglo propuesto**:
+  - `show_lan_invites` con default **1**. Sin migración: quien ya guardó la config con 0 sigue en 0 (Visión). La opción queda en Ajustes, para ocultarlas.
+  - `invite.finding` → "Abriendo puerto y obteniendo IP pública…" (en: "Opening the port and getting the public IP…"). Alternativa, a decidir en el plan: dos fases ("Abriendo puerto…" mientras corre `MapUDP`, "Obteniendo IP pública…" mientras corre ipify), con un estado más en `hostNetwork`. Lo simple es un solo texto.
+  - `hostNetNoUPnP`: primer renglón **rojo** que no copia, "Error al abrir el puerto: mirá el registro de actividad". Para un usuario común "los logs" es el registro de actividad, que está en pantalla y ya dice qué hacer; la carpeta de logs no. Abajo, "Internet · IP:puerto" copiable, para quien abrió el puerto a mano (con `invite.copied_port_closed` al copiar). Confirmar en el plan si ese renglón va naranja o normal.
+  - Cambia la decisión de C6/C7 ("mientras se obtiene la IP pública no se sugiere LAN/VPN"): Internet sigue primero, pero LAN/VPN se ve de entrada. Riesgo: vuelve la hipótesis 1 de R8, copiar una LAN/VPN sin estar en la misma red. Lo amortiguan el orden y el aviso `room.join_failed_lan` del que entra. Ver en el plan si los renglones LAN/VPN dicen "(misma red o VPN)".
+  - Con las LAN/VPN a la vista nunca hay copia directa (`copiesDirectly`): siempre se abre el menú. Confirmar con Coffee que está bien.
+- **Tests**: `TestInviteOptions` y `TestHostNetMsg` con el renglón rojo; la fila de `Params` con default 1.
+- **Docs**: README y README.es (las LAN/VPN aparecen solas y el check sirve para ocultarlas), AGENT.md §3.E3 ("Invitar"), DESARROLLO.
+
+### C9. Duración del puerto abierto (UPnP) en Ajustes y en el registro
+
+- [ ] **Pedido (Coffee)**: en Ajustes, cuánto tiempo queda abierto el puerto. Por defecto 8 h (él lo va a cambiar), con una descripción: al vencer se puede cortar la sala y hay que volver a iniciarla. Que también lo diga el registro de actividad, así la gente lo puede arreglar sola.
+- **Hoy**: `upnpLeaseSeconds = 8 * 3600` es una constante en [ui_connection.go](internal/ui/ui_connection.go) y la regla no se renueva: el router contesta 718 si se vuelve a agregar una regla que ya existe (AGENT.md §3.E3). Con el lease viejo de 1 h, el 2026-10-26 el puerto se cerró en plena llamada. Nada avisa cuándo vence.
+- **Arreglo propuesto**:
+  - Param `upnp_lease_hours`: default 8, mín 1, máx 24, paso 1, unidad "h", en `LiveSettings` ("Fuera de los perfiles"). Va en la tarjeta "Red y Conectividad", con ayuda: "Cuando se cumple, el router cierra el puerto: la llamada se puede cortar y hay que volver a iniciar la sala. Se aplica la próxima vez que inicies una sala."
+  - Sin "0 = para siempre": algunos routers lo toman como regla fija y, si la app se cierra mal, el puerto queda abierto. IGDv2 admite hasta 7 días; el máximo se decide en el plan.
+  - `configureHostNetwork` lo lee al abrir el puerto (también al quedar de host, en `takeOverHost`).
+  - Registro: la línea del resultado (`conn.net_ready`, regla de dos líneas de C6) suma "puerto abierto hasta las HH:MM". Al vencer, un timer del rol de host (`hostRole`, solo si UPnP anduvo) agrega **una** línea: "Se cumplió el tiempo del puerto (8 h): si alguien no puede entrar o se corta, volvé a iniciar la sala. En Ajustes → Red podés subir la duración."
+  - **A considerar (no lo pidió)**: renovar antes de que venza, borrando y volviendo a agregar la regla (lo mismo que ya hace `addMapping` con una regla vieja de esta PC); así el vencimiento deja de importar. Decidirlo en el plan con Coffee: si se hace, cambian los textos.
+- **Tests**: la fila de `Params`; una función pura (inicio + duración → texto de la línea). A mano: duración 1 h, la hora en el registro y la línea al vencer.
+- **Docs**: README (qué hacer cuando vence), AGENT.md §3.E3 y §3.I.
+
+### C10. "Acerca de"
+
+- [ ] **Pedido (Coffee)**: un botón "Acerca de" con la versión y el autor (git).
+- **Hoy**: la versión aparece en la barra de estado (`buildVersion`, que se puede ocultar) y sale de `version.Value`, que inyectan `build.ps1` y `release.yml` con `-X voxmesh/internal/version.Value=…`. No hay commit ni autor.
+- **Arreglo propuesto**:
+  - Botón "Acerca de VoxMesh" en Ajustes → "Interfaz y Sistema", al lado de "Buscar actualizaciones". Tocar la versión en la barra de estado también lo abre.
+  - El diálogo muestra: ícono, versión, commit, autor con link al repo de GitHub (`DrCoffee84/VoxMesh`), licencia MIT y "Buscar actualizaciones".
+  - El commit es un `version.Commit` nuevo: `-X` con `git rev-parse --short HEAD` en `build.ps1` y `release.yml`; "dev" si falta.
+  - Decidir en el plan qué nombre de autor se muestra (el usuario de GitHub o el nombre).
+- **Tests**: los textos en los dos idiomas (`TestCatalogParity`). **Docs**: AGENT.md §4 (`version.Commit`).
+
+### C11. Nombre por defecto: preguntarlo al abrir la app
+
+- [ ] **Pedido (Coffee)**: si tu nombre es el de fábrica ("Usuario"), que al abrir la app salga un popup para cambiarlo, con un check "No volver a preguntar". Solo al abrir la app.
+- **Hoy**: `config.DefaultUsername` es "Usuario"; una instalación nueva arranca con `default.username` del idioma ("Usuario" o "User", en `ui.New`). Nadie lo pide, así que los demás ven "Usuario", "Usuario (2)"…
+- **Arreglo propuesto**:
+  - Después de mostrar la ventana, si el nombre está vacío o es uno de fábrica ("Usuario", "User") y no se marcó "No volver a preguntar", sale un diálogo: "¿Cómo te llamás? Así te ven los demás en la sala", con la entrada, Guardar y el check.
+  - Guardar hace lo mismo que Ajustes: `room.ClampUsername`, `updateConfig` + `saveConfig` y `selfNameLabel`.
+  - Campo de config nuevo, del grupo "Otros" (lo escribe el diálogo, no Ajustes): por ejemplo `username_prompt_off`.
+  - Función pura `needsUsernamePrompt(cfg)` con su test.
+- **Docs**: README ("la primera vez te pide tu nombre").
+
+### C12. Cruz para cerrar la imagen ampliada
+
+- [ ] **Pedido (Coffee)**: al abrir una imagen del chat falta la cruz para cerrarla.
+- **Hoy**: `showLightbox` ([ui_components.go](internal/ui/ui_components.go)) es un `widget.PopUp` con la imagen (`newTappableImage`). Solo se cierra tocando la imagen o fuera de ella: no hay botón ni Esc.
+- **Arreglo propuesto**: un botón con `theme.CancelIcon()` arriba a la derecha, encima de la imagen (en una capa sin layout, como el tooltip, o en un Border); Esc también la cierra. Respetar §3.G: la decodificación sigue en su goroutine y se chequea `pop.Visible()`.
+
+### F6. "Detener" corta el sonido para todos
+
+- [ ] **Pedido (Coffee)**: cuando él o cualquiera toca "Detener" (o su atajo), que el sonido se corte para todos. A veces manda un audio largo por error y, si lo detiene él, los demás lo siguen escuchando.
+- **Hoy**:
+  - La botonera suena por un `audio.Player` aparte del Engine (`a.soundPlayer`, [audio_bridge.go](internal/ui/audio_bridge.go)). `stopSoundboard` solo hace `player.Clear()` en la PC propia.
+  - Reproducir manda `room.SoundPlayMessage` por `PacketChat` (`triggerSound` → `sendChatPayload`; el host lo reenvía) y cada uno lo toca en `playIncomingSound`.
+  - Si el audio se está bajando, queda en `pendingPlays` y suena cuando llega.
+- **Arreglo propuesto**:
+  - `room.SoundStopMessage = "sound_stop"`, por el mismo camino que `sound_play`.
+  - `stopSoundboard` (botón y atajo) corta lo local y lo manda. Quien lo recibe hace `Clear()` y vacía `pendingPlays`, así un sonido que se estaba bajando no arranca después.
+  - Cualquiera de la sala puede cortar para todos (así lo pidió).
+  - Seguridad (§K): lo puede mandar cualquier participante, igual que `sound_play`, y no lleva datos. Es un mensaje nuevo en el sobre, sin compatibilidad hacia atrás (todos actualizan).
+  - Decidir en el plan si se avisa quién lo cortó (en la barra de estado, no en el registro).
+- **Tests**: el despacho del sobre. A mano, con dos instancias: cortar desde el que lo mandó y desde otro, y con un sonido que se está bajando.
+- **Docs**: AGENT.md §3.J, README ("Detener corta para todos").
+
+### F7. Ensordecer (no escuchar lo que llega sin salir de la llamada)
+
+- [ ] **Pedido (Coffee)**: un botón para dejar de escuchar el audio que llega, por ejemplo para escuchar otro audio sin salir de la llamada. Es lo único de esta tanda que cambia la funcionalidad a propósito.
+- **Hoy**: solo existe el mute del micrófono (`isMuted`, `toggleMute`, `PacketRoomMute`, insignia en el avatar, AGENT.md §3.E2). Las voces suenan por el mix del Engine; la botonera, por el `audio.Player` aparte; los sonidos de eventos, por `Engine.Play` o ese player.
+- **Arreglo propuesto**:
+  - `App.isDeafened atomic.Bool` (solo en memoria, como el mute) y un botón con ícono de auriculares en la barra de arriba, al lado del mute.
+  - `Engine.SetDeafened` (atómico): `mix` sigue leyendo cada stream (los jitter buffers siguen su tiempo y sus medidas, así no se acumula nada) pero saca silencio.
+  - Mientras dure no suenan la botonera (tampoco los `sound_play` que llegan), los sonidos de eventos ni "Escuchar mi voz en vivo".
+  - Decidir en el plan:
+    - Como Discord: ensordecer también mutea el micrófono y al volver queda el mute de antes. Recomendado (si no escucha, que no hable sin saber qué pasa). La otra opción: solo cortar lo que llega.
+    - Qué ven los demás: con lo de Discord alcanza la insignia de mute que ya existe (sin cambio de protocolo). Una insignia propia de "ensordecido" pide `Participant.Deafened` en el estado, como `Muted` (Hello, `takeOverHost`, reenvío en `failoverLoop`).
+- **Tests**: `mix` ensordecido da ceros y el jitter buffer avanza igual (cgo); el toggle restaura el mute.
+- **Docs**: AGENT.md §3.E2 (o una §3.E5 nueva), README.
+
+### C13. Lag prolongado en el registro de actividad
+
+- [ ] **Pedido (Coffee)**: cuando hay mucho lag por un rato largo, que el registro diga desde cuándo. Fijarse a partir de cuánto deja de ser normal.
+- **Hoy**:
+  - El RTT de cada participante sale del Ping/Pong (`updatePeerLag`, [network.go](internal/ui/network.go)): el host mide a cada uno; el cliente, al host.
+  - Pérdida y jitter por emisor, cada 2 s (`updatePeerNetStats`, desde `audioMonitorLoop`).
+  - Solo lo muestra el chip del avatar (`formatPeerLag`: < 80 ms verde, ≤ 200 amarillo, ≤ 400 naranja, > 400 rojo, con colores fijos).
+  - El log de nivel 1 escribe los intervalos de 10 s con problemas; el registro de actividad no dice nada.
+- **Arreglo propuesto**: una máquina de estados pura por participante (`lagWatch`), testeada con un reloj falso.
+  - "Lag" = RTT > 200 ms (naranja o peor en el chip) o pérdida ≥ 5 %, sostenido ≥ 10 s. Confirmar los umbrales en el plan con lo que muestran los logs reales; las constantes se comparten con el chip.
+  - Al empezar, **una** línea: "Hay lag con Pepe desde las 21:34 (350 ms, 8 % de pérdida)". Al volver a lo normal por ≥ 10 s, **otra**: "Se normalizó la conexión con Pepe (duró 1 min 20 s; lo peor: 600 ms, 12 %)". Con histéresis, para que no alterne.
+  - Ayuda corta: si es siempre la misma persona, suele ser su Wi-Fi o alguien descargando en su red; si pasa con todos, es la propia.
+  - El cliente solo mide al host: el texto dice "con el host (Pepe)".
+- **Tests**: la máquina entra, no entra por un pico corto, sale y no alterna. **Docs**: AGENT.md §3.A ("Measurement").
+
+### C14. Problemas que le importan al usuario, en el registro y con cómo arreglarlos
+
+- [ ] **Pedido (Coffee)**: lo que ya detectamos y hoy va al log o a la barra de estado (se cambió el dispositivo, se perdió la conexión con el celular…) que se vea en el registro, y mejor si trae una ayuda corta para solucionarlo.
+- **Hoy** (verificado el 2026-11-13; buscar por nombre):
+  - Dispositivo que no está, se usa el predeterminado: `applyResolvedDevices` ([audio_bridge.go](internal/ui/audio_bridge.go)), `audio.input_missing` / `audio.output_missing`. Va a la barra de estado y como ERROR al log.
+  - Se cayó el audio y se reabre (USB o Bluetooth desconectado, volver de suspensión): [audio_recovery.go](internal/ui/audio_recovery.go), `audio.dropped` / `audio.reloaded`.
+  - Audio no disponible: `audio.unavailable`. Dice "Probá con Refresh Audio", pero el botón ahora se llama "Reiniciar audio" (texto viejo: arreglarlo acá).
+  - Celular conectado o desconectado, y fallas de su servidor: `phone.connected`, `phone.disconnected`, `status.phone_server_start_failed`.
+  - Micrófono que pierde audio (menos de 48 frames/s o frames descartados; típico del Bluetooth): `captureInterval.problem` en [audio_monitor.go](internal/ui/audio_monitor.go), solo al log.
+  - Cancelación de eco que falla y se apaga sola: solo al log.
+  - Captura de pantalla que falla: `status.screen_failed`.
+  - Config que no se puede guardar: `status.config_save_failed`.
+  - Host: llegan paquetes que no abren con la clave (`rejectedPackets`, "Paquetes descartados" en el log), o sea, alguien usa una invitación vieja. Sirve para R8.
+- **Arreglo propuesto**:
+  - Cada uno, una línea en el registro con qué hacer, según la regla de arriba (por ejemplo: la primera vez en la sesión y después como mucho una cada 5 min por tipo). Misma clave que la barra de estado, con el patrón de `reportHostNet` (C6).
+  - Ayudas de ejemplo: dispositivo → "Elegí otro en Ajustes, o conectalo y tocá Reiniciar audio"; micrófono que pierde audio → "Si es Bluetooth, probá con cable o acercalo"; paquetes con otra clave → "Alguien intenta entrar con una invitación vieja: pasale una nueva".
+  - Lo que ya va al registro (migración de host) y los avisos normales (sonido agregado, perfil guardado) quedan como están.
+- **Tests**: evento → texto (función pura) y el tope por tipo.
+- **Docs**: AGENT.md §3.L (qué va al registro), README ("mirá el registro de actividad").
+
+### C15. Paletas de colores (naranja para lo que resalta)
+
+- [ ] **Pedido (Coffee)**: que lo que resalta tenga el tono naranja (le gusta), y que en Ajustes se pueda cambiar la paleta: una por defecto (la elige después, jugando con las plantillas), algunas plantillas y la posibilidad de crear paletas propias.
+- **Hoy**:
+  - `voxTheme` ([ui_theme.go](internal/ui/ui_theme.go)) es fijo y siempre oscuro (`voxColors`). Lo que resalta usa el `Primary` azul de Fyne: checks, "Conectar", botones `HighImportance`, sliders, foco.
+  - Hay unos 38 colores fijos fuera del tema: `ui_components.go` (12: `speakingColor`, `shoutColor`, `idleColor`, `mutedTextColor`, los del lag…), `ui_settings.go` (10, medidores), `level_bar.go` (2), `ui_soundboard.go` (3) y `ui_chat.go` (1).
+  - Además, 11 `theme.Color(…)` se leen al crear objetos de canvas (tooltip, renglones de "Invitar", insignias…), así que no seguirían un cambio de tema.
+- **Arreglo propuesto**:
+  - Una paleta es un juego de colores con nombre: resaltado/primario, fondo, tarjeta, chip, botón, entrada, texto, éxito/advertencia/error, hablando/grito/inactivo y medidores. Todo pasa por nombres de color del tema (`colorName…`), y los colores fijos de arriba se convierten en nombres.
+  - Paletas de fábrica: la actual con el resaltado naranja como "Default" (Coffee elige después cuál queda) y 2 o 3 plantillas.
+  - Paletas propias: un JSON por paleta en `<AppDir>/paletas/`, con el mismo patrón que los perfiles de audio ([profiles.go](internal/config/profiles.go): Default de fábrica que no se pisa, Guardar como, Renombrar, Borrar). Editor en Ajustes: la lista de colores con `dialog.NewColorPicker`.
+  - Config: el nombre de la paleta activa (texto, como `ActiveInputProfile`).
+  - Decidir en el plan:
+    - En vivo (`Settings().SetTheme` + refrescar los objetos que leen el color al crearse) o al reiniciar, como el idioma. En vivo es mejor para "jugar", pero cuesta más.
+    - Si alguna plantilla puede ser clara: hoy la regla es "siempre oscuro" (AGENT.md §3.D).
+- **Tests**: cargar y guardar paletas (puro, como los perfiles); que todo nombre de color que se usa tenga valor en cada paleta.
+- **Docs**: AGENT.md §3.D ("Look": nada de colores fijos), README.
+
+### C16. Lavado de cara de la app, sin perder el estilo clásico
+
+- [ ] **Pedido (Coffee)**: los botones se ven raros. Hacerle un lavado de cara a toda la app, junto con C15, sin romper el estilo "viejo" o "clásico": que siga pareciendo una app de escritorio tipo XP. Pensado para usuarios comunes.
+- **Hoy** (captura del 2026-11-13, Ajustes con la ventana maximizada a 1920 px):
+  - La tarjeta "Interfaz y Sistema" ocupa todo el ancho.
+  - Los tres botones (carpeta de datos, logs, actualizaciones) se estiran de punta a punta: C4 los puso uno debajo del otro en un VBox.
+  - Las ayudas grises cruzan toda la pantalla.
+  - "Cancelar" y "Guardar" quedan chiquitos en la esquina de abajo, y "Guardar" no se distingue (no tiene `HighImportance`).
+- **Arreglo propuesto** (con capturas de antes y después; el driver de test de Fyne puede generar PNG con `Capture()`):
+  - Ajustes con un ancho máximo de contenido: una columna centrada, o dos columnas en pantallas anchas.
+  - Botones de ancho natural (alineados a la izquierda o en una grilla de 2 o 3), y "Guardar" como botón principal, con el color de resaltado.
+  - Espaciados y títulos de tarjeta parejos. Revisar con el mismo criterio la barra de arriba, el chat y la botonera.
+  - "Clásico tipo XP": botones con borde, ícono y texto; tarjetas; menús. Nada de rediseño estilo web o celular. Si hace falta, pedirle a Coffee una captura de referencia de lo que quiere decir.
+  - Antes de empezar, juntar con Coffee lo que a su amigo le pareció "una paja".
+  - Respetar lo que ya hay: §3.D (`TestMainViewIgnoresLongText`, columnas de ancho fijo, colores del tema) y C4 (con la ventana a ~960 px, Ajustes no la agranda).
+- **Dependencias**: C15 (colores). Va al final para cubrir los botones nuevos de C10 y F7.
+
 # Prioridad: invitar sin errores (2026-11-11)
 
 **Contexto común.** Al apretar "Iniciar sala", `openHost` ([ui_connection.go](internal/ui/ui_connection.go)) publica primero la IP **local** como dirección de la sala (`netinfo.LocalIPv4`, la de la ruta por defecto) y lanza `configureHostNetwork` en segundo plano: UPnP (`netinfo.MapUDP`, hasta 15 s) y después la IP pública (`netinfo.PublicIP`, ipify, hasta 4 s). Recién ahí la dirección pasa a ser la pública. Lo mismo al quedar de host por migración (`takeOverHost`, [network_failover.go](internal/ui/network_failover.go)). Mientras tanto, el menú "Invitar" (`showInviteMenu` → `hostInviteOptions`, [ui_invite.go](internal/ui/ui_invite.go)) solo muestra "Internet · …" si la dirección actual pasa `isInternetAddr`: durante esos segundos ofrece **solo** las LAN/VPN y no avisa que falta la de Internet. Captura del 2026-11-11: el menú con "LAN/VPN · Radmin VPN · 26.77.45.242:47830" y "LAN/VPN · Ethernet 4 · 192.168.1.37:47830", sin "Internet". El único aviso es "Sala abierta en UDP %d; buscando IP pública..." en la barra de estado, fácil de no ver (y se puede apagar con `show_status_bar`).
 
-**Internet es el camino principal (decisión de Coffee).** Sin el check de C7, la gente va a usar "Internet", que es lo cómodo. LAN/VPN es una alternativa para quien no puede recibir conexiones por internet (router sin UPnP, CGNAT) y sí o sí quiere usar la app. Por eso: mientras se obtiene la IP pública no se sugiere LAN/VPN (es cuestión de esperar), y cuando internet falla, los avisos dicen primero cómo arreglarlo y recién al final mencionan LAN/VPN como última opción.
+**Internet es el camino principal (decisión de Coffee).** Sin el check de C7, la gente va a usar "Internet", que es lo cómodo. LAN/VPN es una alternativa para quien no puede recibir conexiones por internet (router sin UPnP, CGNAT) y sí o sí quiere usar la app. Por eso: mientras se obtiene la IP pública no se sugiere LAN/VPN (es cuestión de esperar), y cuando internet falla, los avisos dicen primero cómo arreglarlo y recién al final mencionan LAN/VPN como última opción. **(2026-11-13: C8 cambia esto: las LAN/VPN se muestran por defecto; Internet sigue primero.)**
 
 ### C6. "Invitar": "Obteniendo IP pública…" en naranja mientras se abre el puerto
 
