@@ -55,6 +55,10 @@ func (a *App) handleChatPacket(payload []byte) {
 		if envelope.Sound != nil && a.netAssetOK(assets.KindSound, envelope.Sound.ID, envelope.Sound.Ext, "") {
 			a.playIncomingSound(*envelope.Sound)
 		}
+	case room.SoundStopMessage:
+		// "Detener para todos" de alguien de la sala (el host lo procesa una vez y lo reenvía al
+		// resto en receiveLoop; a quien lo mandó no le vuelve).
+		a.cancelSounds()
 	}
 }
 

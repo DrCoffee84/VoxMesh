@@ -231,6 +231,8 @@ func (a *App) playEventSound(sfx []byte) {
 	}
 }
 
+// stopSoundboard corta lo que suena en esta PC ("Detener" y su atajo, y la vista previa del
+// recorte). No avisa a la sala.
 func (a *App) stopSoundboard() {
 	a.soundMu.RLock()
 	player := a.soundPlayer
@@ -238,6 +240,33 @@ func (a *App) stopSoundboard() {
 	if player != nil {
 		player.Clear()
 	}
+}
+
+// cancelSounds corta la botonera y descarta los sonidos que se estaban bajando para sonar
+// (pendingPlays): la descarga sigue y se guarda en disco, pero no suena al llegar. Es lo que hace
+// un sound_stop recibido y "Detener para todos" en la PC propia.
+func (a *App) cancelSounds() {
+	a.soundMu.Lock()
+	player := a.soundPlayer
+	clear(a.pendingPlays)
+	a.soundMu.Unlock()
+	if player != nil {
+		player.Clear()
+	}
+}
+
+// stopSoundsForAll es "Detener para todos" (botón y atajo): corta acá y manda sound_stop a la
+// sala por el mismo camino que sound_play (un cliente al host, que lo reenvía; el host a todos).
+// Cualquiera de la sala lo puede mandar.
+func (a *App) stopSoundsForAll() {
+	go func() {
+		a.cancelSounds()
+		payload, err := room.Encode(room.Envelope{Kind: room.SoundStopMessage})
+		if err == nil {
+			a.sendChatPayload(payload)
+		}
+		logging.Infof("Sonidos detenidos para todos")
+	}()
 }
 
 // startAudio abre los dispositivos de la sala (lento: correr fuera del hilo de UI y de

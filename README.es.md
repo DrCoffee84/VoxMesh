@@ -49,7 +49,7 @@ La primera vez que abrís la app te pide tu nombre (así te ven los demás); lo 
 - **Invitar por LAN, Radmin, Tailscale o ZeroTier**: en **Invitar**, debajo de Internet, están las direcciones de tus redes, marcadas "(misma red o VPN)". Solo sirven si están en la misma red o VPN; por internet usá la de **Internet**. Si no las usás, podés ocultarlas apagando **Mostrar direcciones LAN/VPN al invitar** en Ajustes → Interfaz y Sistema.
 - Cualquiera de la sala puede invitar con el mismo botón: sirve para el que llega tarde o para el que se cayó y quiere volver. La invitación deja de valer cuando alguien vuelve a tocar "Iniciar sala".
 - En Ajustes (⚙️) elegís tu nombre, micrófono y auriculares, el filtro de ruido y el volumen de cada amigo. Los cambios se escuchan al instante, pero se guardan recién con **Guardar**.
-- También tiene chat con imágenes y una botonera de sonidos con atajos de teclado.
+- También tiene chat con imágenes y una botonera de sonidos con atajos de teclado. **Detener** corta el sonido solo en tu PC; **Detener para todos** lo corta en la de todos los de la sala (sirve si alguien mandó uno largo sin querer).
 - **Compartir pantalla**, pensado para ayudar a un amigo a configurar algo: el botón **Compartir** de arriba comparte tu pantalla (si tenés varias, elegís cuál, y la resolución) y los demás tocan **Ver pantalla** en tu avatar para verla en una ventana aparte, ajustada o en tamaño real para leer letra chica. Solo la ve quien la abre, y mientras compartís una barra te lo recuerda (ahí podés cambiar la resolución) y un punto rojo aparece sobre el botón de VoxMesh en la barra de tareas, aunque esté minimizado.
 
 ## ¿Es seguro?

@@ -169,8 +169,9 @@ Solo si aparece el problema: **R1** (data race del estado de la sala, ver "Si ap
 
 ### F6. "Detener" corta el sonido para todos
 
-- [ ] **Pedido (Coffee)**: cuando él o cualquiera toca "Detener" (o su atajo), que el sonido se corte para todos. A veces manda un audio largo por error y, si lo detiene él, los demás lo siguen escuchando.
-- **Hoy**:
+- [x] **Pedido (Coffee)**: cuando él o cualquiera toca "Detener" (o su atajo), que el sonido se corte para todos. A veces manda un audio largo por error y, si lo detiene él, los demás lo siguen escuchando.
+  - **Hecho** (2026-11-13): al ver el plan, Coffee pidió **dos botones**: "Detener" queda como estaba (solo esta PC, con su atajo) y abajo "Detener para todos". `room.SoundStopMessage = "sound_stop"` ([protocol.go](internal/room/protocol.go)), sin datos, por `PacketChat` como `sound_play` (el host lo procesa una vez y lo reenvía; a quien lo mandó no le vuelve). [audio_bridge.go](internal/ui/audio_bridge.go): `stopSoundboard` sigue local (también lo usa la vista previa del recorte, que no tiene que cortar la sala); `cancelSounds` hace `Clear()` y vacía `pendingPlays` (un sonido que se estaba bajando se guarda al llegar pero no suena); `stopSoundsForAll` (botón, en una goroutine) corta acá y manda el mensaje. `handleChatPacket` ([network_sync.go](internal/ui/network_sync.go)) llama a `cancelSounds`. Botón `sound.stop_all` a todo el ancho debajo de "Detener" ([ui_soundboard.go](internal/ui/ui_soundboard.go)). No se avisa quién cortó (el mensaje no lleva identidad y el cliente lo recibe reenviado por el host). Test `TestSoundStopForEveryone` (host → socket → otra App: `PacketChat` con `sound_stop` y `pendingPlays` vacío en los dos). **Quedó afuera**: un atajo propio para "Detener para todos": con el botón de atajo al lado, "Detener para todos" no entra en los 280 px de la botonera (pide 175 px y quedan 126). Si se quiere, va con otro armado de esa fila.
+- **Hoy** (antes de F6):
   - La botonera suena por un `audio.Player` aparte del Engine (`a.soundPlayer`, [audio_bridge.go](internal/ui/audio_bridge.go)). `stopSoundboard` solo hace `player.Clear()` en la PC propia.
   - Reproducir manda `room.SoundPlayMessage` por `PacketChat` (`triggerSound` → `sendChatPayload`; el host lo reenvía) y cada uno lo toca en `playIncomingSound`.
   - Si el audio se está bajando, queda en `pendingPlays` y suena cuando llega.
@@ -560,6 +561,12 @@ Las anteriores se hicieron todas el 2026-11-02 y salieron bien (resumen en "Hist
   - Maximizada al abrir: el diálogo queda centrado. En español también.
 
 - [ ] **C12. Cruz y Esc en la imagen ampliada** (2026-11-13): abrir una imagen del chat → la ✕ arriba a la derecha se ve (también sobre una imagen clara y en una muy ancha o muy alta) y cierra; Esc cierra, también si antes estabas escribiendo en el chat (al cerrar, el cursor sigue en el chat); tocar la imagen o afuera sigue cerrando; abrir y cerrar seguido varias veces no traba la ventana.
+
+- [ ] **F6. "Detener para todos"** (2026-11-13), con dos instancias (host y cliente) y un sonido largo:
+  - El que lo mandó toca "Detener para todos": se corta en las dos. Lo mismo tocándolo desde la otra instancia (la que no lo mandó), como host y como cliente.
+  - "Detener" (y su atajo) sigue cortando solo en la PC propia; la vista previa del recorte ("⏹ Detener") no corta a nadie más.
+  - Un sonido que la otra instancia todavía no tiene (recién agregado y borrado de su carpeta, o uno largo por internet): tocarlo y enseguida "Detener para todos" mientras se baja → no arranca cuando termina de llegar; tocarlo de nuevo después suena desde el disco.
+  - El botón se ve entero en inglés y en español.
 
 - [ ] **F5. Pantalla compartida**, lo que no se pudo probar en una sola PC (incluye la segunda vuelta del 2026-11-04: por internet el log tiene que decir "ritmo de internet"; el cursor tiene que verse fluido y en el lugar justo, también el de texto, que va negro con borde blanco):
   - Windows al **125 % y 150 %** (Configuración → Pantalla → Escala) en quien comparte y en quien mira: la captura sale entera y del tamaño físico (`go test -run TestMonitorsArePhysicalPixels -v ./internal/screen/` con ese escalado) y en "Tamaño real (1:1)" la letra chica se lee igual que en la pantalla original.

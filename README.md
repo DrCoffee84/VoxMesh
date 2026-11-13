@@ -49,7 +49,7 @@ The first time you open the app it asks for your name (that's how others see you
 - **Inviting over LAN, Radmin, Tailscale or ZeroTier**: in **Invite**, below Internet, are the addresses of your networks, marked "(same network or VPN)". They only work on the same network or VPN; over the internet use the **Internet** one. If you don't use them, you can hide them by turning off **Show LAN/VPN addresses when inviting** in Settings → Interface and system.
 - Anyone in the room can invite with the same button: handy for someone who arrives late or dropped out and wants back in. The invite stops working when someone clicks "Start room" again.
 - In Settings (⚙️) you pick your name, microphone and headphones, the noise filter and each friend's volume. Changes are heard right away, but they're only saved with **Save**.
-- It also has chat with images and a soundboard with keyboard shortcuts.
+- It also has chat with images and a soundboard with keyboard shortcuts. **Stop** stops the sound only on your PC; **Stop for everyone** stops it for everyone in the room (handy when someone played a long one by mistake).
 - **Screen sharing**, made for helping a friend set something up: the **Share** button at the top shares your screen (you choose which one if you have several, and the resolution), and the others click **View screen** on your avatar to see it in its own window, fitted or at actual size to read small text. Only people who click it can see it, and while you're sharing a bar reminds you (you can change the resolution there) and a red dot shows on VoxMesh's taskbar button, even minimized.
 
 ## Is it safe?

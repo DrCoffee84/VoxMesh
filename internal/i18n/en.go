@@ -370,6 +370,7 @@ var en = map[string]string{
 	"sound.block_others":          "Mute others' sounds",
 	"sound.volume":                "Volume",
 	"sound.stop":                  "Stop",
+	"sound.stop_all":              "Stop for everyone",
 	"sound.search_placeholder":    "Search sounds…",
 	"sound.add":                   "Add sound",
 	"sound.title":                 "Sounds",

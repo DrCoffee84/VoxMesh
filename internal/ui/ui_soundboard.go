@@ -65,6 +65,10 @@ func (a *App) buildSoundPanel() {
 	stopActions := container.NewHBox(stopBindWrap, delSpacer)
 	stopRow := container.NewBorder(nil, nil, nil, stopActions, stopButton)
 
+	// "Detener" (y su atajo) corta solo acá; este corta para toda la sala (sound_stop). Va a todo
+	// el ancho: con el botón de atajo al lado el texto no entra en la columna.
+	stopAllButton := widget.NewButtonWithIcon(i18n.T("sound.stop_all"), theme.MediaStopIcon(), a.stopSoundsForAll)
+
 	searchEntry := widget.NewEntry()
 	searchEntry.SetPlaceHolder(i18n.T("sound.search_placeholder"))
 	clearSearch := widget.NewButtonWithIcon("", theme.CancelIcon(), func() { searchEntry.SetText("") })
@@ -85,6 +89,7 @@ func (a *App) buildSoundPanel() {
 		muteCheck,
 		volRow,
 		stopRow,
+		stopAllButton,
 		searchEntry,
 		widget.NewSeparator(),
 	)

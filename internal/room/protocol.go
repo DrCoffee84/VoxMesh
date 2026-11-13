@@ -18,6 +18,9 @@ const (
 	SoundAddMessage     = "sound_add"
 	SoundRemoveMessage  = "sound_remove"
 	SoundPlayMessage    = "sound_play"
+	// SoundStopMessage (PacketChat, el host lo reenvía como sound_play): "Detener para todos". Sin
+	// datos: quien lo recibe corta la botonera y descarta los sonidos que se estaban bajando.
+	SoundStopMessage = "sound_stop"
 	// SoundSyncRequestMessage (cliente → host, PacketChatSync): sonidos que el cliente tiene en
 	// disco + sus lápidas. SoundSyncResponseMessage (host → cliente): lista completa de la sala +
 	// lápidas. Solo metadata: el audio se pide con AssetMissing cuando alguien lo toca.
