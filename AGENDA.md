@@ -33,16 +33,17 @@ Cada tarea tiene un **ID** (`S7`, `F1`...) y está escrita para que un chat nuev
 
 ### Prioridad (2026-11-13)
 
-Va antes que todo lo demás. Detalle en "Próximo: cómoda para usuarios comunes". **Un chat por fila**, en este orden. C8 + C9, C10 + C11 + C12 y F6 + F7 hechos el 2026-11-13 (falta probarlos a mano); de paso apareció C17 (el registro de actividad queda oculto dentro de la sala).
+Va antes que todo lo demás. Detalle en "Próximo: cómoda para usuarios comunes". **Un chat por fila**, en este orden. C8 + C9, C10 + C11 + C12 y F6 + F7 hechos el 2026-11-13 (falta probarlos a mano); de paso apareció C17 (el registro de actividad queda oculto dentro de la sala). El 2026-11-13 se sumó C18 (gráfico de lag): va con C13 en la fila 4 y C14 pasa a su propia fila.
 
 | # | IDs | Qué, en simple | Tamaño |
 |---|-----|----------------|--------|
 | 1 | **C8 + C9** | "Invitar" muestra todas las direcciones de entrada, dice "Abriendo puerto…" y el error del puerto va en rojo; en Ajustes, cuánto dura el puerto abierto (8 h por defecto) y el registro avisa cuándo vence | Mediano. Mismos archivos que C6 (`host_network.go`, `configureHostNetwork`, `Params`) |
 | 2 | **C10 + C11 + C12** | "Acerca de" (versión, commit, autor); al abrir la app con el nombre "Usuario", pedir uno (con "No volver a preguntar"); cruz para cerrar la imagen ampliada | Chico |
 | 3 | **F6 + F7** | "Detener para todos" corta el sonido en toda la sala; botón para ensordecer (no escuchar lo que llega sin salir de la llamada) | Mediano. F6 suma un mensaje de red; F7 toca el Engine |
-| 4 | **C13 + C14** | El registro de actividad avisa el lag largo (desde cuándo y cuánto duró) y los problemas que hoy solo van al log o a la barra (dispositivo, celular, micrófono que pierde audio…), cada uno con cómo arreglarlo | Mediano |
-| 5 | **C15** | Paletas de colores en Ajustes: naranja para lo que resalta, plantillas y paletas propias | Grande. Antes que C16 |
-| 6 | **C16** | Lavado de cara de toda la app (botones, Ajustes) sin perder el estilo clásico de escritorio | Grande. Al final: cubre los botones nuevos de las filas anteriores |
+| 4 | **C18 + C13** | Gráfico del lag debajo de cada nombre (oculto por defecto, un ícono lo muestra; toda la sesión en memoria) y el registro avisa el lag largo (desde cuándo y cuánto duró) | Mediano-grande. C18 suma un mensaje del host (los ms de cada uno); C13 lee las mismas muestras |
+| 5 | **C14** | Los problemas que hoy solo van al log o a la barra (dispositivo, celular, micrófono que pierde audio…), en el registro y con cómo arreglarlos | Mediano |
+| 6 | **C15** | Paletas de colores en Ajustes: naranja para lo que resalta, plantillas y paletas propias | Grande. Antes que C16 |
+| 7 | **C16** | Lavado de cara de toda la app (botones, Ajustes) sin perder el estilo clásico de escritorio | Grande. Al final: cubre los botones nuevos de las filas anteriores |
 
 ### Prioridad anterior (2026-11-11)
 
@@ -96,7 +97,7 @@ Solo si aparece el problema: **R1** (data race del estado de la sala, ver "Si ap
 
 # Próximo: cómoda para usuarios comunes (2026-11-13)
 
-**Contexto común.** La app anda estable (Coffee, 2026-11-13: "nunca más falló, se reinició ni nada"). Lo que sigue es que la use gente que no es técnica: un amigo de Coffee es la vara ("hay cosas que eran una paja"). Si algo le cuesta, es un error de la app. Casi todo es UI. Cambian la funcionalidad F7 (ensordecer, a propósito), F6 (un mensaje de red nuevo, `sound_stop`) y C9 (la duración del puerto pasa a ser configurable). El orden y los grupos están en la tabla "Prioridad (2026-11-13)".
+**Contexto común.** La app anda estable (Coffee, 2026-11-13: "nunca más falló, se reinició ni nada"). Lo que sigue es que la use gente que no es técnica: un amigo de Coffee es la vara ("hay cosas que eran una paja"). Si algo le cuesta, es un error de la app. Casi todo es UI. Cambian la funcionalidad F7 (ensordecer, a propósito), F6 (un mensaje de red nuevo, `sound_stop`), C9 (la duración del puerto pasa a ser configurable) y C18 (un mensaje nuevo: el host les manda a los clientes los ms de cada uno). El orden y los grupos están en la tabla "Prioridad (2026-11-13)".
 
 **Regla del registro de actividad** (C8, C9, C13, C14; la misma que C6):
 - Solo local: `addActivity`, nunca `addSystemMessage`.
@@ -199,6 +200,54 @@ Solo si aparece el problema: **R1** (data race del estado de la sala, ver "Si ap
 - **Tests**: `mix` ensordecido da ceros y el jitter buffer avanza igual (cgo); el toggle restaura el mute.
 - **Docs**: AGENT.md §3.E2 (o una §3.E5 nueva), README.
 
+### C18. Gráfico de lag por participante (debajo del nombre, oculto por defecto)
+
+- [ ] **Pedido (Coffee, 2026-11-13)**: un gráfico del lag de cada uno, para ver cuándo y cuánto, antes de la línea del registro (C13). Debajo de cada nombre, para mostrar u ocultar con un solo ícono: la leyenda "Mostrar detalle de lag" aparece solo al pasar el mouse. "No me gusta cuando se pierde info."
+- **Hoy** (verificado el 2026-11-13; buscar por nombre):
+  - **RTT**: Ping/Pong cada 2 s. El host mide a cada uno (`pingPeers`, [network.go](internal/ui/network.go)); el cliente, solo al host (`room.ActPing` desde `failoverLoop`). Llega a `updatePeerLag` ([peers.go](internal/ui/peers.go)), que pisa el valor: no queda historia.
+  - **Pérdida y jitter** por emisor cada 2 s (`netStatsInterval`, `updatePeerNetStats` desde `audioMonitorLoop`). Los mide cada uno con su jitter buffer y también se pisan.
+  - Como cliente, el chip de los que no son host dice "… ms" (`formatPeerLag` con `lag` 0): nadie le pasa ese número.
+  - El estado de la sala (`broadcastRoomState`) se manda solo cuando cambia algo, no cada 2 s.
+  - `room.ParticipantID` es un hash de nombre + IP:puerto: si alguien se reconecta desde otro puerto, tiene otro ID.
+  - En disco ya hay un "modo debug": con nivel de log 1 se escriben los intervalos de 10 s con problemas; con nivel 2, todos.
+- **Decidido con Coffee (2026-11-13)**:
+  - Arranca **oculto**. Un solo ícono en la barra de participantes lo muestra u oculta. La leyenda va solo como tooltip ("Mostrar detalle de lag" / "Ocultar detalle de lag", con `a.tooltip` como `bindButton`). Se guarda en la config: grupo "Otros" (lo escribe el ícono, no Ajustes), por ejemplo `show_lag_graph`.
+  - La tira del chip muestra los **últimos 5 min**.
+  - Se guarda el historial de **toda la sesión en memoria**, sin archivos, y se borra **al cerrar la app**. Sobrevive a salir y volver a entrar a la sala, a la migración de host y a las reconexiones.
+    - Costo: una muestra cada 2 s, unos 8 bytes, o sea ~15 KB/h por persona. 8 h con 5 personas son menos de 1 MB.
+    - Tope de seguridad: 24 h por persona (ring buffer).
+  - Cada uno guarda **solo lo que mide él**:
+    - El host ve el historial completo de todos (ms, pérdida y jitter).
+    - El cliente tiene el historial completo del host. De los demás, solo pérdida y jitter.
+  - Los ms de los demás, del lado del cliente: el host manda **solo el número actual**, no el historial. El cliente lo muestra en el chip en lugar de "… ms" y no lo guarda en su historial.
+- **Arreglo propuesto**:
+  - **`lagHistory`** (archivo nuevo, por ejemplo `lag_history.go`):
+    - Por participante, muestras {hora, ms, pérdida, jitter}, con los huecos marcados para no unir dos tramos con una línea.
+    - Indexado por **nombre** (lo que ve el usuario), así una reconexión sigue en el mismo gráfico. Decidir en el plan cómo se trata "Usuario (2)".
+    - Tiene su propio mutex. Lo alimentan `updatePeerLag` y `updatePeerNetStats`, no el hilo de UI.
+    - Pura y testeada: agregar, tope, huecos, ventana de 5 min y resumen (máximo y promedio).
+  - **La tira del chip** (`newPeerChip`):
+    - Va debajo del nombre, del ancho del slider de volumen (110 px) y de unos 16 px de alto. El chip propio no lleva tira.
+    - Una barrita por muestra: el alto son los ms y el color es el semáforo del chip, con las constantes compartidas con `formatPeerLag`. La pérdida va como una marca arriba.
+    - Con el mouse encima, un tooltip con la muestra bajo el puntero: "21:34 · 350 ms · 8 % de pérdida".
+    - Se dibuja con un solo `canvas.Raster` (o una imagen), no con 150 rectángulos, y se refresca solo si está visible.
+  - **El gráfico grande**, al tocar la tira (ventana o popup, decidir en el plan):
+    - Toda la sesión: línea de ms, barras de pérdida y franjas de fondo con los umbrales (80/200/400 ms).
+    - Rango: 5 min, 1 h o todo.
+    - Los tramos de lag de C13, marcados.
+    - Dibujo propio, sin dependencias nuevas.
+  - **Mensaje nuevo del host**:
+    - Solo hacia los clientes, cada 2 s (desde `pingPeers`): ID → ms en enteros.
+    - En un envelope chico, no en el estado de la sala, que se manda solo cuando cambia algo.
+    - Seguridad (§K): se acepta solo del host actual. Sin compatibilidad hacia atrás (todos actualizan).
+    - Decidir en el plan cómo marca el chip del cliente que es el lag de Pepe con el host (por ejemplo, "≈ 120 ms").
+- **Tests**: `lagHistory` (agregar, tope de 24 h, huecos, ventana y resumen); muestra → color, con los mismos umbrales que el chip; el despacho del mensaje nuevo, aceptado solo del host.
+- **Pruebas a mano**:
+  - Un host y dos clientes. Cortar el Wi-Fi de uno y mirar la tira y el gráfico grande en el host y en el otro cliente.
+  - Que reconecte y siga en el mismo gráfico.
+  - Ocultar, cerrar la app y volver a abrirla: tiene que seguir oculto, y el historial, vacío.
+- **Docs**: AGENT.md §3.A ("Measurement") y el mensaje nuevo en el protocolo; README ("detalle de lag").
+
 ### C13. Lag prolongado en el registro de actividad
 
 - [ ] **Pedido (Coffee)**: cuando hay mucho lag por un rato largo, que el registro diga desde cuándo. Fijarse a partir de cuánto deja de ser normal.
@@ -212,6 +261,7 @@ Solo si aparece el problema: **R1** (data race del estado de la sala, ver "Si ap
   - Al empezar, **una** línea: "Hay lag con Pepe desde las 21:34 (350 ms, 8 % de pérdida)". Al volver a lo normal por ≥ 10 s, **otra**: "Se normalizó la conexión con Pepe (duró 1 min 20 s; lo peor: 600 ms, 12 %)". Con histéresis, para que no alterne.
   - Ayuda corta: si es siempre la misma persona, suele ser su Wi-Fi o alguien descargando en su red; si pasa con todos, es la propia.
   - El cliente solo mide al host: el texto dice "con el host (Pepe)".
+  - **Va después de C18, en el mismo chat**: `lagWatch` lee las muestras de `lagHistory` (no mide nada nuevo). Los tramos que detecta se marcan en el gráfico grande, y la línea del registro remite al gráfico, por ejemplo "…; tocá su gráfico de lag para ver el detalle". En el cliente, para los demás, decidir en el plan si usa el número que manda el host (C18) más la pérdida que mide él, o solo la pérdida.
 - **Tests**: la máquina entra, no entra por un pico corto, sale y no alterna. **Docs**: AGENT.md §3.A ("Measurement").
 
 ### C14. Problemas que le importan al usuario, en el registro y con cómo arreglarlos
