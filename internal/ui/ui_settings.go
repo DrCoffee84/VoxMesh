@@ -647,6 +647,7 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 	checkUpdatesButton := widget.NewButtonWithIcon(i18n.T("settings.check_updates"), theme.ViewRefreshIcon(), func() {
 		go a.checkForUpdates(true)
 	})
+	aboutButton := widget.NewButtonWithIcon(i18n.T("about.title"), theme.InfoIcon(), a.showAbout)
 	logLevelLabel := widget.NewLabel(i18n.T("settings.log_level"))
 	// Sin "solo errores": con el nivel normal el log ya dice qué pasó (estado, dispositivos,
 	// conexiones) cuando alguien que no es dev manda el archivo.
@@ -678,6 +679,7 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 		openDataDirButton,
 		openLogsDirButton,
 		checkUpdatesButton,
+		aboutButton,
 	))
 	settingsBody := container.NewVScroll(container.NewVBox(
 		profileCard,

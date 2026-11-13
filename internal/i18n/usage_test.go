@@ -9,7 +9,7 @@ import (
 )
 
 // keyLiteral es un literal de Go que tiene forma de clave del catálogo ("main.connect").
-var keyLiteral = regexp.MustCompile(`"((?:common|main|status|chat|settings|sound|hotkey|room|phone|update|err|device|default|profile|conn|invite|audio|file|screen)(?:\.[a-z0-9_]+)+)"`)
+var keyLiteral = regexp.MustCompile(`"((?:common|main|status|chat|settings|sound|hotkey|room|phone|update|err|device|default|profile|conn|invite|audio|file|screen|about)(?:\.[a-z0-9_]+)+)"`)
 
 // TestKeysUsedInCode: toda clave que usa el código está en el catálogo (si no, la pantalla
 // mostraría la clave) y toda clave del catálogo se usa en algún lado. Las de los parámetros

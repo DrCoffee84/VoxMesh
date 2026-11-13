@@ -9,7 +9,7 @@ Chat de voz y texto para jugar o charlar con amigos, en **Windows**. Es un solo 
 - 💻 **PC (Windows 10 u 11):** [**Descargar VoxMesh para Windows**](https://github.com/DrCoffee84/VoxMesh/releases/latest/download/voxmesh.exe)
 - 📱 **Celular como micrófono** (Android, opcional): [**Descargar VoxMesh Mic**](https://github.com/DrCoffee84/VoxMesh/releases/download/v1.0.0/voxmesh-mic.apk)
 
-La app de la PC se actualiza sola: cuando sale una versión nueva, te pregunta si querés instalarla. **Todos los de la sala tienen que tener la misma versión.**
+La app de la PC se actualiza sola: cuando sale una versión nueva, te pregunta si querés instalarla. **Todos los de la sala tienen que tener la misma versión.** Para ver cuál tenés, tocá la versión abajo a la derecha (o Ajustes → Interfaz y Sistema → **Acerca de VoxMesh**).
 
 ## Instalar en la PC
 

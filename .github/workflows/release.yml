@@ -70,7 +70,8 @@ jobs:
           }
           New-Item -ItemType Directory -Path "dist" -Force | Out-Null
           $tag = "${{ github.ref_name }}"
-          go build -trimpath -tags nolibopusfile -ldflags "-s -w -H windowsgui -linkmode external -extldflags -static -X voxmesh/internal/version.Value=$tag" -o dist/voxmesh.exe ./cmd/voxmesh
+          $commit = (git rev-parse --short HEAD)
+          go build -trimpath -tags nolibopusfile -ldflags "-s -w -H windowsgui -linkmode external -extldflags -static -X voxmesh/internal/version.Value=$tag -X voxmesh/internal/version.Commit=$commit" -o dist/voxmesh.exe ./cmd/voxmesh
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # El updater compara el exe bajado contra este hash (formato sha256sum, ASCII sin BOM).
           $hash = (Get-FileHash dist/voxmesh.exe -Algorithm SHA256).Hash.ToLower()

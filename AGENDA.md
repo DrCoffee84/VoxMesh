@@ -138,7 +138,8 @@ Solo si aparece el problema: **R1** (data race del estado de la sala, ver "Si ap
 
 ### C10. "Acerca de"
 
-- [ ] **Pedido (Coffee)**: un botón "Acerca de" con la versión y el autor (git).
+- [x] **Pedido (Coffee)**: un botón "Acerca de" con la versión y el autor (git).
+  - **Hecho** (2026-11-13): `version.Commit` + `version.CommitText()` ("dev" si está vacío, test `TestCommitText`), inyectado con `-X voxmesh/internal/version.Commit=$(git rev-parse --short HEAD)` en [build.ps1](build.ps1) y [release.yml](.github/workflows/release.yml). Diálogo en [ui_about.go](internal/ui/ui_about.go) (`showAbout` → `aboutContent`): ícono, "VoxMesh", "Versión X · commit Y" (`aboutVersionText`), "Hecho por **DrCoffee84**" con link a `https://github.com/DrCoffee84/VoxMesh`, "Licencia MIT", "Buscar actualizaciones" (deja el diálogo abierto: el resultado sale encima) y "Cerrar". Se abre desde el botón "Acerca de VoxMesh" de Ajustes → Interfaz y Sistema (debajo de "Buscar actualizaciones", uno por renglón como dice C4) y tocando la versión de la barra de estado, que pasó de `Label` a botón chato. Textos con el prefijo nuevo `about.` (sumado a `keyLiteral`). Test `TestAboutContent` (es/en, con y sin commit, link y botón). **Quedó afuera**: el nombre real (está en LICENSE); el commit no marca si el build tenía cambios sin commitear.
 - **Hoy**: la versión aparece en la barra de estado (`buildVersion`, que se puede ocultar) y sale de `version.Value`, que inyectan `build.ps1` y `release.yml` con `-X voxmesh/internal/version.Value=…`. No hay commit ni autor.
 - **Arreglo propuesto**:
   - Botón "Acerca de VoxMesh" en Ajustes → "Interfaz y Sistema", al lado de "Buscar actualizaciones". Tocar la versión en la barra de estado también lo abre.
@@ -547,6 +548,8 @@ Las anteriores se hicieron todas el 2026-11-02 y salieron bien (resumen en "Hist
   - Dejar la sala abierta esa hora: a lo sumo un minuto después del vencimiento aparece **una** línea "Se cumplió el tiempo del puerto abierto (1 h)…" (y el log `venció el puerto externo`); comprobar si alguien de afuera todavía puede entrar (depende del router).
   - Cerrar la sala o pasar a cliente antes de que venza: no aparece la línea. Al quedar de host por migración, el que queda usa su propia duración.
   - Sin UPnP, sin IP o con CGNAT: la línea del resultado no dice nada del puerto y nunca aparece la de vencido. Todo en inglés también.
+
+- [ ] **C10. "Acerca de"** (2026-11-13): con un exe de `build.ps1`, Ajustes → Interfaz y Sistema → "Acerca de VoxMesh" muestra ícono, "Versión <tag>-dev.<fecha> · commit <hash corto>" (el de `git log -1`), "Hecho por DrCoffee84" (el link abre el repo en el navegador), "Licencia MIT"; "Buscar actualizaciones" muestra el resultado encima y "Cerrar" lo cierra. Tocar la versión abajo a la derecha abre lo mismo. Con un `go build` sin `-X`: "commit dev". En inglés también; el diálogo no ensancha la ventana a ~960 px.
 
 - [ ] **F5. Pantalla compartida**, lo que no se pudo probar en una sola PC (incluye la segunda vuelta del 2026-11-04: por internet el log tiene que decir "ritmo de internet"; el cursor tiene que verse fluido y en el lugar justo, también el de texto, que va negro con borde blanco):
   - Windows al **125 % y 150 %** (Configuración → Pantalla → Escala) en quien comparte y en quien mira: la captura sale entera y del tamaño físico (`go test -run TestMonitorsArePhysicalPixels -v ./internal/screen/` con ese escalado) y en "Tamaño real (1:1)" la letra chica se lee igual que en la pantalla original.

@@ -78,6 +78,7 @@ Requisitos: **Go 1.26+** y **MSYS2 UCRT64** (gcc, libopus y pkg-config; meson, n
    ```powershell
    .\build.ps1
    # → dist\voxmesh.exe, con versión "<último tag>-dev.<fecha>" (los builds dev no buscan actualizaciones al arrancar)
+   #   y el commit (git rev-parse --short HEAD) que muestra "Acerca de VoxMesh"; sin -X dice "commit dev"
    ```
    La primera vez baja y compila WebRTC Audio Processing 1.3 como biblioteca estática (`third_party\webrtc-apm\build.ps1`, menos de un minuto); después, solo si cambia abseil o el script.
 

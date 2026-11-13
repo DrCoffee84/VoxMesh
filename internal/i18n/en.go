@@ -508,6 +508,12 @@ var en = map[string]string{
 	"settings.play_recording_failed": "Couldn't play the recording: %s",
 	"settings.recording_played":      "Recording played.",
 
+	// Acerca de (ui_about.go).
+	"about.title":   "About VoxMesh",
+	"about.version": "Version %s · commit %s",
+	"about.author":  "Made by",
+	"about.license": "MIT License",
+
 	// Error de usuario del celular (error_text.go).
 	"err.phone.no_local_ip": "no private local IP found (connect the PC to Wi-Fi or a LAN)%s",
 

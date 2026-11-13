@@ -40,9 +40,11 @@ $build = (Get-Date -Format "yyyyMMdd-HHmm")
 $tag = (git describe --tags --abbrev=0 2>$null)
 if (-not $tag) { $tag = "v0.0.0" }
 $version = "$($tag.TrimStart('v'))-dev.$build"
+# Commit del build para "Acerca de" (vacío sin git: la app muestra "dev").
+$commit = (git rev-parse --short HEAD 2>$null)
 Write-Host "Compilando VoxMesh con CGO y Fyne UI..." -ForegroundColor Cyan
 
-go build -trimpath -tags nolibopusfile -ldflags "-s -w -H windowsgui -linkmode external -extldflags -static -X voxmesh/internal/version.Value=$version" -o dist/voxmesh.exe ./cmd/voxmesh
+go build -trimpath -tags nolibopusfile -ldflags "-s -w -H windowsgui -linkmode external -extldflags -static -X voxmesh/internal/version.Value=$version -X voxmesh/internal/version.Commit=$commit" -o dist/voxmesh.exe ./cmd/voxmesh
 
 if ($LASTEXITCODE -eq 0) {
     $size = (Get-Item .\dist\voxmesh.exe).Length / 1MB
