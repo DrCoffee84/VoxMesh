@@ -107,7 +107,8 @@ Solo si aparece el problema: **R1** (data race del estado de la sala, ver "Si ap
 
 ### C8. "Invitar": todas las direcciones por defecto, "Abriendo puerto…" y el error del puerto en rojo
 
-- [ ] **Pedido (Coffee)**: que "Invitar" muestre todas las invitaciones de entrada, también las LAN/VPN. Le gusta el renglón naranja de espera, pero que diga también que está abriendo el puerto. Si el puerto no se abre, que salga en rojo en el mismo menú, algo simple tipo "Error al abrir el puerto: mirá el registro".
+- [x] **Pedido (Coffee)**: que "Invitar" muestre todas las invitaciones de entrada, también las LAN/VPN. Le gusta el renglón naranja de espera, pero que diga también que está abriendo el puerto. Si el puerto no se abre, que salga en rojo en el mismo menú, algo simple tipo "Error al abrir el puerto: mirá el registro".
+  - **Hecho** (2026-11-13): `show_lan_invites` con default 1 en `config.Params` (sin migración; la ayuda dice que se pueden ocultar). `inviteOptions` ([host_network.go](internal/ui/host_network.go)): mientras busca, el renglón naranja usa `conn.net_finding`, el mismo texto que la barra y el registro, ahora en el orden real ("Abriendo el puerto y obteniendo la IP pública…"); se borró `invite.finding`. Con `hostNetNoUPnP`, arriba el renglón rojo `invite.port_failed` ("Error al abrir el puerto: mirá el registro de actividad"), que no copia, y abajo "Internet · IP:puerto (puerto sin abrir)" en naranja y copiable, para quien abrió el puerto a mano. Los renglones rojos (también sin IP y CGNAT) llevan `inviteOption.showLog`: tocarlos cierra el popup y muestra la columna del registro (`showConnectionPanels`, [ui_invite.go](internal/ui/ui_invite.go)), porque al entrar a la sala esa columna se oculta (ver C17). `invite.lan` termina en "(misma red o VPN)". Con las LAN/VPN a la vista, "Invitar" siempre abre el popup (`copiesDirectly` quedó igual). Tests `TestInviteOptions` (los renglones de internet en orden, por estado), `TestInviteOptionsTexts` y `TestInviteOptionsCopyNotice`. **Quedó afuera**: el aviso al copiar una LAN/VPN sigue siendo el normal (`invite.copied`).
 - **Hoy** (C6 + C7):
   - `show_lan_invites` tiene default 0 (`config.Params`).
   - `inviteOptions` ([host_network.go](internal/ui/host_network.go)): con `hostNetFinding`, "Obteniendo IP pública…" (`invite.finding`) en naranja; con `hostNetNoUPnP`, "Internet · IP:puerto (puerto sin abrir)" en naranja y copiable (`invite.internet_port_closed`; al copiar, `invite.copied_port_closed`).
@@ -261,6 +262,12 @@ Solo si aparece el problema: **R1** (data race del estado de la sala, ver "Si ap
   - Antes de empezar, juntar con Coffee lo que a su amigo le pareció "una paja".
   - Respetar lo que ya hay: §3.D (`TestMainViewIgnoresLongText`, columnas de ancho fijo, colores del tema) y C4 (con la ventana a ~960 px, Ajustes no la agranda).
 - **Dependencias**: C15 (colores). Va al final para cubrir los botones nuevos de C10 y F7.
+
+### C17. El registro de actividad queda oculto dentro de la sala
+
+- [ ] **Visto en C8 (2026-11-13)**: el "Contexto común" de arriba dice que el registro "siempre está a la vista (columna izquierda, también dentro de la sala)", pero `openHost` y `connectClient` ([ui_connection.go](internal/ui/ui_connection.go)) llaman a `hideConnectionPanels` ([ui_components.go](internal/ui/ui_components.go)), que oculta `a.connectionPanel`: la columna entera, con las tarjetas Host y Cliente **y** la del registro (`activityCard`). Dentro de la sala solo se ve con ☰. Fue a propósito en C3 ("el panel izquierdo se oculta solo"), antes de que el registro fuera el lugar donde la app dice qué hacer (C6, R8, C8, C9, C13, C14).
+- **Por qué importa**: los avisos del host ("no se pudo abrir el puerto…", "se cumplió el tiempo del puerto…") y el de R8 al que entra ("pedile que mire su registro de actividad") apuntan a algo que no está en pantalla. C8 lo emparcha: el renglón rojo de "Invitar" muestra la columna.
+- **Arreglo posible** (decidir con Coffee): al entrar a la sala ocultar solo las tarjetas Host y Cliente y dejar el registro; o mostrar la columna sola cuando llega una línea con un problema. Revisar el ancho (`fixedWidthLayout`, `connectionPanelWidth`) y C16.
 
 # Prioridad: invitar sin errores (2026-11-11)
 
@@ -525,6 +532,13 @@ Las anteriores se hicieron todas el 2026-11-02 y salieron bien (resumen en "Hist
   - Cerrar la sala mientras todavía busca (antes de 15 s): no aparece la línea del resultado y el botón vuelve al ícono de copiar.
   - Apagado: no aparece ninguna 192.168.x ni 26.x en el popup. Prendido: aparecen debajo de Internet (también mientras busca), y la opción queda guardada al reabrir la app. "Descartar" en Ajustes la vuelve atrás.
   - El popup: los renglones que copian se resaltan con el mouse, un clic afuera lo cierra, no se sale de la ventana por la derecha, y se ve bien en inglés y en español.
+
+- [ ] **C8. "Invitar" con todas las direcciones** (2026-11-13, con el exe nuevo):
+  - Instalación nueva (o sin `show_lan_invites` en `voxmesh.json`): el check de Ajustes → Interfaz y Sistema está prendido. Quien ya lo había guardado apagado lo sigue viendo apagado.
+  - Iniciar sala y tocar "Invitar" enseguida: arriba, en naranja, "Abriendo el puerto y obteniendo la IP pública…" (lo mismo que la primera línea del registro); abajo las LAN/VPN con "(misma red o VPN)". Al terminar, Internet arriba y las LAN/VPN abajo; ya no copia directo: siempre abre el popup.
+  - Router sin UPnP (o UPnP apagado): renglón rojo "Error al abrir el puerto: mirá el registro de actividad" y abajo "Internet · IP:puerto (puerto sin abrir)" en naranja. Con la columna izquierda oculta, tocar el rojo cierra el popup y la muestra con el registro; el naranja copia con el aviso del puerto.
+  - Sin internet y CGNAT: tocar el renglón rojo también muestra el registro.
+  - Apagando el check: como antes (sin IPs locales y el renglón gris tras una falla). Todo en inglés también.
 
 - [ ] **F5. Pantalla compartida**, lo que no se pudo probar en una sola PC (incluye la segunda vuelta del 2026-11-04: por internet el log tiene que decir "ritmo de internet"; el cursor tiene que verse fluido y en el lugar justo, también el de texto, que va negro con borde blanco):
   - Windows al **125 % y 150 %** (Configuración → Pantalla → Escala) en quien comparte y en quien mira: la captura sale entera y del tamaño físico (`go test -run TestMonitorsArePhysicalPixels -v ./internal/screen/` con ese escalado) y en "Tamaño real (1:1)" la letra chica se lee igual que en la pantalla original.

@@ -89,15 +89,18 @@ const (
 // inviteOption es un renglón del menú "Invitar" del host.
 type inviteOption struct {
 	label   string
-	address string     // "IP:puerto" que se copia; "" = no se puede elegir
+	address string     // "IP:puerto" que se copia; "" = no se copia nada
 	tone    inviteTone // color del texto
 	copied  i18n.Msg   // aviso al copiar (con address)
+	showLog bool       // al tocarlo muestra el registro de actividad, que dice qué hacer (renglones rojos)
 }
 
-// inviteOptions arma el menú "Invitar" del host. Primero el renglón de internet según el estado;
-// con showLAN (Ajustes, apagado por defecto) también una dirección por interfaz con el puerto
-// donde escucha el socket. Sin showLAN nunca ofrece una IP local: mientras se busca la IP pública
-// solo se espera, y si internet falla, un renglón gris dice dónde activar LAN/VPN.
+// inviteOptions arma el menú "Invitar" del host. Primero internet según el estado: si el puerto
+// no se abrió, un renglón rojo que manda al registro de actividad y abajo la dirección de internet
+// en naranja, para quien lo abrió a mano. Con showLAN (Ajustes, prendido por defecto) también una
+// dirección por interfaz con el puerto donde escucha el socket, debajo de internet. Sin showLAN
+// nunca ofrece una IP local: mientras se busca la IP pública solo se espera, y si internet falla,
+// un renglón gris dice dónde activar LAN/VPN.
 func inviteOptions(n hostNetwork, interfaces []netinfo.InterfaceIP, listenPort int, showLAN bool) []inviteOption {
 	var options []inviteOption
 	failed := true
@@ -108,6 +111,7 @@ func inviteOptions(n hostNetwork, interfaces []netinfo.InterfaceIP, listenPort i
 		options = append(options, inviteOption{label: i18n.T("invite.internet", address), address: address, copied: i18n.M("invite.copied", address)})
 	case hostNetNoUPnP:
 		address := n.public.String()
+		options = append(options, inviteOption{label: i18n.T("invite.port_failed"), tone: toneError, showLog: true})
 		options = append(options, inviteOption{
 			label:   i18n.T("invite.internet_port_closed", address),
 			address: address,
@@ -123,12 +127,13 @@ func inviteOptions(n hostNetwork, interfaces []netinfo.InterfaceIP, listenPort i
 			copied:  i18n.M("invite.copied_double_nat", address, n.public.Port()),
 		})
 	case hostNetNoIP:
-		options = append(options, inviteOption{label: i18n.T("invite.no_public_ip"), tone: toneError})
+		options = append(options, inviteOption{label: i18n.T("invite.no_public_ip"), tone: toneError, showLog: true})
 	case hostNetCGNAT:
-		options = append(options, inviteOption{label: i18n.T("invite.cgnat"), tone: toneError})
+		options = append(options, inviteOption{label: i18n.T("invite.cgnat"), tone: toneError, showLog: true})
 	default:
 		failed = false // es cuestión de esperar unos segundos: no se sugiere LAN/VPN
-		options = append(options, inviteOption{label: i18n.T("invite.finding"), tone: toneWarning})
+		// El mismo texto que la barra de estado y el registro de actividad.
+		options = append(options, inviteOption{label: i18n.T("conn.net_finding"), tone: toneWarning})
 	}
 	if !showLAN {
 		if failed {

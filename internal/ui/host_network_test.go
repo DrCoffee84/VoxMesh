@@ -35,56 +35,64 @@ func testNetwork(state hostNetState) hostNetwork {
 	return n
 }
 
-// Cada estado de la red del host × el check de LAN/VPN: el primer renglón dice cómo está internet;
-// sin el check nunca aparece una IP local, y LAN/VPN se sugiere (en gris) solo cuando internet
-// falló, nunca mientras se espera.
+// Cada estado de la red del host × el check de LAN/VPN: arriba, cómo está internet (si el puerto
+// no se abrió, el error en rojo y abajo la dirección de internet en naranja); sin el check nunca
+// aparece una IP local, y LAN/VPN se sugiere (en gris) solo cuando internet falló, nunca mientras
+// se espera. Los renglones rojos no copian: muestran el registro de actividad.
 func TestInviteOptions(t *testing.T) {
-	type want struct {
-		first     inviteTone
-		copyFirst bool // el renglón de internet se puede copiar
-		lanHint   bool
-		direct    bool // "Invitar" copia sin menú
+	type row struct {
+		tone inviteTone
+		copy bool // copia la IP pública
 	}
 	cases := []struct {
-		state hostNetState
-		want  want
+		state    hostNetState
+		internet []row // los renglones de internet, en orden
+		lanHint  bool
+		direct   bool // "Invitar" copia sin menú
 	}{
-		{hostNetFinding, want{first: toneWarning}},
-		{hostNetReady, want{first: toneNormal, copyFirst: true, direct: true}},
-		{hostNetNoUPnP, want{first: toneWarning, copyFirst: true, lanHint: true}},
-		{hostNetNoIP, want{first: toneError, lanHint: true}},
-		{hostNetCGNAT, want{first: toneError, lanHint: true}},
-		{hostNetDoubleNAT, want{first: toneWarning, copyFirst: true, lanHint: true}},
+		{hostNetFinding, []row{{toneWarning, false}}, false, false},
+		{hostNetReady, []row{{toneNormal, true}}, false, true},
+		{hostNetNoUPnP, []row{{toneError, false}, {toneWarning, true}}, true, false},
+		{hostNetNoIP, []row{{toneError, false}}, true, false},
+		{hostNetCGNAT, []row{{toneError, false}}, true, false},
+		{hostNetDoubleNAT, []row{{toneWarning, true}}, true, false},
 	}
 	for _, c := range cases {
 		for _, showLAN := range []bool{false, true} {
 			network := testNetwork(c.state)
 			options := inviteOptions(network, testInterfaces, testListenPort, showLAN)
-			if len(options) == 0 {
-				t.Fatalf("estado %d, LAN %v: sin renglones", c.state, showLAN)
+			if len(options) < len(c.internet) {
+				t.Fatalf("estado %d, LAN %v: %+v", c.state, showLAN, options)
 			}
-			first := options[0]
-			if first.tone != c.want.first || (first.address != "") != c.want.copyFirst {
-				t.Errorf("estado %d, LAN %v: primer renglón %+v", c.state, showLAN, first)
+			for i, want := range c.internet {
+				got := options[i]
+				if got.tone != want.tone || (got.address != "") != want.copy {
+					t.Errorf("estado %d, LAN %v: renglón %d %+v", c.state, showLAN, i, got)
+				}
+				if want.copy && got.address != network.public.String() {
+					t.Errorf("estado %d: copia %q, quería la IP pública %s", c.state, got.address, network.public)
+				}
+				if got.showLog != (got.tone == toneError) {
+					t.Errorf("estado %d: renglón %d %+v: solo los rojos muestran el registro", c.state, i, got)
+				}
 			}
-			if c.want.copyFirst && first.address != network.public.String() {
-				t.Errorf("estado %d: copia %q, quería la IP pública %s", c.state, first.address, network.public)
-			}
-			wantDirect := c.want.direct && !showLAN
+			wantDirect := c.direct && !showLAN
 			if got := copiesDirectly(options); got != wantDirect {
 				t.Errorf("estado %d, LAN %v: copia directo = %v", c.state, showLAN, got)
 			}
 
 			var lanRows, hints int
-			for _, option := range options[1:] {
+			for _, option := range options[len(c.internet):] {
 				switch {
 				case option.label == i18n.T("invite.lan_hint"):
 					hints++
-					if option.address != "" || option.tone != toneMuted {
-						t.Errorf("estado %d: la sugerencia de LAN/VPN %+v se puede copiar o no es gris", c.state, option)
+					if option.address != "" || option.tone != toneMuted || option.showLog {
+						t.Errorf("estado %d: la sugerencia de LAN/VPN %+v se puede tocar o no es gris", c.state, option)
 					}
 				case option.address != "":
 					lanRows++
+				default:
+					t.Errorf("estado %d: renglón de más %+v", c.state, option)
 				}
 			}
 			for _, option := range options {
@@ -100,14 +108,40 @@ func TestInviteOptions(t *testing.T) {
 				continue
 			}
 			wantHints := 0
-			if c.want.lanHint {
+			if c.lanHint {
 				wantHints = 1
 			}
-			if lanRows != 0 || hints != wantHints || len(options) != 1+wantHints {
+			if lanRows != 0 || hints != wantHints {
 				t.Errorf("estado %d sin LAN: %+v", c.state, options)
 			}
 		}
 	}
+}
+
+// Mientras se busca, el renglón naranja dice lo mismo que la barra de estado y el registro; con el
+// puerto sin abrir, el rojo manda al registro de actividad.
+func TestInviteOptionsTexts(t *testing.T) {
+	finding := inviteOptions(testNetwork(hostNetFinding), nil, testListenPort, false)[0]
+	if finding.label != hostNetMsg(testNetwork(hostNetFinding)).String() {
+		t.Errorf("buscando: %q, quería el texto de la barra de estado", finding.label)
+	}
+	noUPnP := inviteOptions(testNetwork(hostNetNoUPnP), nil, testListenPort, false)
+	if noUPnP[0].label != i18n.T("invite.port_failed") {
+		t.Errorf("puerto sin abrir: primer renglón %q", noUPnP[0].label)
+	}
+	if noUPnP[1].label != i18n.T("invite.internet_port_closed", "181.10.20.30:47831") {
+		t.Errorf("puerto sin abrir: segundo renglón %q", noUPnP[1].label)
+	}
+}
+
+// internetOption es el primer renglón que se puede copiar (el de internet, en los tests sin LAN).
+func internetOption(options []inviteOption) inviteOption {
+	for _, option := range options {
+		if option.address != "" {
+			return option
+		}
+	}
+	return inviteOption{}
 }
 
 // Al copiar: el aviso normal, o el del puerto que falta abrir (en el router, o también en el módem).
@@ -121,7 +155,7 @@ func TestInviteOptionsCopyNotice(t *testing.T) {
 		{hostNetDoubleNAT, "invite.copied_double_nat"},
 	}
 	for _, c := range cases {
-		first := inviteOptions(testNetwork(c.state), nil, testListenPort, false)[0]
+		first := internetOption(inviteOptions(testNetwork(c.state), nil, testListenPort, false))
 		if first.copied.Key != c.key || len(first.copied.Args) == 0 || first.copied.Args[0] != first.address {
 			t.Errorf("estado %d: aviso %s %v, quería %s con %s", c.state, first.copied.Key, first.copied.Args, c.key, first.address)
 		}

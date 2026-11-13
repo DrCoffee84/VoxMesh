@@ -63,7 +63,8 @@ func (a *App) showInviteMenu(button *widget.Button) {
 
 // showInvitePopup (hilo de UI) muestra las opciones debajo del botón. Es un popup propio y no un
 // fyne.Menu: el menú de Fyne pinta todos los renglones con el color del tema (y en gris los
-// deshabilitados, ícono incluido), y acá el estado de la red va en naranja o rojo.
+// deshabilitados, ícono incluido), y acá el estado de la red va en naranja o rojo. Tocar un
+// renglón con dirección la copia; uno rojo muestra el registro de actividad.
 func (a *App) showInvitePopup(button *widget.Button, options []inviteOption, key transport.Key) {
 	target := fyne.CurrentApp().Driver().CanvasForObject(button)
 	if target == nil {
@@ -73,10 +74,17 @@ func (a *App) showInvitePopup(button *widget.Button, options []inviteOption, key
 	rows := make([]fyne.CanvasObject, 0, len(options))
 	for _, option := range options {
 		var onTap func()
-		if option.address != "" {
+		switch {
+		case option.address != "":
 			onTap = func() {
 				pop.Hide()
 				a.copyInvite(option.address, key, option.copied)
+			}
+		case option.showLog:
+			// Dentro de la sala la columna del registro arranca oculta (☰): este renglón la muestra.
+			onTap = func() {
+				pop.Hide()
+				a.showConnectionPanels()
 			}
 		}
 		rows = append(rows, newInviteRow(option.label, inviteToneColor(option.tone), onTap))
