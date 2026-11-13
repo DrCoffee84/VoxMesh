@@ -33,7 +33,7 @@ Cada tarea tiene un **ID** (`S7`, `F1`...) y está escrita para que un chat nuev
 
 ### Prioridad (2026-11-13)
 
-Va antes que todo lo demás. Detalle en "Próximo: cómoda para usuarios comunes". **Un chat por fila**, en este orden. C8 + C9 hechos el 2026-11-13 (falta probarlos a mano); de paso apareció C17 (el registro de actividad queda oculto dentro de la sala).
+Va antes que todo lo demás. Detalle en "Próximo: cómoda para usuarios comunes". **Un chat por fila**, en este orden. C8 + C9 y C10 + C11 + C12 hechos el 2026-11-13 (falta probarlos a mano); de paso apareció C17 (el registro de actividad queda oculto dentro de la sala).
 
 | # | IDs | Qué, en simple | Tamaño |
 |---|-----|----------------|--------|
@@ -162,7 +162,8 @@ Solo si aparece el problema: **R1** (data race del estado de la sala, ver "Si ap
 
 ### C12. Cruz para cerrar la imagen ampliada
 
-- [ ] **Pedido (Coffee)**: al abrir una imagen del chat falta la cruz para cerrarla.
+- [x] **Pedido (Coffee)**: al abrir una imagen del chat falta la cruz para cerrarla.
+  - **Hecho** (2026-11-13): `showLightbox` ([ui_components.go](internal/ui/ui_components.go)) suma un botón con `theme.CancelIcon()` en una capa encima de la imagen, arriba a la derecha (la imagen conserva todo el tamaño; el botón tiene fondo, así se ve sobre una imagen clara; lo vacío de la capa no toma clics). Esc: el contenido del popup es `lightboxView` (Focusable), que toma el foco al abrirse; en Fyne 2.6.3 cada popup tiene su propio manejador de foco y se va con él, así que no hay nada que soltar y el foco vuelve a lo que lo tenía. Tocar la imagen o afuera sigue cerrando. §3.G igual (decodificación en goroutine, `pop.Visible()`). Test `TestLightboxCloses` (Esc por el foco del canvas, la cruz, la imagen; el foco vuelve). **Quedó afuera**: nada del pedido (no hay flechas para pasar a otra imagen ni zoom, que no se pidieron).
 - **Hoy**: `showLightbox` ([ui_components.go](internal/ui/ui_components.go)) es un `widget.PopUp` con la imagen (`newTappableImage`). Solo se cierra tocando la imagen o fuera de ella: no hay botón ni Esc.
 - **Arreglo propuesto**: un botón con `theme.CancelIcon()` arriba a la derecha, encima de la imagen (en una capa sin layout, como el tooltip, o en un Border); Esc también la cierra. Respetar §3.G: la decodificación sigue en su goroutine y se chequea `pop.Visible()`.
 
@@ -557,6 +558,8 @@ Las anteriores se hicieron todas el 2026-11-02 y salieron bien (resumen en "Hist
   - Con "Usuario" (o "Usuario (2)") guardado: "Ahora no" y Esc cierran sin cambiar nada y la próxima vez vuelve a preguntar; con "No volver a preguntar" marcado, no pregunta más (y `voxmesh.json` tiene `"username_prompt_off": true`).
   - Con un exe de release y una versión nueva publicada: primero el nombre y, recién al cerrarlo, el aviso de actualización (nunca encima). Con un nombre propio, el aviso sale como antes.
   - Maximizada al abrir: el diálogo queda centrado. En español también.
+
+- [ ] **C12. Cruz y Esc en la imagen ampliada** (2026-11-13): abrir una imagen del chat → la ✕ arriba a la derecha se ve (también sobre una imagen clara y en una muy ancha o muy alta) y cierra; Esc cierra, también si antes estabas escribiendo en el chat (al cerrar, el cursor sigue en el chat); tocar la imagen o afuera sigue cerrando; abrir y cerrar seguido varias veces no traba la ventana.
 
 - [ ] **F5. Pantalla compartida**, lo que no se pudo probar en una sola PC (incluye la segunda vuelta del 2026-11-04: por internet el log tiene que decir "ritmo de internet"; el cursor tiene que verse fluido y en el lugar justo, también el de texto, que va negro con borde blanco):
   - Windows al **125 % y 150 %** (Configuración → Pantalla → Escala) en quien comparte y en quien mira: la captura sale entera y del tamaño físico (`go test -run TestMonitorsArePhysicalPixels -v ./internal/screen/` con ese escalado) y en "Tamaño real (1:1)" la letra chica se lee igual que en la pantalla original.

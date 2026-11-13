@@ -12,6 +12,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -468,13 +469,20 @@ func (a *App) showLightbox(imagePath string) {
 	largeImg.SetMinSize(fyne.NewSize(targetW, targetH))
 	loading := widget.NewLabel(i18n.T("chat.image_loading"))
 
+	// Se cierra tocando la imagen o afuera (el popup), con la cruz y con Esc.
 	var pop *widget.PopUp
-	tapImg := newTappableImage(largeImg, func() {
+	closeLightbox := func() {
 		if pop != nil {
 			pop.Hide()
 		}
-	})
-	pop = widget.NewPopUp(container.NewStack(tapImg, container.NewCenter(loading)), a.window.Canvas())
+	}
+	tapImg := newTappableImage(largeImg, closeLightbox)
+	// La cruz va en una capa encima, arriba a la derecha: la imagen conserva todo el tamaño. Botón
+	// con fondo, para que se vea sobre una imagen clara. Lo vacío de la capa no toma clics.
+	closeButton := widget.NewButtonWithIcon("", theme.CancelIcon(), closeLightbox)
+	closeLayer := container.NewBorder(container.NewHBox(layout.NewSpacer(), closeButton), nil, nil, nil)
+	view := newLightboxView(container.NewStack(tapImg, container.NewCenter(loading), closeLayer), closeLightbox)
+	pop = widget.NewPopUp(view, a.window.Canvas())
 	posX := (cSize.Width - targetW) / 2
 	posY := (cSize.Height - targetH) / 2
 	if posX < 0 {
@@ -484,6 +492,9 @@ func (a *App) showLightbox(imagePath string) {
 		posY = 0
 	}
 	pop.ShowAtPosition(fyne.NewPos(posX, posY))
+	// El popup tiene su propio manejador de foco: Esc le llega a view mientras está abierto, y al
+	// cerrarlo el foco vuelve solo a lo que lo tenía (por ejemplo, la caja del chat).
+	a.window.Canvas().Focus(view)
 
 	scale := a.window.Canvas().Scale()
 	maxW, maxH := int(targetW*scale), int(targetH*scale)
@@ -517,6 +528,34 @@ func (a *App) showLightbox(imagePath string) {
 
 // lightboxDecode limita a una la decodificación del lightbox en curso.
 var lightboxDecode = make(chan struct{}, 1)
+
+// lightboxView es el contenido de la imagen ampliada. Toma el foco al abrirse para cerrarla con
+// Esc (los popups de Fyne 2.6.3 no lo atienden); no hay nada que soltar al cerrar: el manejador de
+// foco del popup se va con él. Solo el hilo de UI.
+type lightboxView struct {
+	widget.BaseWidget
+	content fyne.CanvasObject
+	onClose func()
+}
+
+func newLightboxView(content fyne.CanvasObject, onClose func()) *lightboxView {
+	view := &lightboxView{content: content, onClose: onClose}
+	view.ExtendBaseWidget(view)
+	return view
+}
+
+func (v *lightboxView) CreateRenderer() fyne.WidgetRenderer {
+	return widget.NewSimpleRenderer(v.content)
+}
+
+func (v *lightboxView) FocusGained()   {}
+func (v *lightboxView) FocusLost()     {}
+func (v *lightboxView) TypedRune(rune) {}
+func (v *lightboxView) TypedKey(key *fyne.KeyEvent) {
+	if key.Name == fyne.KeyEscape {
+		v.onClose()
+	}
+}
 
 func formatPeerLag(p peerView) (string, color.Color) {
 	if p.isSelf {
