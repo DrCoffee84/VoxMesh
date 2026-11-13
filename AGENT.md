@@ -79,7 +79,7 @@ VoxMesh/
 │   │   ├── ui_audio_params.go     # Controls generated from config.Params (paramControls), accordion sections (inputSections/outputSections), profile bar.
 │   │   ├── level_bar.go           # levelBar widget: horizontal 0–1 bar with color + optional threshold marker line (shout threshold, VAD, gate).
 │   │   ├── logs_windows.go        # openLogsDirectory / openDataDirectory (explorer.exe). logs_other.go: stubs.
-│   │   ├── ui_about.go            # "Acerca de VoxMesh" (showAbout / aboutContent): icon, version · commit, author linked to the repo, MIT, check for updates. Opened from Settings → Interfaz y Sistema and from the version button in the status bar.
+│   │   ├── ui_about.go            # "Acerca de VoxMesh" (showAbout / aboutContent): icon, version · commit, author linked to the repo, MIT, check for updates. Opened from Settings → Interfaz y Sistema and from the version in the status bar (a `widget.Hyperlink` with `OnTapped`).
 │   │   ├── input_meter.go         # Settings level meter feed: inputMeter (dB, sent, shout, clipped), reportMeter, meterFrame (runs the send chain only for the meter).
 │   │   ├── error_text.go          # errorMsg: user-mistake errors of other packages (invite, profiles, sounds, phone IP) → i18n keys; anything else as technical detail (§3.L).
 │   │   ├── ui_chat.go             # Chat UI, images, activity log (batched, max 200; this session only: system messages, `isSystemMessage`, are never saved, loaded from history or sent in the history sync, `chatMessagesOnly`), room history view.

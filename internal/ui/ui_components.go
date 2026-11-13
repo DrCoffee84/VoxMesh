@@ -136,9 +136,9 @@ func (e *chatInputEntry) TypedShortcut(s fyne.Shortcut) {
 func (a *App) content() fyne.CanvasObject {
 	a.status = widget.NewLabel(i18n.T("main.ready"))
 	a.status.Truncation = fyne.TextTruncateEllipsis
-	// La versión abre "Acerca de" (botón chato: se ve como el texto).
-	buildVersion := widget.NewButton(version.Value, a.showAbout)
-	buildVersion.Importance = widget.LowImportance
+	// La versión abre "Acerca de": un link, para que se vea que se puede tocar.
+	buildVersion := widget.NewHyperlink(version.Value, nil)
+	buildVersion.OnTapped = a.showAbout
 	openLogs := widget.NewButtonWithIcon("", theme.DocumentIcon(), func() {
 		if err := openLogsDirectory(); err != nil {
 			a.setStatus(i18n.M("status.open_logs_failed", err.Error()))
