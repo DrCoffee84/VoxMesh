@@ -41,6 +41,7 @@ var inputSections = []paramSection{
 
 // outputSections: igual para la salida (sin output_filter_enabled).
 var outputSections = []paramSection{
+	{"settings.section.shout_duck", []string{"shout_duck_enabled", "shout_duck_db", "shout_duck_threshold_db"}},
 	{"settings.section.filters", []string{"output_gain_db", "output_high_pass_enabled", "output_high_pass_hz", "output_low_pass_enabled", "output_low_pass_hz", "output_limiter_enabled", "output_limiter_db"}},
 	{"settings.section.receive_buffer", []string{"jitter_buffer_ms", "jitter_min_ms", "jitter_percentile", "jitter_margin_ms", "jitter_plc_max_ms", "jitter_talkspurt_gap_ms", "jitter_drift_slack_ms", "jitter_drift_force_ms"}},
 	{"settings.section.mix", []string{"bus_limiter_db", "bus_limiter_release_ms", "peer_volume_max"}},

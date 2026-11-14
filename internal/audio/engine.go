@@ -34,6 +34,8 @@ type audioStream struct {
 	// fx es la cadena de salida (Ajustes → Salida) propia del emisor: corre sobre el audio ya
 	// decodificado y en orden de secuencia, así los filtros con estado no mezclan emisores.
 	fx *Effects
+	// duck baja los gritos de este emisor (F8); lo toca solo mix, fuera del lock (como fx).
+	duck shoutDucker
 }
 
 type streamWorkItem struct {
@@ -43,8 +45,9 @@ type streamWorkItem struct {
 	applyFadeIn bool
 	hasGap      bool
 	volume      float64
-	fx          *Effects // nil = sin cadena de salida (SFX, monitor local)
-	voice       bool     // emisor de red (lo calla SetDeafened)
+	fx          *Effects     // nil = sin cadena de salida (SFX, monitor local)
+	duck        *shoutDucker // nil = no se bajan los gritos (SFX, monitor local)
+	voice       bool         // emisor de red (lo calla SetDeafened)
 }
 
 // PlaybackProvider devuelve la configuración de salida (filtro por emisor, jitter buffer, limitador
@@ -450,6 +453,7 @@ func (e *Engine) mix(output []byte, at int64) {
 				samples: samples,
 				volume:  stream.volume,
 				fx:      stream.fx,
+				duck:    &stream.duck,
 				voice:   true,
 			})
 			continue
@@ -535,8 +539,9 @@ func (e *Engine) mix(output []byte, at int64) {
 	e.playbackMu.Unlock()
 	// --- Fin del lock corto ---
 
-	// Cadena de salida por emisor y mezclado fuera del lock (DSP / suma algebraica). Cada fx
-	// solo lo toca este callback.
+	// Cadena de salida por emisor y mezclado fuera del lock (DSP / suma algebraica). Cada fx y
+	// cada duck solo los toca este callback. Orden por emisor de red: gritos que llegan (F8) →
+	// filtro de salida → volumen individual.
 	filterSettings, filterOn := settings.Filter, settings.FilterEnabled
 	if len(e.mixBuffer) < samples {
 		e.mixBuffer = make([]int32, samples)
@@ -547,6 +552,9 @@ func (e *Engine) mix(output []byte, at int64) {
 		chunk := item.chunk[:item.samples]
 		if item.applyFadeIn && len(chunk) > 0 {
 			applyFadeInInt16(chunk, antiClickSamples)
+		}
+		if item.duck != nil {
+			item.duck.process(chunk, settings.ShoutDuck)
 		}
 		if filterOn && item.fx != nil {
 			item.fx.ApplyOutput(chunk, filterSettings)

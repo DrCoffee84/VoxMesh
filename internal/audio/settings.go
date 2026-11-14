@@ -25,7 +25,8 @@ type JitterTuning struct {
 
 // PlaybackSettings es todo lo que el callback de playback lee una vez por buffer.
 type PlaybackSettings struct {
-	Filter              FilterSettings // cadena de salida por emisor
+	ShoutDuck           ShoutDuckSettings // gritos que llegan, por emisor (antes de Filter)
+	Filter              FilterSettings    // cadena de salida por emisor
 	FilterEnabled       bool
 	Jitter              JitterTuning
 	BusLimiterThreshold float64 // escala S16
@@ -114,6 +115,11 @@ func DefaultFilterSettings() FilterSettings {
 // OutputSettings arma lo que lee el callback de playback (Ajustes → Salida).
 func OutputSettings(cfg *config.Config) PlaybackSettings {
 	return PlaybackSettings{
+		ShoutDuck: ShoutDuckSettings{
+			Enabled:     cfg.ShoutDuckEnabled,
+			AmountDB:    -float64(cfg.ShoutDuckDB), // guardado como "-10 dB"
+			ThresholdDB: float64(cfg.ShoutDuckThresholdDB),
+		},
 		Filter: FilterSettings{
 			GainDB:           cfg.OutputGainDB,
 			HighPassEnabled:  cfg.OutputHighPassEnabled,

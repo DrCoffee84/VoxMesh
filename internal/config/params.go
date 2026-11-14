@@ -90,6 +90,12 @@ var Params = []Param{
 	{Key: "phone_drift_force_ms", Profile: InputProfile, Default: 80, Min: 20, Max: 200, Step: 20, Unit: "ms"},
 
 	// Salida: recepción y mezcla.
+	// Gritos que llegan (F8): cada voz que pasa el umbral se escucha shout_duck_db más bajo. Por
+	// stream, antes del volumen individual; no depende de output_filter_enabled.
+	{Key: "shout_duck_enabled", Profile: OutputProfile, Default: 1},
+	{Key: "shout_duck_db", Profile: OutputProfile, Default: -10, Min: -30, Max: 0, Step: 1, Unit: "dB"},
+	{Key: "shout_duck_threshold_db", Profile: OutputProfile, Default: -14, Min: -30, Max: -6, Step: 0.5, Unit: "dBFS"},
+
 	{Key: "output_filter_enabled", Profile: OutputProfile, Default: 0},
 	{Key: "output_gain_db", Profile: OutputProfile, Default: 5, Min: -24, Max: 24, Step: 0.5, Unit: "dB"},
 	{Key: "output_high_pass_enabled", Profile: OutputProfile, Default: 0},

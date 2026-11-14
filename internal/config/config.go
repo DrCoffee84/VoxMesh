@@ -142,6 +142,9 @@ type LiveSettings struct {
 	PhoneDriftForceMS     int     `json:"phone_drift_force_ms"`
 
 	// Perfil de salida.
+	ShoutDuckEnabled      bool    `json:"shout_duck_enabled"`
+	ShoutDuckDB           float32 `json:"shout_duck_db"`
+	ShoutDuckThresholdDB  float32 `json:"shout_duck_threshold_db"`
 	OutputFilterEnabled   bool    `json:"output_filter_enabled"`
 	OutputGainDB          float32 `json:"output_gain_db"`
 	OutputHighPassEnabled bool    `json:"output_high_pass_enabled"`

@@ -40,6 +40,22 @@ const (
 	AudioBusLimiterAttackMS = 1.0
 )
 
+// Gritos que llegan (F8, shout_duck_*): cuánto y desde qué volumen se ajustan en Salida; cómo
+// reacciona queda fijo.
+const (
+	// AudioShoutDuckAttackMS es la constante de tiempo con la que la envolvente (RMS de cada
+	// bloque del callback) sube: un grito se baja casi entero en el segundo bloque (~20 ms).
+	AudioShoutDuckAttackMS = 5.0
+	// AudioShoutDuckKneeDB es la transición: el grito baja todo shout_duck_db recién cuando pasa
+	// el umbral por esta cantidad. Una voz fuerte que apenas lo toca baja poco, no de golpe.
+	AudioShoutDuckKneeDB = 6.0
+	// AudioShoutDuckHoldMS es cuánto se sostiene la baja después de lo último fuerte: no rebota
+	// entre las sílabas de un grito.
+	AudioShoutDuckHoldMS = 300.0
+	// AudioShoutDuckReleaseMS es la constante de tiempo con la que vuelve después del hold.
+	AudioShoutDuckReleaseMS = 150.0
+)
+
 // Cancelación de eco (aec_enabled, WebRTC AEC3).
 const (
 	// AudioEchoDelayMS es la estimación inicial del retardo de eco que recibe AEC3: salida de

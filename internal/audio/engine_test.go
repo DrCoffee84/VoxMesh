@@ -5,6 +5,7 @@ package audio
 import (
 	"encoding/binary"
 	"math"
+	"slices"
 	"testing"
 	"time"
 
@@ -247,6 +248,69 @@ func TestEngine_DeafenedMixIsSilent(t *testing.T) {
 	}
 	if rms := frameRMS(mixFrames(e, 8)[4*FrameSamples:]); rms < 2000 {
 		t.Fatalf("la voz no volvió a sonar: RMS %.0f", rms)
+	}
+}
+
+// TestEngine_ShoutDuckLowersLoudVoiceOnly: con los valores de fábrica (F8) una voz fuerte que llega
+// suena ~10 dB más baja; una normal sale igual que con F8 apagado; el volumen individual se aplica
+// después (no cambia cuánto baja el grito).
+func TestEngine_ShoutDuckLowersLoudVoiceOnly(t *testing.T) {
+	noDuck := func(e *Engine) {
+		settings := defaultPlayback
+		settings.Jitter.MaxMS = 40
+		settings.ShoutDuck.Enabled = false
+		e.SetPlaybackSettings(func() PlaybackSettings { return settings })
+	}
+	play := func(packets [][]byte, duck bool, volume float64) []int16 {
+		e := newEngineState()
+		setPlayback(e, 40, nil)
+		if !duck {
+			noDuck(e)
+		}
+		e.SetStreamVolume("peer", volume)
+		for n, packet := range packets {
+			e.PlayStreamSeq("peer", uint32(n), 0, packet)
+		}
+		return mixFrames(e, 16)[6*FrameSamples:]
+	}
+
+	loud := encodeSine(t, 20, 24000) // RMS ≈ -5.7 dBFS: un grito
+	ratio := frameRMS(play(loud, true, 1)) / frameRMS(play(loud, false, 1))
+	if want := dbGain(-10); math.Abs(ratio-want) > 0.03 {
+		t.Fatalf("voz fuerte: %.3f del volumen sin F8, quería %.3f (−10 dB)", ratio, want)
+	}
+	quiet := encodeSine(t, 20, 6000) // RMS ≈ -17.7 dBFS: voz normal
+	if ducked, plain := play(quiet, true, 1), play(quiet, false, 1); !slices.Equal(ducked, plain) {
+		t.Fatal("una voz normal no puede cambiar con F8 prendido")
+	}
+	// Con el volumen individual al 30 % el grito llega a -16 dBFS, bajo el umbral: F8 mide antes del
+	// volumen, así que lo baja igual.
+	ratio30 := frameRMS(play(loud, true, 0.3)) / frameRMS(play(loud, false, 0.3))
+	if math.Abs(ratio30-ratio) > 0.01 {
+		t.Fatalf("con otro volumen individual F8 bajó distinto: %.3f contra %.3f", ratio30, ratio)
+	}
+}
+
+// El callback de playback no asigna memoria con una voz de red sonando y F8 bajándola.
+func TestEngine_MixWithVoiceDoesNotAllocate(t *testing.T) {
+	packets := encodeSine(t, 200, 24000)
+	e := newEngineState()
+	setPlayback(e, 40, nil)
+	for n, packet := range packets {
+		e.PlayStreamSeq("peer", uint32(n), 0, packet)
+	}
+	buf := make([]byte, FrameSamples*2)
+	for range 5 {
+		e.mix(buf, 0)
+	}
+	if allocs := testing.AllocsPerRun(100, func() { e.mix(buf, 0) }); allocs != 0 {
+		t.Fatalf("mix asigna %.1f veces por callback", allocs)
+	}
+	e.playbackMu.Lock()
+	reduction := e.streams["peer"].duck.applied
+	e.playbackMu.Unlock()
+	if reduction < 9.9 {
+		t.Fatalf("F8 no estaba bajando la voz (%.2f dB): el test no mide lo que dice", reduction)
 	}
 }
 
