@@ -554,7 +554,8 @@ Solo si aparece el problema: **R1** (data race del estado de la sala, ver "Si ap
 
 ### C28. El log más nuevo nunca se borra
 
-- [ ] **Pedido (Coffee, 2026-11-14)**: que el último archivo de log quede siempre, aunque pasen días.
+- [x] **Pedido (Coffee, 2026-11-14)**: que el último archivo de log quede siempre, aunque pasen días.
+  - **Hecho** (2026-11-14): [logging.go](internal/logging/logging.go): `prune` arma la lista y `logsToDelete` (pura) borra los de más de 48 h **salvo el de hoy y el más nuevo de los días anteriores**: el de la última vez que se abrió la app queda aunque pasen días; recién se va cuando hay otro día más nuevo y él pasó las 48 h. Test `TestLogsToDelete`. **Quedó afuera**: los CSV de llegadas (`llegadas-*.csv`, nivel 2) siguen con sus 48 h.
 - **Hoy**: `logging` borra los logs de más de 48 h al abrir el del día: si la app no se abrió en tres días, al abrirla se borra el último, justo el que hay que mandar cuando algo falló.
 
 ### C29. El renglón del chat se ilumina al pasar el mouse por su ícono de copiar

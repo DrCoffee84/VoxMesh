@@ -68,7 +68,7 @@ Cada "Iniciar sala" genera una clave nueva (solo en memoria) que viaja dentro de
 | Historial, imágenes y sonidos por sala | `%AppData%\VoxMesh\salas\<sala>\` |
 | Perfiles de audio | `%AppData%\VoxMesh\perfiles\entrada\` y `...\salida\` |
 | Paletas de colores propias | `%AppData%\VoxMesh\paletas\` |
-| Logs (se borran a las 48 h) | `%AppData%\VoxMesh\log-AAAA-MM-DD.log` |
+| Logs (se borran a las 48 h, salvo el último de los días anteriores, que queda siempre) | `%AppData%\VoxMesh\log-AAAA-MM-DD.log` |
 | Certificado y token del celular | `%AppData%\VoxMesh\` |
 
 Nivel de log (Ajustes → Interfaz): **1 Normal** (por defecto) registra eventos, errores y, del audio, solo los intervalos con problemas, más un resumen cada 5 minutos por participante. **2 Avanzado** agrega cada intervalo de 10 s, las esperas largas de locks y un CSV con la llegada de cada paquete de audio (`llegadas-*.csv`), que se puede reproducir en los tests del buffer.

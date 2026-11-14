@@ -68,8 +68,9 @@ func Start() error {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return err
 	}
-	prune(root, time.Now().Add(-48*time.Hour))
-	path := filepath.Join(root, "log-"+time.Now().Format("2006-01-02")+".log")
+	today := "log-" + time.Now().Format("2006-01-02") + ".log"
+	prune(root, today, time.Now().Add(-48*time.Hour))
+	path := filepath.Join(root, today)
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
@@ -172,20 +173,51 @@ func Close() {
 	state.logger = nil
 }
 
-func prune(root string, before time.Time) {
+// prune borra los logs diarios modificados antes de before (48 h), salvo el más nuevo de los
+// días anteriores a today (AGENDA C28): si la app no se abrió en varios días, el log de la última
+// vez (el que hay que mandar si algo falló) no se pierde al volver a abrirla.
+func prune(root, today string, before time.Time) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return
 	}
+	var logs []logFile
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "log-") || filepath.Ext(entry.Name()) != ".log" {
 			continue
 		}
-		info, err := entry.Info()
-		if err == nil && info.ModTime().Before(before) {
-			_ = os.Remove(filepath.Join(root, entry.Name()))
+		if info, err := entry.Info(); err == nil {
+			logs = append(logs, logFile{name: entry.Name(), modified: info.ModTime()})
 		}
 	}
+	for _, name := range logsToDelete(logs, today, before) {
+		_ = os.Remove(filepath.Join(root, name))
+	}
+}
+
+// logFile es un log diario en la carpeta.
+type logFile struct {
+	name     string
+	modified time.Time
+}
+
+// logsToDelete elige qué logs borrar: los modificados antes de before, menos el de today y el más
+// nuevo de los otros días.
+func logsToDelete(logs []logFile, today string, before time.Time) []string {
+	keep := ""
+	var newest time.Time
+	for _, l := range logs {
+		if l.name != today && (keep == "" || l.modified.After(newest)) {
+			keep, newest = l.name, l.modified
+		}
+	}
+	var remove []string
+	for _, l := range logs {
+		if l.name != today && l.name != keep && l.modified.Before(before) {
+			remove = append(remove, l.name)
+		}
+	}
+	return remove
 }
 
 func FormatError(err error) string {

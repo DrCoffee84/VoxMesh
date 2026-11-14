@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -173,6 +174,33 @@ func TestCrashOutput(t *testing.T) {
 	for _, want := range []string{"=== inicio VoxMesh", "panic: crash de prueba", "goroutine "} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("el log no contiene %q:\n%s", want, data)
+		}
+	}
+}
+
+// C28: el log más nuevo de los días anteriores no se borra nunca, aunque tenga más de 48 h; los
+// otros viejos sí, y el de hoy y los de las últimas 48 h quedan.
+func TestLogsToDelete(t *testing.T) {
+	now := time.Date(2026, 11, 14, 10, 0, 0, 0, time.Local)
+	before := now.Add(-48 * time.Hour)
+	day := func(d int) time.Time { return now.AddDate(0, 0, -d) }
+	cases := []struct {
+		logs []logFile
+		want []string
+	}{
+		// La app no se abrió en 5 días: queda el último (y se borra el anterior).
+		{[]logFile{{"log-2026-11-08.log", day(6)}, {"log-2026-11-09.log", day(5)}}, []string{"log-2026-11-08.log"}},
+		// Con uno de ayer, ese es el último: los viejos se van.
+		{[]logFile{{"log-2026-11-08.log", day(6)}, {"log-2026-11-09.log", day(5)}, {"log-2026-11-13.log", day(1)}}, []string{"log-2026-11-08.log", "log-2026-11-09.log"}},
+		// El de hoy nunca cuenta como "el último de otro día" ni se borra.
+		{[]logFile{{"log-2026-11-09.log", day(5)}, {"log-2026-11-14.log", now}}, nil},
+		{[]logFile{{"log-2026-11-14.log", now}}, nil},
+		{nil, nil},
+	}
+	for i, c := range cases {
+		got := logsToDelete(c.logs, "log-2026-11-14.log", before)
+		if !slices.Equal(got, c.want) {
+			t.Errorf("caso %d: borra %v, quería %v", i, got, c.want)
 		}
 	}
 }
