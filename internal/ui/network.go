@@ -119,7 +119,7 @@ func (a *App) handleHostPacket(udp *transport.UDP, fo *room.Failover, packet tra
 	case transport.PacketPong:
 		if len(packet.Payload) == 8 {
 			timestamp := int64(binary.BigEndian.Uint64(packet.Payload))
-			a.updatePeerLag(addrStr, time.Since(time.Unix(0, timestamp)))
+			a.updatePeerLag("", addrStr, time.Since(time.Unix(0, timestamp)))
 		}
 	case transport.PacketAudio:
 		a.handleAudioPacket(packet)
@@ -160,7 +160,19 @@ func (a *App) handleClientPacket(udp *transport.UDP, fo *room.Failover, packet t
 	case transport.PacketPong:
 		if len(packet.Payload) == 8 {
 			timestamp := int64(binary.BigEndian.Uint64(packet.Payload))
-			a.updatePeerLag(addrStr, time.Since(time.Unix(0, timestamp)))
+			lag := time.Since(time.Unix(0, timestamp))
+			// El del host va por su ID: se anuncia con su dirección pública y el Pong puede venir de
+			// su LAN o VPN. Los de otros (pings de la migración) solo cuentan para el ritmo de la
+			// pantalla: el lag de los demás lo mide el host (PacketPeerLag).
+			if hostID := a.roomState.HostID; fromHost && hostID != "" {
+				a.updatePeerLag(hostID, addrStr, lag)
+			} else {
+				a.rttFloor.Add(addrStr, lag)
+			}
+		}
+	case transport.PacketPeerLag:
+		if fromHost {
+			a.handlePeerLags(packet.Payload, now)
 		}
 	case transport.PacketRoomState:
 		envelope, err := room.Decode(packet.Payload)
@@ -600,6 +612,7 @@ func (a *App) pingPeers(udp *transport.UDP, stop <-chan struct{}) {
 			for _, peer := range udp.Peers() {
 				a.sendPing(udp, peer)
 			}
+			a.broadcastPeerLags(udp, time.Now())
 			for index := range a.roomState.Participants {
 				p := &a.roomState.Participants[index]
 				if p.ID == a.participantID || !p.Connected {
@@ -613,6 +626,35 @@ func (a *App) pingPeers(udp *transport.UDP, stop <-chan struct{}) {
 			a.pruneDisconnected(udp, now)
 		}
 	}
+}
+
+// broadcastPeerLags (host, desde pingPeers cada 2 s) les manda a los clientes el lag que midió con
+// cada uno (PacketPeerLag, C18): el cliente solo mide al host, y así el chip de los demás muestra un
+// número. Va también vacío (nadie fresco), así el cliente vuelve a "… ms".
+func (a *App) broadcastPeerLags(udp *transport.UDP, now time.Time) {
+	if len(udp.Peers()) == 0 {
+		return
+	}
+	payload, err := room.EncodePeerLags(a.peerLagsToSend(now))
+	if err != nil {
+		logging.Errorf("armar el lag de los participantes: %s", logging.FormatError(err))
+		return
+	}
+	udp.Broadcast(transport.Packet{Kind: transport.PacketPeerLag, Sequence: a.sequence.Add(1), Payload: payload}, nil)
+}
+
+// handlePeerLags (cliente, solo del host) aplica el lag que el host midió con cada uno. Un mensaje
+// mal formado se descarta (como mucho una línea de log cada receiveErrorLogEvery).
+func (a *App) handlePeerLags(payload []byte, now time.Time) {
+	lags, err := room.DecodePeerLags(payload)
+	if err != nil {
+		if now.Sub(a.peerLagRejectLogged) >= receiveErrorLogEvery {
+			a.peerLagRejectLogged = now
+			logging.Infof("Lag de los participantes descartado (%d bytes): %s", len(payload), logging.FormatError(err))
+		}
+		return
+	}
+	a.applyPeerLags(lags, now)
 }
 
 // pruneDisconnected (host, desde pingPeers) saca de la lista a los desconectados viejos: cada

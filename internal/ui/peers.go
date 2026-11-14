@@ -10,13 +10,19 @@ import (
 	"voxmesh/internal/audio"
 	"voxmesh/internal/config"
 	"voxmesh/internal/i18n"
+	"voxmesh/internal/room"
 )
 
 type peerView struct {
-	id         string
-	name       string
-	address    string
-	lag        time.Duration
+	id      string
+	name    string
+	address string
+	isHost  bool // es el host de la sala (el cliente lo mide él; a los demás, el host)
+	lag     time.Duration
+	// lagAt es cuándo llegó lag. lagViaHost: lo midió el host con esa persona y lo mandó
+	// (PacketPeerLag, C18), no esta PC; el chip lo marca con "≈" y no va al historial.
+	lagAt      time.Time
+	lagViaHost bool
 	speaking   bool
 	speakStop  time.Time
 	shoutUntil time.Time // hasta cuándo va el aro rojo del avatar (habló en modo grito)
@@ -40,11 +46,11 @@ func (a *App) refreshPeersFromRoom() {
 	}
 	connected := a.connected()
 	a.peerMu.Lock()
-	lagByAddress := make(map[string]time.Duration, len(a.peerNames))
+	lagByID := make(map[string]peerView, len(a.peerNames)) // lag, lagAt y lagViaHost
 	netByID := make(map[string]peerNetStats, len(a.peerNames))
 	shoutByID := make(map[string]time.Time, len(a.peerNames))
 	for _, peer := range a.peerNames {
-		lagByAddress[peer.address] = peer.lag
+		lagByID[peer.id] = peer
 		netByID[peer.id] = peer.net
 		shoutByID[peer.id] = peer.shoutUntil
 	}
@@ -66,11 +72,15 @@ func (a *App) refreshPeersFromRoom() {
 		if participant.ID == a.participantID || !participant.Connected {
 			continue
 		}
+		previous := lagByID[participant.ID]
 		a.peerNames = append(a.peerNames, peerView{
 			id:         participant.ID,
 			name:       participant.Username,
 			address:    participant.Address,
-			lag:        lagByAddress[participant.Address],
+			isHost:     participant.ID == a.roomState.HostID,
+			lag:        previous.lag,
+			lagAt:      previous.lagAt,
+			lagViaHost: previous.lagViaHost,
 			muted:      participant.Muted,
 			sharing:    participant.Sharing,
 			net:        netByID[participant.ID],
@@ -100,17 +110,73 @@ func (a *App) setSelfMuted(muted bool) {
 	}
 }
 
-func (a *App) updatePeerLag(address string, lag time.Duration) {
+// updatePeerLag guarda el lag (ida y vuelta) que midió el Pong de address: en el chip y en el
+// historial (C18). Con id ("" = buscar por dirección, el host) busca a ese participante: el cliente
+// atribuye el Pong de su host por ID, porque el host se anuncia con su dirección pública y el Pong
+// puede venir de su LAN o VPN.
+func (a *App) updatePeerLag(id, address string, lag time.Duration) {
 	a.rttFloor.Add(address, lag) // ritmo de la pantalla compartida: ¿es LAN?
+	now := time.Now()
+	name := ""
 	a.peerMu.Lock()
 	for index := range a.peerNames {
-		if a.peerNames[index].address == address {
-			a.peerNames[index].lag = lag
+		p := &a.peerNames[index]
+		if !p.isSelf && ((id != "" && p.id == id) || (id == "" && p.address == address)) {
+			p.lag, p.lagAt, p.lagViaHost = lag, now, false
+			name = p.name
 			break
 		}
 	}
 	a.peerMu.Unlock()
+	if name != "" {
+		a.lagHistory.addRTT(name, now, lag)
+	}
 	a.refreshPeerAvatars()
+}
+
+// peerLagFresh es cuánto vale un lag medido: el host no le manda a los clientes uno más viejo (el
+// que no contesta hace rato), y el cliente vuelve a "… ms".
+const peerLagFresh = 6 * time.Second
+
+// peerLagsToSend (host) son los lags que midió esta PC con cada uno, frescos, para PacketPeerLag.
+func (a *App) peerLagsToSend(now time.Time) []room.PeerLag {
+	a.peerMu.RLock()
+	defer a.peerMu.RUnlock()
+	lags := make([]room.PeerLag, 0, len(a.peerNames))
+	for _, p := range a.peerNames {
+		if p.isSelf || p.lagViaHost || p.lag <= 0 || now.Sub(p.lagAt) > peerLagFresh || len(lags) == room.MaxParticipants {
+			continue
+		}
+		lags = append(lags, room.PeerLag{ID: p.id, MS: int(p.lag.Milliseconds())})
+	}
+	return lags
+}
+
+// applyPeerLags (cliente) pone en el chip de cada uno, salvo el host (lo mide esta PC) y uno mismo,
+// el lag que midió el host con él. Quien no está en lags vuelve a "… ms". No va al historial: cada
+// uno guarda solo lo que mide él.
+func (a *App) applyPeerLags(lags []room.PeerLag, now time.Time) {
+	byID := make(map[string]time.Duration, len(lags))
+	for _, lag := range lags {
+		byID[lag.ID] = time.Duration(lag.MS) * time.Millisecond
+	}
+	changed := false
+	a.peerMu.Lock()
+	for index := range a.peerNames {
+		p := &a.peerNames[index]
+		if p.isSelf || p.isHost {
+			continue
+		}
+		lag, ok := byID[p.id] // si esta PC era host, lo que midió ya no es fresco: también se borra
+		if p.lag != lag || p.lagViaHost != ok {
+			changed = true
+		}
+		p.lag, p.lagAt, p.lagViaHost = lag, now, ok
+	}
+	a.peerMu.Unlock()
+	if changed {
+		a.refreshPeerAvatars()
+	}
 }
 
 func (a *App) markPeerSpeaking(id, address string) {
@@ -190,6 +256,12 @@ func (a *App) updatePeerNetStats(stats map[string]peerNetStats) {
 	if len(stats) == 0 {
 		return
 	}
+	now := time.Now()
+	type measured struct {
+		name string
+		net  peerNetStats
+	}
+	var history []measured
 	a.peerMu.Lock()
 	changed := false
 	for i := range a.peerNames {
@@ -198,12 +270,18 @@ func (a *App) updatePeerNetStats(stats map[string]peerNetStats) {
 			continue
 		}
 		next, ok := stats[p.id]
+		if ok {
+			history = append(history, measured{p.name, next})
+		}
 		if ok && next != p.net {
 			p.net = next
 			changed = true
 		}
 	}
 	a.peerMu.Unlock()
+	for _, m := range history {
+		a.lagHistory.addNet(m.name, now, m.net.lossPct, m.net.jitterMS)
+	}
 	if changed {
 		a.refreshPeerAvatars()
 	}

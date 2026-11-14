@@ -522,6 +522,26 @@ var es = map[string]string{
 	"about.author":  "Hecho por",
 	"about.license": "Licencia MIT",
 
+	// Detalle de lag por participante (ui_lag.go, C18).
+	"lag.show":         "Mostrar detalle de lag",
+	"lag.hide":         "Ocultar detalle de lag",
+	"lag.point_ms":     "%d ms",
+	"lag.point_loss":   "%d %% de pérdida",
+	"lag.point_jitter": "±%d ms",
+	"lag.point_none":   "sin datos",
+	"lag.title":        "Lag con %s",
+	"lag.title_host":   "Lag con el host (%s)",
+	"lag.client_note":  "Desde acá se mide solo la pérdida del audio de %s; sus ms los mide el host.",
+	"lag.range_5m":     "5 min",
+	"lag.range_1h":     "1 h",
+	"lag.range_all":    "Toda la sesión",
+	"lag.summary_max":  "Máximo %d ms",
+	"lag.summary_avg":  "promedio %d ms",
+	"lag.summary_loss": "pérdida máxima %d %%",
+	"lag.summary_none": "Todavía no hay datos en este rango.",
+	"lag.hover_hint":   "Pasá el mouse por el gráfico para ver cada momento.",
+	"lag.legend":       "Línea: ida y vuelta en ms (verde < 80, amarillo hasta 200, naranja hasta 400, rojo más). Barras rojas de abajo: pérdida de audio. Un hueco es un rato sin datos.",
+
 	// Error de usuario del celular (error_text.go).
 	"err.phone.no_local_ip": "no se encontró una IP local privada%s",
 

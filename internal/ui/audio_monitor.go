@@ -70,12 +70,16 @@ func (a *App) runAudioMonitor() {
 	var lastStats, lastLog time.Time
 	var prevStats map[string]audio.JitterStats
 	var logState audioLogState
-	var lastHealth time.Time
+	var lastHealth, lastLagPaint time.Time
 	for now := range ticker.C {
 		a.sweepVoiceIndicator(now)
 		if now.Sub(lastHealth) >= audioHealthInterval {
 			lastHealth = now
 			a.checkAudioHealth(now)
+		}
+		if now.Sub(lastLagPaint) >= lagSlot {
+			lastLagPaint = now
+			a.paintLag(now) // tiras y gráfico de lag (C18), también fuera de la sala
 		}
 		engine := a.engine()
 		if engine == nil {

@@ -522,6 +522,26 @@ var en = map[string]string{
 	"about.author":  "Made by",
 	"about.license": "MIT License",
 
+	// Detalle de lag por participante (ui_lag.go, C18).
+	"lag.show":         "Show lag detail",
+	"lag.hide":         "Hide lag detail",
+	"lag.point_ms":     "%d ms",
+	"lag.point_loss":   "%d %% loss",
+	"lag.point_jitter": "±%d ms",
+	"lag.point_none":   "no data",
+	"lag.title":        "Lag with %s",
+	"lag.title_host":   "Lag with the host (%s)",
+	"lag.client_note":  "From here only the loss of %s's audio is measured; the host measures their ms.",
+	"lag.range_5m":     "5 min",
+	"lag.range_1h":     "1 h",
+	"lag.range_all":    "Whole session",
+	"lag.summary_max":  "Max %d ms",
+	"lag.summary_avg":  "average %d ms",
+	"lag.summary_loss": "max loss %d %%",
+	"lag.summary_none": "No data in this range yet.",
+	"lag.hover_hint":   "Hover over the graph to see each moment.",
+	"lag.legend":       "Line: round trip in ms (green < 80, yellow up to 200, orange up to 400, red above). Red bars at the bottom: audio loss. A gap is a while without data.",
+
 	// Error de usuario del celular (error_text.go).
 	"err.phone.no_local_ip": "no private local IP found (connect the PC to Wi-Fi or a LAN)%s",
 

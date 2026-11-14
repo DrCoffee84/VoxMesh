@@ -207,7 +207,7 @@ func (a *App) content() fyne.CanvasObject {
 	a.refreshPeerAvatars()
 	peerScroll := container.NewHScroll(a.peerHBox)
 	peerScroll.SetMinSize(fyne.NewSize(120, 38))
-	statusCard := uiCard(container.NewBorder(nil, nil, cardTitle(i18n.T("main.in_room")), nil, peerScroll))
+	statusCard := uiCard(container.NewBorder(nil, nil, cardTitle(i18n.T("main.in_room")), a.newLagToggle(), peerScroll))
 
 	a.chatSearch = widget.NewEntry()
 	a.chatSearch.SetPlaceHolder(i18n.T("chat.search_placeholder"))
@@ -628,18 +628,14 @@ func formatPeerLag(p peerView) (string, color.Color) {
 	}
 	ms := p.lag.Milliseconds()
 	str := fmt.Sprintf("%d ms", ms)
+	if p.lagViaHost {
+		str = "≈" + str // lo midió el host con esa persona (el cliente solo mide al host)
+	}
 	if p.net.known {
 		// Pérdida y jitter medidos por el jitter buffer del emisor (último intervalo).
 		str += fmt.Sprintf(" · %.0f%% · ±%.0f ms", p.net.lossPct, p.net.jitterMS)
 	}
-	if ms < 80 {
-		return "● " + str, speakingColor
-	} else if ms <= 200 {
-		return "● " + str, color.NRGBA{R: 241, G: 196, B: 15, A: 255}
-	} else if ms <= 400 {
-		return "● " + str, color.NRGBA{R: 230, G: 126, B: 34, A: 255}
-	}
-	return "● " + str, color.NRGBA{R: 231, G: 76, B: 60, A: 255}
+	return "● " + str, lagColor(int(ms))
 }
 
 // avatarSize es el lado del círculo del avatar en la barra de participantes.
@@ -692,6 +688,7 @@ type peerChip struct {
 	nameTxt     *canvas.Text
 	lagTxt      *canvas.Text
 	volumeTxt   *canvas.Text // nil para el propio (no hay slider de uno mismo)
+	strip       *lagStrip    // tira de lag (C18); nil para el propio
 	object      fyne.CanvasObject
 }
 
@@ -785,7 +782,12 @@ func (a *App) newPeerChip(peer peerView) *peerChip {
 		chip.viewBtn = widget.NewButtonWithIcon(i18n.T("screen.view"), theme.ComputerIcon(), func() { a.watchScreen(chip.id, chip.name) })
 		chip.viewBtn.Importance = widget.LowImportance
 		chip.viewBtn.Hide()
-		content = container.NewVBox(content, a.newPeerVolumeSlider(chip), chip.viewBtn)
+		// La tira de lag, del ancho del slider (el HBox no la estira); oculta salvo que se pidió.
+		chip.strip = a.newLagStrip(peer.name)
+		if !a.conf().ShowLagGraph {
+			chip.strip.Hide()
+		}
+		content = container.NewVBox(content, container.NewHBox(chip.strip), a.newPeerVolumeSlider(chip), chip.viewBtn)
 	}
 
 	pillBg := canvas.NewRectangle(theme.Color(colorNameChip))
@@ -822,6 +824,9 @@ func formatPeerVolume(volume float64) string {
 // update refleja peer en los widgets del chip (solo lo que cambió, para no refrescar de más).
 func (c *peerChip) update(peer peerView, now time.Time) {
 	c.name = peer.name
+	if c.strip != nil {
+		c.strip.setName(peer.name)
+	}
 	circleColor := avatarColor
 	textColor := color.NRGBA{R: 240, G: 245, B: 255, A: 255}
 	if peer.speaking && now.Before(peer.speakStop) {

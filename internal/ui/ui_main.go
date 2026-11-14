@@ -160,6 +160,13 @@ type App struct {
 	shareBannerText  *widget.Label
 	shareResolution  *widget.Select // resolución en el banner (cambia en vivo); solo el hilo de UI
 	screenView       *screenView    // ventana del visor; solo el hilo de UI
+
+	// Lag por participante (C18): historial de la sesión (lag_history.go, con su mutex), el gráfico
+	// grande abierto y el ícono que muestra u oculta las tiras (ui_lag.go, solo el hilo de UI).
+	lagHistory          *lagHistory
+	lagView             *lagView // nil = ninguno abierto
+	lagToggle           *hintButton
+	peerLagRejectLogged time.Time // último PacketPeerLag descartado en el log; solo receiveLoop
 }
 
 // appTitle es el título de la ventana principal (un nombre: no se traduce). Mientras comparto
@@ -202,6 +209,7 @@ func New(executable string) *App {
 		effects:        &audio.Effects{},
 		assetAssembler: assets.NewAssembler(),
 		peerVolumes:    make(map[string]float64),
+		lagHistory:     newLagHistory(),
 		peerMu:         logging.NewTracedRWMutex("peerMu"),
 		recordingMu:    logging.NewTracedRWMutex("recordingMu"),
 		chatMu:         logging.NewTracedRWMutex("chatMu"),

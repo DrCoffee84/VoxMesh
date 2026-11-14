@@ -51,6 +51,9 @@ type Config struct {
 	// UsernamePromptOff es el "No volver a preguntar" del diálogo que pide el nombre al abrir la
 	// app cuando es uno de fábrica. Lo escribe ese diálogo; Ajustes no lo toca.
 	UsernamePromptOff bool `json:"username_prompt_off,omitempty"`
+	// ShowLagGraph muestra la tira de lag debajo de cada participante (AGENDA C18; oculta por
+	// defecto). La escribe el ícono de la barra de participantes; Ajustes no la toca.
+	ShowLagGraph bool `json:"show_lag_graph,omitempty"`
 }
 
 // Tamaño de ventana por defecto y mínimo aceptado al cargar (más chico = archivo roto).

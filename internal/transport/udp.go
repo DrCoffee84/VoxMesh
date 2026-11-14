@@ -38,6 +38,9 @@ const (
 	PacketScreenCursor = 17
 	PacketScreenDigest = 18
 	PacketScreenRepair = 19
+	// PeerLag: host → clientes cada 2 s, el lag que midió con cada participante (room.PeerLag). El
+	// cliente solo lo acepta de su host.
+	PacketPeerLag = 20
 )
 
 func PacketKindName(kind byte) string {
@@ -78,6 +81,8 @@ func PacketKindName(kind byte) string {
 		return "ScreenDigest"
 	case PacketScreenRepair:
 		return "ScreenRepair"
+	case PacketPeerLag:
+		return "PeerLag"
 	default:
 		return fmt.Sprintf("Unknown(%d)", kind)
 	}
