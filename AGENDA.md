@@ -33,17 +33,18 @@ Cada tarea tiene un **ID** (`S7`, `F1`...) y está escrita para que un chat nuev
 
 ### Prioridad (2026-11-13)
 
-Va antes que todo lo demás. Detalle en "Próximo: cómoda para usuarios comunes". **Un chat por fila**, en este orden. C8 + C9, C10 + C11 + C12 y F6 + F7 hechos el 2026-11-13 (falta probarlos a mano); de paso apareció C17 (el registro de actividad queda oculto dentro de la sala). El 2026-11-13 se sumó C18 (gráfico de lag): va con C13 en la fila 4 y C14 pasa a su propia fila.
+Va antes que todo lo demás. Detalle en "Próximo: cómoda para usuarios comunes". **Un chat por fila**, en este orden. C8 + C9, C10 + C11 + C12 y F6 + F7 hechos el 2026-11-13 (falta probarlos a mano); de paso apareció C17 (el registro de actividad queda oculto dentro de la sala). El 2026-11-13 se sumó C18 (gráfico de lag): va con C13 en la fila 4 y C14 pasa a su propia fila. También el 2026-11-13: F8 (que un grito no deje sordo), C19 (plantilla fija "Sin filtros") y C20 (apagar los atajos de la botonera), juntos en la fila 6, antes de C15 y C16 para que el lavado de cara cubra los controles nuevos. Decidido con Coffee el 2026-11-13: C17 queda como está (el registro se ve con ☰) y C2 entra en la fila 4.
 
 | # | IDs | Qué, en simple | Tamaño |
 |---|-----|----------------|--------|
 | 1 | **C8 + C9** | "Invitar" muestra todas las direcciones de entrada, dice "Abriendo puerto…" y el error del puerto va en rojo; en Ajustes, cuánto dura el puerto abierto (8 h por defecto) y el registro avisa cuándo vence | Mediano. Mismos archivos que C6 (`host_network.go`, `configureHostNetwork`, `Params`) |
 | 2 | **C10 + C11 + C12** | "Acerca de" (versión, commit, autor); al abrir la app con el nombre "Usuario", pedir uno (con "No volver a preguntar"); cruz para cerrar la imagen ampliada | Chico |
 | 3 | **F6 + F7** | "Detener para todos" corta el sonido en toda la sala; botón para ensordecer (no escuchar lo que llega sin salir de la llamada) | Mediano. F6 suma un mensaje de red; F7 toca el Engine |
-| 4 | **C18 + C13** | Gráfico del lag debajo de cada nombre (oculto por defecto, un ícono lo muestra; toda la sesión en memoria) y el registro avisa el lag largo (desde cuándo y cuánto duró) | Mediano-grande. C18 suma un mensaje del host (los ms de cada uno); C13 lee las mismas muestras |
+| 4 | **C18 + C13 + C2** | Gráfico del lag debajo de cada nombre (oculto por defecto, un ícono lo muestra; toda la sesión en memoria) y el registro avisa el lag largo (desde cuándo y cuánto duró); quien se reconecta desde la misma IP sigue siendo él (no "Nombre (2)"), así su gráfico no se parte | Mediano-grande. C18 suma un mensaje del host (los ms de cada uno); C13 lee las mismas muestras; C2 va en `handleRoomHello` |
 | 5 | **C14** | Los problemas que hoy solo van al log o a la barra (dispositivo, celular, micrófono que pierde audio…), en el registro y con cómo arreglarlos | Mediano |
-| 6 | **C15** | Paletas de colores en Ajustes: naranja para lo que resalta, plantillas y paletas propias | Grande. Antes que C16 |
-| 7 | **C16** | Lavado de cara de toda la app (botones, Ajustes) sin perder el estilo clásico de escritorio | Grande. Al final: cubre los botones nuevos de las filas anteriores |
+| 6 | **F8 + C19 + C20** | Que un grito no deje sordo a nadie (el que escucha baja los gritos que le llegan, con su propio slider en Salida); plantilla fija "Sin filtros" en Entrada y Salida, que no se puede pisar al guardar, para probar los filtros de a uno; un botón (con su atajo, como "Detener") que prende y apaga los atajos de la botonera (para jugar) | Mediano. F8 toca la mezcla del Engine; C19 generaliza el perfil fijo "Default"; C20 es chico (se puede adelantar) |
+| 7 | **C15** | Paletas de colores en Ajustes: naranja para lo que resalta, plantillas y paletas propias | Grande. Antes que C16 |
+| 8 | **C16** | Lavado de cara de toda la app (botones, Ajustes) sin perder el estilo clásico de escritorio | Grande. Al final: cubre los botones nuevos de las filas anteriores |
 
 ### Prioridad anterior (2026-11-11)
 
@@ -97,14 +98,14 @@ Solo si aparece el problema: **R1** (data race del estado de la sala, ver "Si ap
 
 # Próximo: cómoda para usuarios comunes (2026-11-13)
 
-**Contexto común.** La app anda estable (Coffee, 2026-11-13: "nunca más falló, se reinició ni nada"). Lo que sigue es que la use gente que no es técnica: un amigo de Coffee es la vara ("hay cosas que eran una paja"). Si algo le cuesta, es un error de la app. Casi todo es UI. Cambian la funcionalidad F7 (ensordecer, a propósito), F6 (un mensaje de red nuevo, `sound_stop`), C9 (la duración del puerto pasa a ser configurable) y C18 (un mensaje nuevo: el host les manda a los clientes los ms de cada uno). El orden y los grupos están en la tabla "Prioridad (2026-11-13)".
+**Contexto común.** La app anda estable (Coffee, 2026-11-13: "nunca más falló, se reinició ni nada"). Lo que sigue es que la use gente que no es técnica: un amigo de Coffee es la vara ("hay cosas que eran una paja"). Si algo le cuesta, es un error de la app. Casi todo es UI. Cambian la funcionalidad F7 (ensordecer, a propósito), F6 (un mensaje de red nuevo, `sound_stop`), C9 (la duración del puerto pasa a ser configurable), C18 (un mensaje nuevo: el host les manda a los clientes los ms de cada uno) y F8 (los gritos que llegan se bajan). El orden y los grupos están en la tabla "Prioridad (2026-11-13)".
 
 **Regla del registro de actividad** (C8, C9, C13, C14; la misma que C6):
 - Solo local: `addActivity`, nunca `addSystemMessage`.
 - Una línea por evento, sin repetir: tope por tipo.
 - Cada problema dice qué hacer, en simple.
 - Mismas claves de i18n que la barra de estado (unificar, no duplicar), en es y en. El detalle técnico va al log.
-- El registro siempre está a la vista (columna izquierda, también dentro de la sala; ☰ la oculta). La barra de estado se puede apagar.
+- El registro está en la columna izquierda. Dentro de la sala esa columna se oculta y se ve tocando ☰ (C17: queda así, decidido con Coffee el 2026-11-13). La barra de estado se puede apagar.
 
 ### C8. "Invitar": todas las direcciones por defecto, "Abriendo puerto…" y el error del puerto en rojo
 
@@ -223,7 +224,7 @@ Solo si aparece el problema: **R1** (data race del estado de la sala, ver "Si ap
 - **Arreglo propuesto**:
   - **`lagHistory`** (archivo nuevo, por ejemplo `lag_history.go`):
     - Por participante, muestras {hora, ms, pérdida, jitter}, con los huecos marcados para no unir dos tramos con una línea.
-    - Indexado por **nombre** (lo que ve el usuario), así una reconexión sigue en el mismo gráfico. Decidir en el plan cómo se trata "Usuario (2)".
+    - Indexado por **nombre** (lo que ve el usuario), así una reconexión sigue en el mismo gráfico. Con C2 (misma fila), quien se reconecta desde la misma IP conserva su nombre, sin "(2)". Uno con otra IP y el mismo nombre ("Nombre (2)") es otra persona y tiene su propio gráfico.
     - Tiene su propio mutex. Lo alimentan `updatePeerLag` y `updatePeerNetStats`, no el hilo de UI.
     - Pura y testeada: agregar, tope, huecos, ventana de 5 min y resumen (máximo y promedio).
   - **La tira del chip** (`newPeerChip`):
@@ -257,7 +258,7 @@ Solo si aparece el problema: **R1** (data race del estado de la sala, ver "Si ap
   - Solo lo muestra el chip del avatar (`formatPeerLag`: < 80 ms verde, ≤ 200 amarillo, ≤ 400 naranja, > 400 rojo, con colores fijos).
   - El log de nivel 1 escribe los intervalos de 10 s con problemas; el registro de actividad no dice nada.
 - **Arreglo propuesto**: una máquina de estados pura por participante (`lagWatch`), testeada con un reloj falso.
-  - "Lag" = RTT > 200 ms (naranja o peor en el chip) o pérdida ≥ 5 %, sostenido ≥ 10 s. Confirmar los umbrales en el plan con lo que muestran los logs reales; las constantes se comparten con el chip.
+  - "Lag" = RTT > 200 ms (naranja o peor en el chip) o pérdida ≥ 5 %, sostenido ≥ 10 s. Umbrales aceptados por Coffee (2026-11-13); si los logs reales muestran otra cosa, se ajustan en el plan. Las constantes se comparten con el chip.
   - Al empezar, **una** línea: "Hay lag con Pepe desde las 21:34 (350 ms, 8 % de pérdida)". Al volver a lo normal por ≥ 10 s, **otra**: "Se normalizó la conexión con Pepe (duró 1 min 20 s; lo peor: 600 ms, 12 %)". Con histéresis, para que no alterne.
   - Ayuda corta: si es siempre la misma persona, suele ser su Wi-Fi o alguien descargando en su red; si pasa con todos, es la propia.
   - El cliente solo mide al host: el texto dice "con el host (Pepe)".
@@ -281,8 +282,100 @@ Solo si aparece el problema: **R1** (data race del estado de la sala, ver "Si ap
   - Cada uno, una línea en el registro con qué hacer, según la regla de arriba (por ejemplo: la primera vez en la sesión y después como mucho una cada 5 min por tipo). Misma clave que la barra de estado, con el patrón de `reportHostNet` (C6).
   - Ayudas de ejemplo: dispositivo → "Elegí otro en Ajustes, o conectalo y tocá Reiniciar audio"; micrófono que pierde audio → "Si es Bluetooth, probá con cable o acercalo"; paquetes con otra clave → "Alguien intenta entrar con una invitación vieja: pasale una nueva".
   - Lo que ya va al registro (migración de host) y los avisos normales (sonido agregado, perfil guardado) quedan como están.
+  - Por C17 (el registro se ve con ☰), los textos que mandan a mirarlo dicen dónde está: "mirá el registro de actividad (☰)". Esto incluye `room.join_failed_internet` (R8) y el renglón rojo de C8.
 - **Tests**: evento → texto (función pura) y el tope por tipo.
 - **Docs**: AGENT.md §3.L (qué va al registro), README ("mirá el registro de actividad").
+
+### F8. Que un grito no deje sordo a nadie
+
+- [ ] **Pedido (Coffee, 2026-11-13)**: que a partir de la versión que viene el modo grito venga apagado por defecto para todos ("uno grita, me deja sordo y le bajo el volumen"). O, si se puede, que en modo grito se baje más por defecto.
+- **Hoy** (verificado el 2026-11-13; buscar por nombre):
+  - **Qué es el modo grito.** Es de quien habla: está en el perfil de **Entrada** (`shout_enabled`, default 1; [shout.go](internal/audio/shout.go)).
+    - **No sube el volumen.** Mientras dura, mezcla un 20 % de la voz original (`shout_dry_mix`) con la salida de RNNoise, para que el grito no suene robótico ni cortado.
+    - Marca los paquetes con `transport.FlagShout`: es el aro rojo del avatar (`markPeerShouting`).
+  - **Apagarlo no baja el grito.** Un grito llega igual de fuerte, casi al techo de envío (`send_ceiling_db`, −1,7 dBFS), muy por encima de una voz normal. Lo único que cambia es cómo suena el grito, y además el que escucha pierde la marca `FlagShout`.
+  - **Lo que tiene el que escucha:**
+    - Limitadores de pico: `output_limiter_db`, dentro del filtro de salida (apagado por defecto), y `bus_limiter_db` (−1,1 dBFS). Evitan que sature; no bajan un grito.
+    - El slider de volumen por persona, que baja todo, también cuando esa persona habla normal.
+  - **Los defaults:** "Default" se vuelve a aplicar al arrancar (`config.ApplyDefaultProfiles`). Un cambio de default llega solo a quien usa "Default"; los perfiles guardados ("Personalizado"…) conservan su valor. Para cambiarlo "para todos" habría que migrar los perfiles guardados, y la Visión dice sin migraciones.
+- **Decidido con Coffee (2026-11-13)**: opción **B**, con su propio slider en Salida, aparte del volumen por persona. El modo grito sigue prendido por defecto: la A queda descartada. Coffee: "mandale, es un slider más". Cuánto bajar y desde qué volumen se ajustan probando con un grito real.
+- **Opciones**:
+  - **A. `shout_enabled` con default 0** (lo pedido primero). Llega solo a quien tiene la Entrada en Default, no baja el volumen (ver arriba) y se pierde la marca del grito. **Descartada.**
+  - **B. El que escucha baja los gritos que le llegan (recomendado).** Va en el perfil de **Salida**: "Bajar los gritos que llegan" (prendido por defecto) y "Cuánto" (dB, por ejemplo −10).
+    - Va por persona, en la mezcla del Engine, antes del volumen individual, con rampa para que no haga clic.
+    - Depende solo de quien escucha: sirve aunque el que grita tenga otra versión u otro perfil. Sin cambio de protocolo.
+    - **Detección, a decidir en el plan:**
+      - Por **nivel** de lo que llega (recomendado): un compresor por stream que baja lo que pasa de un umbral. Sirve siempre. El ataque tiene que ser rápido para que el primer grito no pase entero.
+      - Por **`FlagShout`**: es más barato, pero solo sirve si el que grita tiene el modo grito prendido.
+    - Si se hace por nivel, el umbral por defecto no puede tocar una voz normal. Medirlo con grabaciones reales (log nivel 2) o con las muestras de los tests de audio.
+  - A y B no se excluyen: el modo grito puede seguir prendido (suena mejor y marca el aro rojo) y el volumen lo controla quien escucha.
+- **Tests**: frames fuertes → la ganancia baja con rampa; una voz normal no cambia; la opción apagada no toca nada. A mano: alguien grita y se compara con la opción prendida y apagada, también con el volumen individual al 100 % y al 300 %.
+- **Docs**: AGENT.md §3.A (cadena de recepción), README ("los gritos se bajan solos; se cambia en Ajustes → Salida").
+
+### C19. Plantilla fija "Sin filtros" en Entrada y Salida (para probar los filtros de a uno)
+
+- [ ] **Pedido (Coffee, 2026-11-13)**: una configuración "Sin filtros" que nunca se pueda pisar al tocar "Guardar". Si se cambia algo y se guarda, que pida un nombre. Es una plantilla única para partir de cero y modificar desde ahí.
+  - **Default**: la configuración actual (a Coffee le gusta).
+  - **Sin filtros**: para que alguien vaya probando los filtros uno por uno.
+- **Hoy** (verificado el 2026-11-13; buscar por nombre):
+  - Los perfiles son archivos en `<AppDir>/perfiles/<entrada|salida>/` ([profiles.go](internal/config/profiles.go)). El único fijo es "Default" (`DefaultProfileName`): no es un archivo, sino los valores de `Params`. No se puede renombrar ni borrar.
+    - "Guardar" sobre él pide un nombre (`profileBar.save` → `saveAs`, [ui_audio_params.go](internal/ui/ui_audio_params.go)).
+    - Si se guardan los Ajustes con cambios sobre él, se crea "Personalizado" (`saveDefaultChangesAsProfile`).
+    - `ValidateProfileName` rechaza su nombre.
+  - O sea: lo que se pide ya existe para Default. Falta un **segundo perfil fijo**.
+  - El Default de Salida ya tiene el check general apagado (`output_filter_enabled` = 0: ganancia, pasa-altos, pasa-bajos y limitador solo corren con ese check). En Salida, "Sin filtros" se diferencia por ser un punto de partida para probar (ver abajo) y por F8.
+- **Decidido con Coffee (2026-11-13)**: en los **dos** tipos, Entrada y Salida.
+- **Arreglo propuesto**:
+  - Generalizar el perfil fijo: una lista de perfiles de fábrica por tipo (Default y "Sin filtros"), cada uno con sus valores.
+    - "Sin filtros" = Default con cada filtro apagado, para prenderlos de a uno y escuchar qué hace cada uno:
+      - **Entrada**: modo grito, cancelación de eco, RNNoise, VAD, compuerta, pasa-altos, pasa-bajos, notch, compresor, expansor y limitador apagados; ganancia 0 dB.
+      - **Salida**: pasa-altos, pasa-bajos, limitador y "bajar los gritos" (F8) apagados; ganancia 0 dB.
+      - El check general (`audio_filter_enabled`, `output_filter_enabled`) queda **prendido**, así prender un solo filtro ya se nota. Si no, el usuario prende uno y no pasa nada. Confirmarlo en el plan.
+      - **Ojo**: sin VAD ni compuerta, el micrófono manda todo el tiempo, también el ruido. La ayuda del perfil tiene que decirlo.
+    - El techo de envío, el códec, el buffer del celular, el buffer de recepción y el techo de la mezcla quedan como en Default: no son filtros y protegen.
+  - Lo que hoy pregunta `== DefaultProfileName` pasa a una función (`isBuiltinProfile`). "Sin filtros":
+    - No es un archivo; no se renombra ni se borra.
+    - "Guardar" pide un nombre.
+    - Si se guardan los Ajustes con cambios sobre él, crea "Personalizado".
+    - `ValidateProfileName` rechaza su nombre.
+    - `ApplyDefaultProfiles` también lo vuelve a aplicar al arrancar.
+  - En la config se guarda con una clave fija que no dependa del idioma, y se muestra traducido ("Sin filtros" / "No filters"). Decidirlo en el plan, junto con qué pasa si ya hay un perfil guardado con ese nombre.
+- **Tests**: los valores del perfil (todo filtro apagado y lo demás igual que Default), el nombre rechazado, Guardar pide un nombre y se vuelve a aplicar al arrancar.
+- **Docs**: AGENT.md (perfiles), README.
+
+### C20. Un atajo para prender y apagar los atajos de la botonera (para jugar con teclado)
+
+- [ ] **Pedido (Coffee, 2026-11-13)**: poder desactivar los atajos de la botonera. Jugando al Counter-Strike con teclado molestan; con joystick no. Primero pidió un check; después, mejor un **atajo** que los prenda y los apague, para hacerlo sin salir del juego; al final, un **botón con su atajo al lado**, como "Detener".
+- **Hoy** (verificado el 2026-11-13; buscar por nombre):
+  - Los atajos se guardan en la config: `SoundBinds` (sonido → tecla) y `StopSoundBind` ("Detener").
+  - `pollHotkeys` ([hotkey_windows.go](internal/ui/hotkey_windows.go)) lee el teclado cada 25 ms con `GetAsyncKeyState`, sobre la lista que arma `publishHotkeys` (`activeHotkeys`).
+    - No se queda con la tecla: el juego la recibe igual y además suena el sonido.
+    - Solo se saltea una tecla suelta mientras se escribe **en VoxMesh** (`isTypingInApp`). En un juego no hay nada que los frene.
+  - No hay forma de apagarlos sin borrar los atajos uno por uno.
+  - El atajo de "Detener" se elige con `showStopSoundBindDialog` y se guarda en `StopSoundBind`. No vi que el diálogo de atajos rechace una tecla que ya usa otro atajo.
+  - Hay sonidos de eventos locales (`playEventSound`, `audio.SFXConnect` / `SFXDisconnect`).
+- **Arreglo propuesto**:
+  - **El atajo "Prender/apagar atajos"**:
+    - Se elige igual que el de "Detener": su botón de atajo al lado (`newBindButton`) y el mismo diálogo. Se guarda en un campo nuevo, por ejemplo `toggle_hotkeys_bind`. Sin tecla por defecto, para no chocar con un juego.
+    - En `pollHotkeys` es el **único** que anda con los atajos apagados.
+    - Apagados, `publishHotkeys` publica solo ese. Los demás quedan guardados y vuelven al prenderlos.
+  - Apaga **todos**, también el de "Detener" (decidido con Coffee, 2026-11-13).
+  - El estado (prendidos o apagados) va en un campo de config del grupo "Otros", por ejemplo `sound_hotkeys_off`. Se guarda: sigue igual al volver a abrir la app. Sin migración.
+  - **Aviso al cambiarlo**: dentro del juego la ventana no se ve, así que suena un sonido corto **local**, distinto para prender y para apagar (como `playEventSound`). También una línea en el registro de actividad ("Atajos de la botonera apagados / prendidos"). Decidir en el plan qué sonidos se usan.
+  - **Decidido con Coffee (2026-11-13): un botón, no un check**, en el mismo lugar y con la misma forma que "Detener" (`stopRow` en `buildSoundPanel`).
+    - Una fila nueva: a la izquierda, el botón que prende y apaga los atajos, que muestra el estado (por ejemplo "Atajos: prendidos" / "Atajos: apagados", con ícono). A la derecha, su botón de atajo.
+    - Se actualiza solo (`fyne.Do`) cuando se cambia con el atajo.
+    - Sirve también sin haber elegido un atajo.
+  - Si la tecla elegida ya la usa otro atajo (un sonido o "Detener"), el diálogo lo avisa y no la acepta. Decidir en el plan si se extiende a todos los atajos.
+  - **Decidido con Coffee (2026-11-13)**: los botones y sus atajos se ven igual estando apagados.
+- **Tests**:
+  - `publishHotkeys` apagado → solo queda el de prender/apagar, y la config conserva los demás. Prendido → todos.
+  - La tecla repetida se rechaza.
+  - A mano:
+    - En un juego o en el Bloc de notas: apretar el atajo → suena el aviso y los demás atajos no suenan; apretarlo de nuevo → vuelven.
+    - El botón se actualiza solo.
+    - Cerrar y abrir la app → sigue como quedó.
+- **Docs**: README ("atajos de la botonera"), AGENT.md si hay una sección de atajos.
 
 ### C15. Paletas de colores (naranja para lo que resalta)
 
@@ -296,9 +389,13 @@ Solo si aparece el problema: **R1** (data race del estado de la sala, ver "Si ap
   - Paletas de fábrica: la actual con el resaltado naranja como "Default" (Coffee elige después cuál queda) y 2 o 3 plantillas.
   - Paletas propias: un JSON por paleta en `<AppDir>/paletas/`, con el mismo patrón que los perfiles de audio ([profiles.go](internal/config/profiles.go): Default de fábrica que no se pisa, Guardar como, Renombrar, Borrar). Editor en Ajustes: la lista de colores con `dialog.NewColorPicker`.
   - Config: el nombre de la paleta activa (texto, como `ActiveInputProfile`).
-  - Decidir en el plan:
-    - En vivo (`Settings().SetTheme` + refrescar los objetos que leen el color al crearse) o al reiniciar, como el idioma. En vivo es mejor para "jugar", pero cuesta más.
-    - Si alguna plantilla puede ser clara: hoy la regla es "siempre oscuro" (AGENT.md §3.D).
+  - **Decidido con Coffee (2026-11-13)**:
+    - **Sin reiniciar.** Elegir una paleta de la lista se aplica al instante. En el editor, un botón "Aplicar": los colores no cambian mientras se elige cada uno.
+      - Cuesta lo mismo que aplicarlo en vivo: lo caro es no reiniciar (`Settings().SetTheme` + refrescar los objetos que leen el color al crearse).
+    - **Puede haber paletas claras.** Una plantilla "Clara" es la de ahora "invertida": fondos claros y texto oscuro, con el mismo naranja.
+      - No es una inversión literal: el naranja invertido sería azul.
+      - Cambia la regla "siempre oscuro" de AGENT.md §3.D.
+      - Revisar que se lean los colores que hoy asumen fondo oscuro (medidores, chips, insignias).
 - **Tests**: cargar y guardar paletas (puro, como los perfiles); que todo nombre de color que se usa tenga valor en cada paleta.
 - **Docs**: AGENT.md §3.D ("Look": nada de colores fijos), README.
 
@@ -321,9 +418,10 @@ Solo si aparece el problema: **R1** (data race del estado de la sala, ver "Si ap
 
 ### C17. El registro de actividad queda oculto dentro de la sala
 
-- [ ] **Visto en C8 (2026-11-13)**: el "Contexto común" de arriba dice que el registro "siempre está a la vista (columna izquierda, también dentro de la sala)", pero `openHost` y `connectClient` ([ui_connection.go](internal/ui/ui_connection.go)) llaman a `hideConnectionPanels` ([ui_components.go](internal/ui/ui_components.go)), que oculta `a.connectionPanel`: la columna entera, con las tarjetas Host y Cliente **y** la del registro (`activityCard`). Dentro de la sala solo se ve con ☰. Fue a propósito en C3 ("el panel izquierdo se oculta solo"), antes de que el registro fuera el lugar donde la app dice qué hacer (C6, R8, C8, C9, C13, C14).
+- [x] **Decidido con Coffee (2026-11-13): queda como está.** Dentro de la sala el registro se ve abriendo ☰, y así está bien. Lo único que queda va en C14: que los textos que mandan a mirar el registro digan dónde está.
+- **Visto en C8 (2026-11-13)**: el "Contexto común" de arriba dice que el registro "siempre está a la vista (columna izquierda, también dentro de la sala)", pero `openHost` y `connectClient` ([ui_connection.go](internal/ui/ui_connection.go)) llaman a `hideConnectionPanels` ([ui_components.go](internal/ui/ui_components.go)), que oculta `a.connectionPanel`: la columna entera, con las tarjetas Host y Cliente **y** la del registro (`activityCard`). Dentro de la sala solo se ve con ☰. Fue a propósito en C3 ("el panel izquierdo se oculta solo"), antes de que el registro fuera el lugar donde la app dice qué hacer (C6, R8, C8, C9, C13, C14).
 - **Por qué importa**: los avisos del host ("no se pudo abrir el puerto…", "se cumplió el tiempo del puerto…") y el de R8 al que entra ("pedile que mire su registro de actividad") apuntan a algo que no está en pantalla. C8 lo emparcha: el renglón rojo de "Invitar" muestra la columna.
-- **Arreglo posible** (decidir con Coffee): al entrar a la sala ocultar solo las tarjetas Host y Cliente y dejar el registro; o mostrar la columna sola cuando llega una línea con un problema. Revisar el ancho (`fixedWidthLayout`, `connectionPanelWidth`) y C16.
+- **Opciones que se vieron (descartadas el 2026-11-13)**: al entrar a la sala ocultar solo las tarjetas Host y Cliente y dejar el registro; o mostrar la columna sola cuando llega una línea con un problema. Revisar el ancho (`fixedWidthLayout`, `connectionPanelWidth`) y C16.
 
 # Prioridad: invitar sin errores (2026-11-11)
 
@@ -566,6 +664,8 @@ Sobre el puerto UPnP: la app borra el mapeo al cerrar la sala o la app. Si se ci
   - **Hecho** (2026-11-02): `room.ClampUsername` + `room.MaxUsernameRunes` = **32** runas ([state.go](internal/room/state.go)). Es el tope de Discord y Steam; la entrada de Ajustes no tenía límite. Se aplica en `saveSettings` ([ui_settings.go](internal/ui/ui_settings.go)) y en `handleRoomHello` **antes** del sufijo por nombre repetido: recortado después, el sufijo se perdería. El sufijo puede pasar de 32 runas, acotado por los 16 participantes. Test `TestClampUsername`; `TestFullRoomStateFitsInOneDatagram` usa la constante. README: "nombre (hasta 32 caracteres)". **Quedó afuera** (se acepta, sin compatibilidad hacia atrás): un nombre de más de 32 que ya esté en `voxmesh.json` sale entero si esa PC es host; como cliente, el host lo recorta, él ve una vez "Nombre en uso…" y guarda el recortado.
 - [ ] **R6. Dos registros con la misma dirección**: si alguien cambia de nombre y reconecta desde el mismo puerto, el host tiene dos IDs con la misma dirección. `handleHostPacket` actualiza `LastSeenUTC` del **primero** que encuentra (el viejo), así que el nuevo vence a los 20 s; `handleParticipantLeave` busca por ID **o** dirección, da con el viejo (ya desconectado) y vuelve sin marcar nada, pero antes hizo `RemovePeer`: el cliente pierde la difusión hasta su próximo paquete, cada 2 s. Arreglo probable: en `handleRoomHello`, otro ID en la misma dirección es el mismo socket → sacarlo de la lista.
 - [ ] **C2. "Nombre (2)" al reconectar desde otro puerto**: el registro viejo sigue "conectado" hasta `participantTimeout` (20 s), así que el que vuelve en menos de eso con un ID nuevo entra como "Nombre (2)".
+  - **Decidido con Coffee (2026-11-13), va en la fila 4 con C18**: mismo nombre y misma IP (otro puerto) en la misma sesión de la sala es la misma persona. El host saca el registro viejo y no le pone "(2)". Con otra IP sigue como hoy: puede ser otra persona con el mismo nombre.
+  - Va en `handleRoomHello`, igual que R6 (misma dirección, otro nombre). Hacer R6 de paso si sale con el mismo arreglo.
 - [ ] **R2. Chat / miniaturas**, si el chat se pone lento con muchas imágenes: `refreshChat` reconstruye todas las filas en el hilo de UI (en cada tecla del buscador y por cada imagen recibida) y lanza una decodificación por imagen sin deduplicar. Arreglo: juntar los refresh (flag sucio + un solo `fyne.Do`), cargas deduplicadas + semáforo de 1–2 decodificaciones, `thumbCache` con tope; `widget.List` virtualizado solo si hace falta.
 - [x] **C4. Ajustes pide ~1000 px de ancho** (visto en C3, ya pasaba antes): con la ventana a media pantalla (~960 px), abrir Ajustes la agranda a ~1000 px y la tarjeta de la derecha y "Guardar" quedan cortadas. Sospechoso: `container.NewGridWithColumns(3, …)` de la tarjeta "Interfaz y Sistema" ([ui_settings.go](internal/ui/ui_settings.go)), donde cada columna mide lo que "Abrir carpeta de datos y grabaciones". Arreglo probable: esos tres botones en dos filas o en un VBox.
   - **Hecho** (2026-11-02): además de esos tres botones (ahora uno debajo del otro), lo ensanchaban los textos de los medidores, que cambian solos ("Nivel: … · SATURA (bajá el volumen del micrófono)", "Después de filtros: …", "Voz detectada (VAD): …") y en la grilla Entrada | Salida contaban doble, y el "Etiqueta: valor" de cada slider de "Configuración avanzada" ([ui_audio_params.go](internal/ui/ui_audio_params.go)). Ahora hacen salto de línea: cuando aparece "SATURA", el texto baja una línea en vez de ensanchar. La regla quedó en AGENT.md §3.D.
