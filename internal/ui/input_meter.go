@@ -18,16 +18,17 @@ type inputMeter struct {
 	muted   bool    // en sala y muteado: no se manda aunque la cadena lo deje pasar
 }
 
-// reportMeter le pasa al medidor de Ajustes (si está abierto) el resultado de un frame que ya
-// pasó por la cadena de envío. pcm es la entrada sin procesar; postDB, el nivel ya procesado.
+// reportMeter le pasa a los medidores (el de Ajustes si está abierto y la barrita del slider propio
+// si hay chip propio, C22) el resultado de un frame que ya pasó por la cadena de envío: el mismo
+// inputMeter a los dos. pcm es la entrada sin procesar; postDB, el nivel ya procesado.
 func (a *App) reportMeter(pcm []byte, sent bool, postDB float32) {
-	listener := a.levelListener.Load()
-	if listener == nil {
+	settings, gate := a.levelListener.Load(), a.selfGateMeter.Load()
+	if settings == nil && gate == nil {
 		return
 	}
 	db, clipped := audio.FrameLevel(pcm)
 	muted := a.isMuted.Load() && a.connected()
-	(*listener)(inputMeter{
+	m := inputMeter{
 		db:      db,
 		postDB:  postDB,
 		vad:     a.effects.VAD(),
@@ -35,7 +36,13 @@ func (a *App) reportMeter(pcm []byte, sent bool, postDB float32) {
 		sent:    sent && !muted,
 		shout:   sent && !muted && a.effects.Shouting(),
 		muted:   muted,
-	})
+	}
+	if settings != nil {
+		(*settings)(m)
+	}
+	if gate != nil {
+		(*gate)(m)
+	}
 }
 
 // meterFrame corre la cadena de envío sobre un frame solo para el medidor (sin mandar ni

@@ -702,8 +702,9 @@ type peerChip struct {
 	viewBtn     *widget.Button
 	nameTxt     *canvas.Text
 	lagTxt      *canvas.Text
-	volumeTxt   *canvas.Text // nil para el propio (no hay slider de uno mismo)
+	volumeTxt   *canvas.Text // nil para el propio (no hay volumen de uno mismo)
 	strip       *lagStrip    // tira de lag (C18); nil para el propio
+	gate        *selfGate    // "desde qué volumen me toma la voz" (C22); solo el propio
 	object      fyne.CanvasObject
 }
 
@@ -726,6 +727,7 @@ func (a *App) refreshPeerAvatars() {
 		}
 		if len(peers) == 0 {
 			a.peerChips = nil
+			a.setSelfGateWidgets(nil)
 			empty := widget.NewLabel(i18n.T("main.no_users"))
 			empty.Importance = widget.LowImportance
 			a.peerHBox.Objects = []fyne.CanvasObject{empty}
@@ -754,13 +756,18 @@ func (a *App) refreshPeerAvatars() {
 
 		chips := make([]*peerChip, 0, len(peers))
 		objects := make([]fyne.CanvasObject, 0, len(peers))
+		var gate *selfGate
 		for _, peer := range peers {
 			chip := a.newPeerChip(peer)
 			chip.update(peer, now)
 			chips = append(chips, chip)
 			objects = append(objects, chip.object)
+			if chip.gate != nil {
+				gate = chip.gate
+			}
 		}
 		a.peerChips = chips
+		a.setSelfGateWidgets(gate)
 		a.peerHBox.Objects = objects
 		a.peerHBox.Refresh()
 	})
@@ -803,6 +810,10 @@ func (a *App) newPeerChip(peer peerView) *peerChip {
 			chip.strip.Hide()
 		}
 		content = container.NewVBox(content, container.NewHBox(chip.strip), a.newPeerVolumeSlider(chip), chip.viewBtn)
+	} else {
+		// El propio: desde qué volumen te toma la voz (C22), donde los demás tienen el volumen.
+		chip.gate = a.newSelfGate()
+		content = container.NewVBox(content, chip.gate.object)
 	}
 
 	pillBg := canvas.NewRectangle(theme.Color(colorNameChip))

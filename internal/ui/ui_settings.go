@@ -392,6 +392,11 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 			a.cfgBaseline.Store(nil)
 			a.settingsStatus = nil
 			a.window.SetContent(a.mainView)
+			// El slider propio (C22) no se ve con Ajustes abierto: toma lo que quedó (guardado o
+			// descartado, los dos ya escribieron la config).
+			if a.selfGate != nil {
+				a.selfGate.refresh(a.conf())
+			}
 		})
 	}
 	roomPortEntry := widget.NewEntry()
