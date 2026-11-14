@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"voxmesh/internal/i18n"
 )
 
 // Perfiles de audio: un archivo JSON por perfil en <AppDir>/perfiles/<entrada|salida>/. Guardan
@@ -16,20 +18,112 @@ import (
 // pasar a otra PC tal cual. Al cargar se parte del default y se aplica el archivo encima: un
 // perfil viejo sigue andando cuando se agregan parámetros.
 //
-// "Default" no es un archivo: son los valores de la tabla Params.
+// Los perfiles de fábrica ("Default" y "Sin filtros") no son archivos: son los valores de la tabla
+// Params (Sin filtros, con cada filtro apagado). No se pisan, no se renombran ni se borran, y se
+// vuelven a aplicar al arrancar (ApplyBuiltinProfiles).
 
-// DefaultProfileName es el perfil fijo con los valores de fábrica.
-const DefaultProfileName = "Default"
+const (
+	// DefaultProfileName es el perfil fijo con los valores de fábrica.
+	DefaultProfileName = "Default"
+	// NoFiltersProfileName es la clave fija del perfil "Sin filtros" (AGENDA C19): se guarda así en
+	// voxmesh.json en cualquier idioma; en pantalla va traducido ("profile.no_filters").
+	NoFiltersProfileName = "Sin filtros"
+)
+
+// BuiltinProfiles son los perfiles de fábrica, en el orden del selector.
+var BuiltinProfiles = []string{DefaultProfileName, NoFiltersProfileName}
+
+// noFiltersValues es lo que "Sin filtros" cambia respecto de Default: cada filtro apagado (para
+// prenderlos de a uno) y la ganancia en 0 dB. El check general de cada tipo queda prendido, así
+// prender un filtro ya se nota. El techo de envío, Opus, el celular, el buffer de recepción y la
+// mezcla quedan como en Default: no son filtros y protegen.
+var noFiltersValues = map[string]float64{
+	"audio_filter_enabled": 1,
+	"shout_enabled":        0,
+	"aec_enabled":          0,
+	"rnnoise_enabled":      0,
+	"vad_enabled":          0,
+	"noise_gate_enabled":   0,
+	"high_pass_enabled":    0,
+	"low_pass_enabled":     0,
+	"notch_enabled":        0,
+	"input_gain_db":        0,
+	"compressor_enabled":   0,
+	"expander_enabled":     0,
+	"limiter_enabled":      0,
+
+	"shout_duck_enabled":       0,
+	"output_filter_enabled":    1,
+	"output_gain_db":           0,
+	"output_high_pass_enabled": 0,
+	"output_low_pass_enabled":  0,
+	"output_limiter_enabled":   0,
+}
 
 // Errores de nombres de perfil que la UI le muestra al usuario (los reconoce con errors.Is para
 // traducirlos).
 var (
 	ErrProfileNameEmpty    = errors.New("el nombre del perfil está vacío")
-	ErrProfileNameDefault  = fmt.Errorf("%q es el perfil de fábrica", DefaultProfileName)
+	ErrProfileNameReserved = errors.New("ese nombre es de un perfil de fábrica")
 	ErrProfileNameTooLong  = errors.New("el nombre del perfil es demasiado largo")
 	ErrProfileExists       = errors.New("ya existe un perfil")
 	ErrDefaultProfileFixed = errors.New("el perfil de fábrica no se puede borrar")
 )
+
+// CanonicalProfileName devuelve la clave de un perfil de fábrica si name es uno de ellos ("" es
+// Default; "Sin filtros" también en cualquier idioma del catálogo, sin distinguir mayúsculas), o
+// name tal cual. Un perfil guardado con uno de esos nombres queda ignorado: nunca se lista ni se
+// lee (sin migración, como pide la Visión).
+func CanonicalProfileName(name string) string {
+	trimmed := strings.TrimSpace(name)
+	switch {
+	case trimmed == "", strings.EqualFold(trimmed, DefaultProfileName):
+		return DefaultProfileName
+	case strings.EqualFold(trimmed, NoFiltersProfileName):
+		return NoFiltersProfileName
+	}
+	for _, language := range i18n.Languages {
+		if strings.EqualFold(trimmed, i18n.In(language.Code, "profile.no_filters")) {
+			return NoFiltersProfileName
+		}
+	}
+	return name
+}
+
+// IsBuiltinProfile indica si name es un perfil de fábrica (o uno de sus nombres).
+func IsBuiltinProfile(name string) bool {
+	canonical := CanonicalProfileName(name)
+	return canonical == DefaultProfileName || canonical == NoFiltersProfileName
+}
+
+// BuiltinValues devuelve settings con los parámetros de kind del perfil de fábrica name (Default si
+// name no es de fábrica).
+func BuiltinValues(kind ProfileKind, name string, settings LiveSettings) LiveSettings {
+	noFilters := CanonicalProfileName(name) == NoFiltersProfileName
+	for _, param := range ProfileParams(kind) {
+		value := param.Default
+		if override, ok := noFiltersValues[param.Key]; ok && noFilters {
+			value = override
+		}
+		param.Set(&settings, value)
+	}
+	return settings
+}
+
+// ProfileForBuiltinChanges decide qué hacer con los cambios de kind al guardarlos: si el perfil
+// activo es de fábrica y current ya no tiene sus valores, devuelve el nombre del perfil nuevo que
+// los guarda (base, "base 2"... sin chocar con existing; base es "Personalizado" en el idioma de
+// la app) y true. Si el activo es uno guardado, o no cambió nada, devuelve false.
+func ProfileForBuiltinChanges(kind ProfileKind, current LiveSettings, existing []string, base string) (string, bool) {
+	active := current.ActiveInputProfile
+	if kind == OutputProfile {
+		active = current.ActiveOutputProfile
+	}
+	if !IsBuiltinProfile(active) || SameProfileValues(kind, BuiltinValues(kind, active, current), current) {
+		return "", false
+	}
+	return NextCustomProfileName(base, existing), true
+}
 
 const profileVersion = 1
 
@@ -87,15 +181,16 @@ func ValidateProfileName(name string) (string, error) {
 	switch {
 	case name == "":
 		return "", ErrProfileNameEmpty
-	case strings.EqualFold(name, DefaultProfileName):
-		return "", ErrProfileNameDefault
+	case IsBuiltinProfile(name):
+		return "", ErrProfileNameReserved
 	case len([]rune(name)) > 60:
 		return "", ErrProfileNameTooLong
 	}
 	return name, nil
 }
 
-// List devuelve los nombres de los perfiles guardados de ese tipo, ordenados (sin "Default").
+// List devuelve los nombres de los perfiles guardados de ese tipo, ordenados (sin los de fábrica:
+// un archivo con uno de sus nombres se ignora).
 func (p Profiles) List(kind ProfileKind) ([]string, error) {
 	entries, err := os.ReadDir(p.kindDir(kind))
 	if os.IsNotExist(err) {
@@ -110,7 +205,7 @@ func (p Profiles) List(kind ProfileKind) ([]string, error) {
 			continue
 		}
 		file, err := readProfile(filepath.Join(p.kindDir(kind), entry.Name()))
-		if err != nil || file.Name == "" {
+		if err != nil || file.Name == "" || IsBuiltinProfile(file.Name) {
 			continue
 		}
 		names = append(names, file.Name)
@@ -142,16 +237,16 @@ func (p Profiles) Save(kind ProfileKind, name string, settings LiveSettings) err
 }
 
 // Values devuelve settings con los parámetros de ese tipo tomados del perfil (los que falten,
-// en su default). El resto de settings no cambia. "Default" no lee ningún archivo.
+// en su default). El resto de settings no cambia. Los de fábrica no leen ningún archivo.
 func (p Profiles) Values(kind ProfileKind, name string, settings LiveSettings) (LiveSettings, error) {
-	values := map[string]float64{}
-	if name != "" && name != DefaultProfileName {
-		file, err := readProfile(p.path(kind, name))
-		if err != nil {
-			return settings, err
-		}
-		values = file.Values
+	if IsBuiltinProfile(name) {
+		return BuiltinValues(kind, name, settings), nil
 	}
+	file, err := readProfile(p.path(kind, name))
+	if err != nil {
+		return settings, err
+	}
+	values := file.Values
 	for _, param := range ProfileParams(kind) {
 		value, ok := values[param.Key]
 		if !ok || !param.InRange(value) {
@@ -186,7 +281,7 @@ func (p Profiles) Rename(kind ProfileKind, oldName, newName string) error {
 
 // Delete borra un perfil guardado.
 func (p Profiles) Delete(kind ProfileKind, name string) error {
-	if name == "" || name == DefaultProfileName {
+	if IsBuiltinProfile(name) {
 		return ErrDefaultProfileFixed
 	}
 	return os.Remove(p.path(kind, name))
@@ -202,22 +297,32 @@ func SameProfileValues(kind ProfileKind, a, b LiveSettings) bool {
 	return true
 }
 
-// ApplyDefaultProfiles pone los valores de fábrica en cada tipo cuyo perfil activo es Default.
-// Se corre al arrancar: Default no se guarda, así un cambio de
-// defaults en una actualización le llega a todos los que lo usan. Devuelve si cambió algo.
-func ApplyDefaultProfiles(settings *LiveSettings) bool {
+// ApplyBuiltinProfiles pone los valores de fábrica en cada tipo cuyo perfil activo es de fábrica
+// (Default o Sin filtros) y deja su nombre con la clave fija ("" para Default). Se corre al
+// arrancar: los perfiles de fábrica no se guardan, así un cambio de defaults en una actualización
+// le llega a todos los que los usan. Devuelve si cambió algo.
+func ApplyBuiltinProfiles(settings *LiveSettings) bool {
 	changed := false
 	for _, kind := range []ProfileKind{InputProfile, OutputProfile} {
-		active := settings.ActiveInputProfile
+		active := &settings.ActiveInputProfile
 		if kind == OutputProfile {
-			active = settings.ActiveOutputProfile
+			active = &settings.ActiveOutputProfile
 		}
-		if active != "" && active != DefaultProfileName {
+		if !IsBuiltinProfile(*active) {
 			continue
 		}
+		canonical := CanonicalProfileName(*active)
+		if canonical == DefaultProfileName {
+			canonical = ""
+		}
+		if *active != canonical {
+			*active = canonical
+			changed = true
+		}
+		want := BuiltinValues(kind, canonical, *settings)
 		for _, param := range ProfileParams(kind) {
-			if math.Abs(param.Get(settings)-param.Default) > 1e-4 { // float32 guardado vs float64 de la tabla
-				param.Set(settings, param.Default)
+			if math.Abs(param.Get(settings)-param.Get(&want)) > 1e-4 { // float32 guardado vs float64 de la tabla
+				param.Set(settings, param.Get(&want))
 				changed = true
 			}
 		}

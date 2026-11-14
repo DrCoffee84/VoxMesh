@@ -438,10 +438,10 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 	}
 
 	saveSettings := func() {
-		// Cambios hechos sobre Default: van a un perfil nuevo (Default se pisa en cada arranque).
+		// Cambios hechos sobre un perfil de fábrica: van a uno nuevo (los de fábrica se pisan al arrancar).
 		var created []string
 		for _, bar := range profileBars {
-			if profile, ok := bar.saveDefaultChangesAsProfile(); ok {
+			if profile, ok := bar.saveBuiltinChangesAsProfile(); ok {
 				created = append(created, fmt.Sprintf("%q", profile))
 			}
 		}

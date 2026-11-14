@@ -27,7 +27,7 @@ var userErrors = []struct {
 	{invite.ErrAddress, "err.invite.address"},
 	{invite.ErrKey, "err.invite.key"},
 	{config.ErrProfileNameEmpty, "err.profile.empty"},
-	{config.ErrProfileNameDefault, "err.profile.default"},
+	{config.ErrProfileNameReserved, "err.profile.reserved"},
 	{config.ErrProfileNameTooLong, "err.profile.too_long"},
 	{config.ErrProfileExists, "err.profile.exists"},
 	{config.ErrDefaultProfileFixed, "err.profile.default_fixed"},

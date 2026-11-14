@@ -217,8 +217,8 @@ func New(executable string) *App {
 	} else {
 		logging.Errorf("perfiles de audio: %s", logging.FormatError(err))
 	}
-	// Default no se guarda: el que lo usa recibe los valores de fábrica de esta versión.
-	defaultsApplied := config.ApplyDefaultProfiles(&cfg.LiveSettings)
+	// Los perfiles de fábrica no se guardan: el que usa uno recibe los valores de esta versión.
+	defaultsApplied := config.ApplyBuiltinProfiles(&cfg.LiveSettings)
 	voiceProcessor, _ := audio.NewRNNoise()
 	a := &App{
 		cfgPath:        cfgPath,

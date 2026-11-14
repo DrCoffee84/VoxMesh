@@ -177,15 +177,32 @@ func (a *App) loadProfileState(kind config.ProfileKind, cfg *config.Config) prof
 	return profileState{names: names, loaded: loaded}
 }
 
+// activeProfile es el perfil activo de kind: un nombre guardado o la clave de uno de fábrica
+// (config.DefaultProfileName, config.NoFiltersProfileName).
 func activeProfile(kind config.ProfileKind, cfg *config.Config) string {
 	name := cfg.ActiveInputProfile
 	if kind == config.OutputProfile {
 		name = cfg.ActiveOutputProfile
 	}
-	if name == "" {
-		return config.DefaultProfileName
+	return config.CanonicalProfileName(name)
+}
+
+// profileLabel es cómo se ve un perfil en el selector: "Sin filtros" en el idioma de la app; el
+// resto tal cual ("Default" no se traduce).
+func profileLabel(name string) string {
+	if name == config.NoFiltersProfileName {
+		return i18n.T("profile.no_filters")
 	}
 	return name
+}
+
+// profileFromLabel es la inversa de profileLabel. No hay ambigüedad: ningún perfil guardado se
+// llama como uno de fábrica (config.ValidateProfileName, Profiles.List).
+func profileFromLabel(label string) string {
+	if label == i18n.T("profile.no_filters") {
+		return config.NoFiltersProfileName
+	}
+	return label
 }
 
 func setActiveProfile(kind config.ProfileKind, c *config.Config, name string) {
@@ -210,6 +227,7 @@ type profileBar struct {
 
 	selector *widget.Select
 	modified *widget.Label
+	help     *widget.Label // qué es "Sin filtros" (solo con ese perfil elegido)
 	rename   *widget.Button
 	remove   *widget.Button
 }
@@ -219,13 +237,17 @@ func (a *App) newProfileBar(kind config.ProfileKind, controls *paramControls, st
 	bar.selector = widget.NewSelect(nil, nil)
 	bar.modified = widget.NewLabel("")
 	bar.modified.Importance = widget.WarningImportance
+	bar.help = widget.NewLabel("")
+	bar.help.Wrapping = fyne.TextWrapWord
+	bar.help.Importance = widget.LowImportance
+	bar.help.TextStyle = fyne.TextStyle{Italic: true}
 	save := widget.NewButton(i18n.T("common.save"), bar.save)
 	saveAs := widget.NewButton(i18n.T("profile.save_as"), bar.saveAs)
 	bar.rename = widget.NewButton(i18n.T("profile.rename"), bar.renameProfile)
 	bar.remove = widget.NewButton(i18n.T("profile.delete"), bar.deleteProfile)
 	bar.setOptions(state.names, activeProfile(kind, a.conf()))
-	bar.selector.OnChanged = func(name string) {
-		if name != activeProfile(kind, a.conf()) {
+	bar.selector.OnChanged = func(label string) {
+		if name := profileFromLabel(label); name != activeProfile(kind, a.conf()) {
 			bar.load(name)
 		}
 	}
@@ -233,23 +255,37 @@ func (a *App) newProfileBar(kind config.ProfileKind, controls *paramControls, st
 	bar.updateModified()
 	row := container.NewBorder(nil, nil, widget.NewLabel(i18n.T("profile.label")), bar.modified, bar.selector)
 	// 2×2: la tarjeta ocupa media ventana y cuatro botones en fila la ensanchaban.
-	return bar, container.NewVBox(row, container.NewGridWithColumns(2, save, saveAs, bar.rename, bar.remove))
+	return bar, container.NewVBox(row, bar.help, container.NewGridWithColumns(2, save, saveAs, bar.rename, bar.remove))
 }
 
-// setOptions pone la lista (Default primero) y selecciona name sin disparar una carga.
+// setOptions pone la lista (los de fábrica primero) y selecciona name sin disparar una carga.
 func (b *profileBar) setOptions(names []string, name string) {
 	b.state.names = names
-	b.selector.Options = append([]string{config.DefaultProfileName}, names...)
+	options := make([]string, 0, len(config.BuiltinProfiles)+len(names))
+	for _, builtin := range config.BuiltinProfiles {
+		options = append(options, profileLabel(builtin))
+	}
+	b.selector.Options = append(options, names...)
 	onChanged := b.selector.OnChanged
 	b.selector.OnChanged = nil
-	b.selector.SetSelected(name)
+	b.selector.SetSelected(profileLabel(name))
 	b.selector.OnChanged = onChanged
-	if name == config.DefaultProfileName {
+	if config.IsBuiltinProfile(name) {
 		b.rename.Disable()
 		b.remove.Disable()
 	} else {
 		b.rename.Enable()
 		b.remove.Enable()
+	}
+	if name == config.NoFiltersProfileName {
+		key := "profile.no_filters_help_input"
+		if b.kind == config.OutputProfile {
+			key = "profile.no_filters_help_output"
+		}
+		b.help.SetText(i18n.T(key))
+		b.help.Show()
+	} else {
+		b.help.Hide()
 	}
 }
 
@@ -265,41 +301,40 @@ func (b *profileBar) updateModified() {
 func (b *profileBar) load(name string) {
 	go func() {
 		values, err := b.app.profiles.Values(b.kind, name, b.app.conf().LiveSettings)
-		fyne.Do(func() {
-			if err != nil {
-				b.app.setStatus(i18n.M("profile.load_failed", errorMsg(err)))
-				b.setOptions(b.state.names, activeProfile(b.kind, b.app.conf()))
-				return
-			}
-			cfg := b.app.updateConfig(func(c *config.Config) {
-				for _, param := range config.ProfileParams(b.kind) {
-					param.Set(&c.LiveSettings, param.Get(&values))
-				}
-				setActiveProfile(b.kind, c, name)
-			})
-			b.state.loaded = values
-			b.setOptions(b.state.names, name)
-			b.controls.refresh(cfg)
-			b.updateModified()
-			b.app.setStatus(i18n.M("profile.loaded", name))
-		})
+		fyne.Do(func() { b.applyLoaded(name, values, err) })
 	}()
 }
 
-// saveDefaultChangesAsProfile se llama al Guardar la configuración: si el perfil activo es
-// Default y los valores cambiaron, crea un perfil nuevo ("Personalizado", "Personalizado 2"...)
-// con ellos y lo deja activo. Default se pisa con los valores de fábrica al arrancar
-// (config.ApplyDefaultProfiles), así que si no esos cambios se perderían.
-func (b *profileBar) saveDefaultChangesAsProfile() (string, bool) {
+// applyLoaded pone en el borrador los valores leídos del perfil name (hilo de UI).
+func (b *profileBar) applyLoaded(name string, values config.LiveSettings, err error) {
+	if err != nil {
+		b.app.setStatus(i18n.M("profile.load_failed", errorMsg(err)))
+		b.setOptions(b.state.names, activeProfile(b.kind, b.app.conf()))
+		return
+	}
+	cfg := b.app.updateConfig(func(c *config.Config) {
+		for _, param := range config.ProfileParams(b.kind) {
+			param.Set(&c.LiveSettings, param.Get(&values))
+		}
+		setActiveProfile(b.kind, c, name)
+	})
+	b.state.loaded = values
+	b.setOptions(b.state.names, name)
+	b.controls.refresh(cfg)
+	b.updateModified()
+	b.app.setStatus(i18n.M("profile.loaded", profileLabel(name)))
+}
+
+// saveBuiltinChangesAsProfile se llama al Guardar la configuración: si el perfil activo es de
+// fábrica (Default o Sin filtros) y los valores cambiaron, crea un perfil nuevo ("Personalizado",
+// "Personalizado 2"...) con ellos y lo deja activo. Los de fábrica se vuelven a aplicar al arrancar
+// (config.ApplyBuiltinProfiles), así que si no esos cambios se perderían.
+func (b *profileBar) saveBuiltinChangesAsProfile() (string, bool) {
 	cfg := b.app.conf()
-	if activeProfile(b.kind, cfg) != config.DefaultProfileName {
+	name, ok := config.ProfileForBuiltinChanges(b.kind, cfg.LiveSettings, b.state.names, i18n.T("profile.custom_name"))
+	if !ok {
 		return "", false
 	}
-	defaults := config.Default()
-	if config.SameProfileValues(b.kind, defaults.LiveSettings, cfg.LiveSettings) {
-		return "", false
-	}
-	name := config.NextCustomProfileName(i18n.T("profile.custom_name"), b.state.names)
 	current := cfg.LiveSettings
 	b.app.updateConfig(func(c *config.Config) { setActiveProfile(b.kind, c, name) })
 	go func() {
@@ -317,8 +352,8 @@ func (b *profileBar) loadDefault() {
 
 func (b *profileBar) save() {
 	name := activeProfile(b.kind, b.app.conf())
-	if name == config.DefaultProfileName {
-		b.saveAs()
+	if config.IsBuiltinProfile(name) {
+		b.saveAs() // los de fábrica no se pisan: pide un nombre
 		return
 	}
 	b.write(name, false)
@@ -388,7 +423,7 @@ func (b *profileBar) saveAs() {
 
 func (b *profileBar) renameProfile() {
 	oldName := activeProfile(b.kind, b.app.conf())
-	if oldName == config.DefaultProfileName {
+	if config.IsBuiltinProfile(oldName) {
 		return
 	}
 	b.askName(i18n.T("profile.rename_title"), oldName, func(newName string) {
@@ -410,7 +445,7 @@ func (b *profileBar) renameProfile() {
 
 func (b *profileBar) deleteProfile() {
 	name := activeProfile(b.kind, b.app.conf())
-	if name == config.DefaultProfileName {
+	if config.IsBuiltinProfile(name) {
 		return
 	}
 	dialog.ShowConfirm(i18n.T("profile.delete_title"), i18n.T("profile.delete_confirm", name), func(ok bool) {
