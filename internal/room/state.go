@@ -225,6 +225,34 @@ func (s State) UniqueUsername(id, name string) string {
 	return candidate
 }
 
+// Supersede saca de la lista los registros que reemplaza el que entra (id desde address): otro ID
+// en la misma dirección "IP:puerto" es el mismo socket (cambió de nombre y volvió desde el mismo
+// puerto, AGENDA R6). Nunca al host ni al propio id. Al que miraba la pantalla de uno que sale se
+// le borra el Watching. Reemplaza el slice (como SetMuted) y devuelve los que sacó, en el orden de
+// la lista.
+func (s *State) Supersede(id, address string) []Participant {
+	var kept, removed []Participant
+	for _, participant := range s.Participants {
+		if participant.ID != id && participant.ID != s.HostID && participant.Address == address {
+			removed = append(removed, participant)
+		} else {
+			kept = append(kept, participant)
+		}
+	}
+	if len(removed) == 0 {
+		return nil
+	}
+	for index := range kept {
+		for _, old := range removed {
+			if kept[index].Watching == old.ID {
+				kept[index].Watching = ""
+			}
+		}
+	}
+	s.Participants = kept
+	return removed
+}
+
 // PruneDisconnected saca a los desconectados hace más de olderThan. Nunca al host ni a un
 // conectado. Reemplaza el slice (como SetMuted) y devuelve los que sacó.
 func (s *State) PruneDisconnected(now time.Time, olderThan time.Duration) []Participant {

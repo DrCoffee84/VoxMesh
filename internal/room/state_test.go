@@ -248,6 +248,47 @@ func TestFullRoomStateFitsInOneDatagram(t *testing.T) {
 	}
 }
 
+// TestSupersedeSameAddress (R6): otro ID desde la misma "IP:puerto" es el mismo socket (cambió de
+// nombre y volvió): el registro viejo sale, conectado o no. El host y el propio id nunca; otro
+// puerto de la misma IP no es la misma dirección. El que miraba al que sale deja de mirarlo.
+func TestSupersedeSameAddress(t *testing.T) {
+	state := State{HostID: "host", Participants: []Participant{
+		{ID: "host", Username: "Coffee", Address: "1.2.3.4:5000", Order: 0, Connected: true},
+		{ID: "old", Username: "Pepe", Address: "5.6.7.8:6000", Order: 1, Connected: true},
+		{ID: "gone", Username: "Pepa", Address: "5.6.7.8:6000", Order: 2, Connected: false},
+		{ID: "other", Username: "Juan", Address: "5.6.7.8:6001", Order: 3, Connected: true, Watching: "old"},
+		{ID: "new", Username: "Pepo", Address: "5.6.7.8:6000", Order: 4, Connected: true},
+	}}
+	before := state.Participants
+
+	removed := state.Supersede("new", "5.6.7.8:6000")
+	if len(removed) != 2 || removed[0].ID != "old" || removed[1].ID != "gone" {
+		t.Fatalf("salieron %+v, quería old y gone", removed)
+	}
+	var ids []string
+	for _, participant := range state.Participants {
+		ids = append(ids, participant.ID)
+	}
+	if strings.Join(ids, ",") != "host,other,new" {
+		t.Fatalf("quedaron %v", ids)
+	}
+	if state.Participants[1].Watching != "" {
+		t.Fatalf("Juan sigue mirando %q, que ya no está", state.Participants[1].Watching)
+	}
+	if len(before) != 5 || before[1].ID != "old" || before[3].Watching != "old" {
+		t.Fatal("Supersede escribió en el slice compartido")
+	}
+
+	// La dirección del host: el host no sale.
+	if removed := state.Supersede("x", "1.2.3.4:5000"); len(removed) != 0 {
+		t.Fatalf("sacó %+v: el host nunca sale", removed)
+	}
+	// Nada que reemplazar: nil y la lista igual.
+	if removed := state.Supersede("x", "9.9.9.9:1"); removed != nil || len(state.Participants) != 3 {
+		t.Fatalf("sacó %+v sin nadie en esa dirección", removed)
+	}
+}
+
 func TestUniqueUsername(t *testing.T) {
 	state := State{Participants: []Participant{
 		{ID: "a", Username: "Pepe", Connected: true},

@@ -245,6 +245,9 @@ func (a *App) handleRoomHello(udp *transport.UDP, fo *room.Failover, payload []b
 	if candidateName == "" {
 		candidateName = i18n.T("default.username")
 	}
+	// El que vuelve reemplaza a su registro viejo: otro ID desde esta misma dirección es el mismo
+	// socket (R6). Antes del nombre único, así el viejo no le ocupa el nombre.
+	replaced := a.roomState.Supersede(joining.ID, addrStr)
 	joining.Username = a.roomState.UniqueUsername(joining.ID, candidateName)
 
 	a.roomState.Participants = append([]room.Participant(nil), a.roomState.Participants...)
@@ -262,7 +265,15 @@ func (a *App) handleRoomHello(udp *transport.UDP, fo *room.Failover, payload []b
 			break
 		}
 	}
-	if !known {
+	if !known && len(replaced) > 0 {
+		// Ocupa el lugar del registro que reemplaza (el orden de la sala decide la migración).
+		joining.Order = replaced[0].Order
+		for _, old := range replaced[1:] {
+			joining.Order = min(joining.Order, old.Order)
+		}
+		a.roomState.Participants = append(a.roomState.Participants, *joining)
+		a.roomState.Sort()
+	} else if !known {
 		// Lista llena: se podan los desconectados más viejos; uno de menos de participantTimeout
 		// puede estar volviendo y no se toca. Si aun así no hay lugar, se le avisa y no entra.
 		pruned, ok := a.roomState.MakeRoom(now, room.MaxParticipants, participantTimeout)
@@ -279,6 +290,11 @@ func (a *App) handleRoomHello(udp *transport.UDP, fo *room.Failover, payload []b
 		}
 		joining.Order = a.roomState.NextOrder()
 		a.roomState.Participants = append(a.roomState.Participants, *joining)
+	}
+	for _, old := range replaced {
+		// Su dirección deja de recibir, salvo que sea la del que entra (removePeerAddress la cuida).
+		a.removePeerAddress(udp, old.Address)
+		logging.Infof("Vuelve %s (%s): reemplaza su registro anterior %s (%s, id %s)", joining.Username, addrStr, old.Username, old.Address, old.ID)
 	}
 	if a.roomStore != nil {
 		a.roomStore.Replace(a.roomState)
