@@ -336,11 +336,14 @@ func (a *App) buildChatMessageObject(m history.Message, isMatch bool) fyne.Canva
 	if copyText == "" && m.Kind == "image" {
 		copyText = i18n.T("chat.copy_image", m.ImageID+m.ImageExt)
 	}
-	copyBtn := widget.NewButtonWithIcon("", theme.ContentCopyIcon(), func() {
+	// El renglón se ilumina mientras el mouse está sobre su ícono de copiar y destella al copiar
+	// (C29): con renglones cortos el ícono queda lejos del texto.
+	highlight := newRowHighlight()
+	copyBtn := newCopyButton(highlight, func() {
 		_ = clipboard.WriteAll(copyText)
+		highlight.flash()
 		a.setStatus(i18n.M("chat.copied"))
 	})
-	copyBtn.Importance = widget.LowImportance
 	copyWrap := container.NewGridWrap(fyne.NewSize(28, 24), copyBtn)
 
 	headerRow := container.NewBorder(nil, nil, nil, copyWrap, rt)
@@ -362,10 +365,9 @@ func (a *App) buildChatMessageObject(m history.Message, isMatch bool) fyne.Canva
 
 	if isMatch {
 		highlightBg := newThemedRect(colorNameChatMatch, 4)
-		row = container.NewStack(highlightBg, container.NewPadded(row))
+		return container.NewStack(highlightBg, highlight.rect, container.NewPadded(row))
 	}
-
-	return row
+	return container.NewStack(highlight.rect, row)
 }
 
 func (a *App) refreshChat() {
