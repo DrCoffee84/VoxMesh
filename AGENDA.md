@@ -33,7 +33,7 @@ Cada tarea tiene un **ID** (`S7`, `F1`...) y está escrita para que un chat nuev
 
 ### Prioridad (2026-11-13)
 
-Va antes que todo lo demás. Detalle en "Próximo: cómoda para usuarios comunes". **Un chat por fila**, en este orden. C8 + C9, C10 + C11 + C12, F6 + F7, C18 + C13 + C2 (con R6) y C14 hechos el 2026-11-13 (falta probarlos a mano); de paso apareció C17 (el registro de actividad queda oculto dentro de la sala). El 2026-11-13 se sumó C18 (gráfico de lag): va con C13 en la fila 4 y C14 pasa a su propia fila. También el 2026-11-13: F8 (que un grito no deje sordo), C19 (plantilla fija "Sin filtros") y C20 (apagar los atajos de la botonera), juntos en la fila 6, antes de C15 y C16 para que el lavado de cara cubra los controles nuevos. Decidido con Coffee el 2026-11-13: C17 queda como está (el registro se ve con ☰) y C2 entra en la fila 4. C21 + C20 hechos el 2026-11-14 (falta probarlos a mano); de paso aparecieron R10 (apagar Windows no cierra la sala), C24 (el foco de una entrada frena los atajos de una tecla) y C25 (el atajo "Numpad +"). Después se sumó C21 (la X manda la app al área de notificaciones): va con C20 en la fila 6, porque los dos sirven para tener VoxMesh de fondo mientras se juega. F8 + C19 pasan a la fila 7, y con ellos C22 (slider de "desde qué volumen me toma la voz" debajo del propio nombre), que también cambia el perfil de Entrada. F8 + C19 + C22 + C23 hechos el 2026-11-14 (falta probarlos a mano); de paso apareció T4 (`TestEchoReference_Concurrent` falla a veces con `-race`). C15 hecho el 2026-11-14 (falta probarlo a mano).
+Va antes que todo lo demás. Detalle en "Próximo: cómoda para usuarios comunes". **Un chat por fila**, en este orden. C8 + C9, C10 + C11 + C12, F6 + F7, C18 + C13 + C2 (con R6) y C14 hechos el 2026-11-13 (falta probarlos a mano); de paso apareció C17 (el registro de actividad queda oculto dentro de la sala). El 2026-11-13 se sumó C18 (gráfico de lag): va con C13 en la fila 4 y C14 pasa a su propia fila. También el 2026-11-13: F8 (que un grito no deje sordo), C19 (plantilla fija "Sin filtros") y C20 (apagar los atajos de la botonera), juntos en la fila 6, antes de C15 y C16 para que el lavado de cara cubra los controles nuevos. Decidido con Coffee el 2026-11-13: C17 queda como está (el registro se ve con ☰) y C2 entra en la fila 4. C21 + C20 hechos el 2026-11-14 (falta probarlos a mano); de paso aparecieron R10 (apagar Windows no cierra la sala), C24 (el foco de una entrada frena los atajos de una tecla) y C25 (el atajo "Numpad +"). Después se sumó C21 (la X manda la app al área de notificaciones): va con C20 en la fila 6, porque los dos sirven para tener VoxMesh de fondo mientras se juega. F8 + C19 pasan a la fila 7, y con ellos C22 (slider de "desde qué volumen me toma la voz" debajo del propio nombre), que también cambia el perfil de Entrada. F8 + C19 + C22 + C23 hechos el 2026-11-14 (falta probarlos a mano); de paso apareció T4 (`TestEchoReference_Concurrent` falla a veces con `-race`). C15 hecho el 2026-11-14 (falta probarlo a mano). El 2026-11-14 Coffee sumó la fila 9 (C26 a C29, cambios chicos) antes de C16, que pasa a la 10.
 
 | # | IDs | Qué, en simple | Tamaño |
 |---|-----|----------------|--------|
@@ -45,7 +45,8 @@ Va antes que todo lo demás. Detalle en "Próximo: cómoda para usuarios comunes
 | 6 | **C21 + C20** | VoxMesh de fondo mientras jugás: la X la manda al área de notificaciones (configurable, prendido por defecto), con un menú para colgar, mutear, ensordecer y salir; un botón (con su atajo, como "Detener") que prende y apaga los atajos de la botonera | Mediano. C21 suma el ícono de bandeja de Fyne y el control de una sola instancia; C20 es chico |
 | 7 | **F8 + C19 + C22 + C23** | Que un grito no deje sordo a nadie (el que escucha baja los gritos que le llegan, con su propio slider en Salida); plantilla fija "Sin filtros" en Entrada y Salida, que no se puede pisar al guardar, para probar los filtros de a uno; debajo de mi nombre, un slider de desde qué volumen me toma la voz, con el nivel en vivo detrás; los sliders de volumen con curva logarítmica (como el oído) | Mediano-grande. F8 toca la mezcla del Engine; C19 generaliza el perfil fijo "Default"; C22 guarda en el perfil de Entrada por el mismo camino que C19; C23 es chico y toca los mismos sliders |
 | 8 | **C15** | Paletas de colores en Ajustes: naranja para lo que resalta, plantillas y paletas propias | Grande. Antes que C16 |
-| 9 | **C16** | Lavado de cara de toda la app (botones, Ajustes) sin perder el estilo clásico de escritorio | Grande. Al final: cubre los botones nuevos de las filas anteriores |
+| 9 | **C26 + C27 + C28 + C29** | Cambios chicos pedidos el 2026-11-14: el aviso de la bandeja dice "Ocultar"; clic izquierdo en el ícono de la bandeja abre la app (el derecho, el menú); el log más nuevo nunca se borra; el renglón del chat se ilumina al pasar el mouse por su ícono de copiar | Chico |
+| 10 | **C16** | Lavado de cara de toda la app (botones, Ajustes) sin perder el estilo clásico de escritorio | Grande. Al final: cubre los botones nuevos de las filas anteriores |
 
 ### Prioridad anterior (2026-11-11)
 
@@ -538,6 +539,27 @@ Solo si aparece el problema: **R1** (data race del estado de la sala, ver "Si ap
       - Revisar que se lean los colores que hoy asumen fondo oscuro (medidores, chips, insignias).
 - **Tests**: cargar y guardar paletas (puro, como los perfiles); que todo nombre de color que se usa tenga valor en cada paleta.
 - **Docs**: AGENT.md §3.D ("Look": nada de colores fijos), README.
+
+### C26. El aviso de la bandeja dice "Ocultar" en vez de "Entendido"
+
+- [x] **Pedido (Coffee, 2026-11-14)**: cambiar el "Entendido" del aviso que sale al cerrar la app (queda en el área de notificaciones) por "Ocultar".
+  - **Hecho** (2026-11-14): `tray.hint_ok` pasa a `tray.hint_hide` ("Ocultar" / "Hide"); el botón (`trayHint.hide`) hace lo mismo que antes (oculta la ventana, `hideToTray`). `TestTrayHint` toca "Ocultar".
+- **Hoy**: `showTrayHint` ([ui_tray.go](internal/ui/ui_tray.go)): "Salir de VoxMesh" y "Entendido" (`tray.hint_ok`), que oculta la ventana.
+
+### C27. Clic izquierdo en el ícono de la bandeja abre la app
+
+- [ ] **Pedido (Coffee, 2026-11-14)**: con la app en el área de notificaciones, un clic común la abre de una; el derecho muestra las opciones (que ya andan bien).
+- **Hoy**: fyne.io/systray v1.11.0 (el de Fyne 2.6.3) abre el menú con los dos clics (`WM_LBUTTONUP` y `WM_RBUTTONUP` en su `wndProc`) y no deja cambiarlo; Fyne no expone nada.
+
+### C28. El log más nuevo nunca se borra
+
+- [ ] **Pedido (Coffee, 2026-11-14)**: que el último archivo de log quede siempre, aunque pasen días.
+- **Hoy**: `logging` borra los logs de más de 48 h al abrir el del día: si la app no se abrió en tres días, al abrirla se borra el último, justo el que hay que mandar cuando algo falló.
+
+### C29. El renglón del chat se ilumina al pasar el mouse por su ícono de copiar
+
+- [ ] **Pedido (Coffee, 2026-11-14)**: al poner el mouse sobre el ícono de copiar de un mensaje, que se ilumine ese renglón para saber bien qué se copia. Decidido con Coffee: mientras el mouse está encima, iluminado con poca opacidad; al copiar, un destello.
+- **Hoy**: `buildChatMessageObject` ([ui_chat.go](internal/ui/ui_chat.go)): el ícono va al borde derecho y el texto a la izquierda; con renglones cortos no se ve a cuál pertenece.
 
 ### C16. Lavado de cara de la app, sin perder el estilo clásico
 

@@ -473,7 +473,7 @@ var en = map[string]string{
 	"tray.hint_message": "It stays next to the clock (in the notification area) and, if you are in a room, you stay in it. To quit completely, click its icon and choose «Quit». You can change this in Settings → Interface and system.",
 	"tray.hint_never":   "Don't show again",
 	"tray.hint_quit":    "Quit VoxMesh",
-	"tray.hint_ok":      "Got it",
+	"tray.hint_hide":    "Hide",
 
 	// Botonera de sonidos (ui_soundboard.go).
 	"sound.block_others":          "Mute others' sounds",

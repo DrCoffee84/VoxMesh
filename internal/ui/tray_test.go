@@ -169,7 +169,7 @@ func TestTrayMenuFollowsState(t *testing.T) {
 	}
 }
 
-// TestTrayHint (C21): la primera X muestra el aviso; "Entendido" oculta la ventana (sin foco en
+// TestTrayHint (C21, C26): la primera X muestra el aviso; "Ocultar" oculta la ventana (sin foco en
 // una entrada, para los atajos de una tecla) y, con el check, la próxima X oculta directo.
 // "Abrir VoxMesh" la vuelve a mostrar.
 func TestTrayHint(t *testing.T) {
@@ -184,7 +184,7 @@ func TestTrayHint(t *testing.T) {
 		t.Fatal("la X con el aviso abierto abrió otro")
 	}
 	h.never.SetChecked(true)
-	test.Tap(h.gotIt)
+	test.Tap(h.hide)
 	if !a.hiddenToTray || !a.conf().TrayHintOff || a.window.Canvas().Focused() != nil {
 		t.Fatalf("oculta %v, no mostrar %v, foco %v", a.hiddenToTray, a.conf().TrayHintOff, a.window.Canvas().Focused())
 	}

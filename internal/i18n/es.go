@@ -473,7 +473,7 @@ var es = map[string]string{
 	"tray.hint_message": "Queda junto al reloj (en el área de notificaciones) y, si estás en una sala, seguís en ella. Para salir del todo, hacé clic en su ícono y elegí «Salir». Esto se cambia en Ajustes → Interfaz y Sistema.",
 	"tray.hint_never":   "No volver a mostrar",
 	"tray.hint_quit":    "Salir de VoxMesh",
-	"tray.hint_ok":      "Entendido",
+	"tray.hint_hide":    "Ocultar",
 
 	// Botonera de sonidos (ui_soundboard.go).
 	"sound.block_others":          "Bloquear sonidos ajenos",

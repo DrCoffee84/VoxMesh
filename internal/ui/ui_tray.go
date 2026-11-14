@@ -166,7 +166,7 @@ func (a *App) quitApp() {
 type trayHint struct {
 	never  *widget.Check
 	quit   *widget.Button
-	gotIt  *widget.Button
+	hide   *widget.Button // "Ocultar" (C26; antes "Entendido")
 	dialog dialog.Dialog
 }
 
@@ -190,9 +190,9 @@ func (a *App) showTrayHint() *trayHint {
 		then()
 	}
 	h.quit = widget.NewButton(i18n.T("tray.hint_quit"), func() { finish(a.quitApp) })
-	h.gotIt = widget.NewButton(i18n.T("tray.hint_ok"), func() { finish(a.hideToTray) })
-	h.gotIt.Importance = widget.HighImportance
-	content := container.NewVBox(message, h.never, container.NewGridWithColumns(2, h.quit, h.gotIt))
+	h.hide = widget.NewButton(i18n.T("tray.hint_hide"), func() { finish(a.hideToTray) })
+	h.hide.Importance = widget.HighImportance
+	content := container.NewVBox(message, h.never, container.NewGridWithColumns(2, h.quit, h.hide))
 	h.dialog = dialog.NewCustomWithoutButtons(i18n.T("tray.hint_title"), content, a.window)
 	h.dialog.SetOnClosed(func() { a.trayHintOpen = false })
 	h.dialog.Resize(fyne.NewSize(440, 0))
