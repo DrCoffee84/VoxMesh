@@ -33,7 +33,7 @@ Cada tarea tiene un **ID** (`S7`, `F1`...) y está escrita para que un chat nuev
 
 ### Prioridad (2026-11-13)
 
-Va antes que todo lo demás. Detalle en "Próximo: cómoda para usuarios comunes". **Un chat por fila**, en este orden. C8 + C9, C10 + C11 + C12, F6 + F7 y C18 + C13 + C2 (con R6) hechos el 2026-11-13 (falta probarlos a mano); de paso apareció C17 (el registro de actividad queda oculto dentro de la sala). El 2026-11-13 se sumó C18 (gráfico de lag): va con C13 en la fila 4 y C14 pasa a su propia fila. También el 2026-11-13: F8 (que un grito no deje sordo), C19 (plantilla fija "Sin filtros") y C20 (apagar los atajos de la botonera), juntos en la fila 6, antes de C15 y C16 para que el lavado de cara cubra los controles nuevos. Decidido con Coffee el 2026-11-13: C17 queda como está (el registro se ve con ☰) y C2 entra en la fila 4.
+Va antes que todo lo demás. Detalle en "Próximo: cómoda para usuarios comunes". **Un chat por fila**, en este orden. C8 + C9, C10 + C11 + C12, F6 + F7 y C18 + C13 + C2 (con R6) hechos el 2026-11-13 (falta probarlos a mano); de paso apareció C17 (el registro de actividad queda oculto dentro de la sala). El 2026-11-13 se sumó C18 (gráfico de lag): va con C13 en la fila 4 y C14 pasa a su propia fila. También el 2026-11-13: F8 (que un grito no deje sordo), C19 (plantilla fija "Sin filtros") y C20 (apagar los atajos de la botonera), juntos en la fila 6, antes de C15 y C16 para que el lavado de cara cubra los controles nuevos. Decidido con Coffee el 2026-11-13: C17 queda como está (el registro se ve con ☰) y C2 entra en la fila 4. Después se sumó C21 (la X manda la app al área de notificaciones): va con C20 en la fila 6, porque los dos sirven para tener VoxMesh de fondo mientras se juega. F8 + C19 pasan a la fila 7, y con ellos C22 (slider de "desde qué volumen me toma la voz" debajo del propio nombre), que también cambia el perfil de Entrada.
 
 | # | IDs | Qué, en simple | Tamaño |
 |---|-----|----------------|--------|
@@ -42,9 +42,10 @@ Va antes que todo lo demás. Detalle en "Próximo: cómoda para usuarios comunes
 | 3 | **F6 + F7** | "Detener para todos" corta el sonido en toda la sala; botón para ensordecer (no escuchar lo que llega sin salir de la llamada) | Mediano. F6 suma un mensaje de red; F7 toca el Engine |
 | 4 | **C18 + C13 + C2** | Gráfico del lag debajo de cada nombre (oculto por defecto, un ícono lo muestra; toda la sesión en memoria) y el registro avisa el lag largo (desde cuándo y cuánto duró); quien se reconecta desde la misma IP sigue siendo él (no "Nombre (2)"), así su gráfico no se parte | Mediano-grande. C18 suma un mensaje del host (los ms de cada uno); C13 lee las mismas muestras; C2 va en `handleRoomHello` |
 | 5 | **C14** | Los problemas que hoy solo van al log o a la barra (dispositivo, celular, micrófono que pierde audio…), en el registro y con cómo arreglarlos | Mediano |
-| 6 | **F8 + C19 + C20** | Que un grito no deje sordo a nadie (el que escucha baja los gritos que le llegan, con su propio slider en Salida); plantilla fija "Sin filtros" en Entrada y Salida, que no se puede pisar al guardar, para probar los filtros de a uno; un botón (con su atajo, como "Detener") que prende y apaga los atajos de la botonera (para jugar) | Mediano. F8 toca la mezcla del Engine; C19 generaliza el perfil fijo "Default"; C20 es chico (se puede adelantar) |
-| 7 | **C15** | Paletas de colores en Ajustes: naranja para lo que resalta, plantillas y paletas propias | Grande. Antes que C16 |
-| 8 | **C16** | Lavado de cara de toda la app (botones, Ajustes) sin perder el estilo clásico de escritorio | Grande. Al final: cubre los botones nuevos de las filas anteriores |
+| 6 | **C21 + C20** | VoxMesh de fondo mientras jugás: la X la manda al área de notificaciones (configurable, prendido por defecto), con un menú para colgar, mutear, ensordecer y salir; un botón (con su atajo, como "Detener") que prende y apaga los atajos de la botonera | Mediano. C21 suma el ícono de bandeja de Fyne y el control de una sola instancia; C20 es chico |
+| 7 | **F8 + C19 + C22** | Que un grito no deje sordo a nadie (el que escucha baja los gritos que le llegan, con su propio slider en Salida); plantilla fija "Sin filtros" en Entrada y Salida, que no se puede pisar al guardar, para probar los filtros de a uno; debajo de mi nombre, un slider de desde qué volumen me toma la voz, con el nivel en vivo detrás | Mediano-grande. F8 toca la mezcla del Engine; C19 generaliza el perfil fijo "Default"; C22 guarda en el perfil de Entrada por el mismo camino que C19 |
+| 8 | **C15** | Paletas de colores en Ajustes: naranja para lo que resalta, plantillas y paletas propias | Grande. Antes que C16 |
+| 9 | **C16** | Lavado de cara de toda la app (botones, Ajustes) sin perder el estilo clásico de escritorio | Grande. Al final: cubre los botones nuevos de las filas anteriores |
 
 ### Prioridad anterior (2026-11-11)
 
@@ -357,6 +358,31 @@ Solo si aparece el problema: **R1** (data race del estado de la sala, ver "Si ap
 - **Tests**: los valores del perfil (todo filtro apagado y lo demás igual que Default), el nombre rechazado, Guardar pide un nombre y se vuelve a aplicar al arrancar.
 - **Docs**: AGENT.md (perfiles), README.
 
+### C22. Debajo de mi nombre, un slider de "desde qué volumen me toma la voz"
+
+- [ ] **Pedido (Coffee, 2026-11-13)**: así como hay un slider de volumen debajo de cada participante, que haya uno debajo del propio (el de quien usa la PC). No es el volumen propio: es desde qué volumen la entrada empieza a tomar la voz.
+- **Hoy** (verificado el 2026-11-13; buscar por nombre):
+  - Los chips de los demás tienen `newPeerVolumeSlider` (110 px, 0–300 %). El propio no tiene nada (`newPeerChip` con `peer.isSelf`) y solo existe dentro de una sala.
+  - **Cuándo se manda la voz** (`PrepareOutgoingFrames`, [rnnoise.go](internal/audio/rnnoise.go)): tienen que estar de acuerdo dos cosas, cada una con su hold:
+    - el VAD de RNNoise (`vad_threshold`, "Exigencia del VAD", de 0 a 1, default 0,5);
+    - la puerta de ruido (`noise_gate_enabled`, default 1; `threshold_db`, "Volumen mínimo para mandar", default −42 dBFS), que mira el nivel ya limpio.
+  - El medidor de Ajustes ya muestra ese nivel: la barra "Después de filtros", con una línea blanca en el umbral (`level_bar.go`). En la sala, cada frame enviado pasa por `reportMeter` con `postDB`, pero llega a un solo listener (`a.levelListener`, el de Ajustes).
+  - Los dos parámetros son del perfil de Entrada. Si el activo es Default, un cambio se pierde al reiniciar salvo que se guarde como "Personalizado" (`saveDefaultChangesAsProfile`; ver C19).
+- **Arreglo propuesto**:
+  - **El slider controla `threshold_db`**, el volumen mínimo para mandar. Es un número de volumen y se entiende; la "exigencia" del VAD no. El VAD queda como está, en Ajustes.
+  - **Como la "sensibilidad de entrada" de Discord:**
+    - Detrás del slider, una barrita con el nivel en vivo (`postDB`) y el umbral marcado. Va en verde cuando se manda y en gris si estás muteado. Así se ve "acá me toma, acá no".
+    - Se reusa `level_bar.go`.
+    - El listener pasa a admitir más de uno (Ajustes y el chip). Sin un `fyne.Do` por frame: a lo sumo 20 refrescos por segundo, como el medidor de Ajustes.
+  - Mismo ancho que el de los demás (110 px), con el valor al lado ("−42 dB"). Tooltip: "Desde qué volumen te toma la voz. Más a la derecha = tenés que hablar más fuerte."
+  - **Al soltarlo** (`OnChangeEnded`): se aplica en vivo y se guarda en el perfil activo. Con Default activo, se crea "Personalizado" por el mismo camino que el Guardar de Ajustes: Default no se pisa (C19).
+  - Sincronizado con Ajustes: si está abierto, su slider de "Volumen mínimo para mandar" se mueve igual, y al revés.
+  - **Decidir en el plan:**
+    - Si la puerta de ruido está apagada en el perfil (por ejemplo, con "Sin filtros" de C19): mover el slider la prende, o el slider se ve deshabilitado con una leyenda.
+    - Si se avisa "Se creó el perfil Personalizado" la primera vez.
+- **Tests**: slider → valor del parámetro (escala, rango y paso de `Params`); con Default activo se crea "Personalizado"; el listener múltiple. A mano: hablar bajo y fuerte mientras se mueve el slider, mirar la barrita, reiniciar y que el valor siga.
+- **Docs**: README ("el slider debajo de tu nombre"), AGENT.md (§3.A, envío).
+
 ### C20. Un atajo para prender y apagar los atajos de la botonera (para jugar con teclado)
 
 - [ ] **Pedido (Coffee, 2026-11-13)**: poder desactivar los atajos de la botonera. Jugando al Counter-Strike con teclado molestan; con joystick no. Primero pidió un check; después, mejor un **atajo** que los prenda y los apague, para hacerlo sin salir del juego; al final, un **botón con su atajo al lado**, como "Detener".
@@ -390,6 +416,48 @@ Solo si aparece el problema: **R1** (data race del estado de la sala, ver "Si ap
     - El botón se actualiza solo.
     - Cerrar y abrir la app → sigue como quedó.
 - **Docs**: README ("atajos de la botonera"), AGENT.md si hay una sección de atajos.
+
+### C21. La X manda la app al área de notificaciones (con menú)
+
+- [ ] **Pedido (Coffee, 2026-11-13)**: al tocar la X, que VoxMesh se vaya al área de notificaciones (al lado del reloj). Configurable en Ajustes y prendido por defecto. Con clic derecho en el ícono: colgar, mutear, ensordecer y salir.
+- **Hoy** (verificado el 2026-11-13; buscar por nombre):
+  - **La X de la ventana principal** (`SetCloseIntercept`, [ui_main.go](internal/ui/ui_main.go)):
+    - En una sala pregunta si salir (`main.quit.*`) y sale con `a.quit(a.stopConnectionAsync(), nil)`. Fuera de una sala, `a.quit(nil, nil)`.
+    - `a.quit` oculta la ventana, espera hasta 3 s a que se cierre la sala (Leave y regla UPnP), guarda la config y cierra Fyne.
+    - Nunca `window.Close()` (AGENT.md §3.G, trampa de Fyne 2.6.3).
+  - **Fyne 2.6.3 trae ícono de bandeja**: `desktop.App.SetSystemTrayMenu` y `SetSystemTrayIcon`, con `fyne.io/systray` v1.11.0. El menú admite ítems con tilde (`Checked`) y deshabilitados (`Disabled`); para cambiarlos se vuelve a llamar a `SetSystemTrayMenu`.
+  - **Limitaciones de esa versión:**
+    - En Windows, el clic izquierdo y el derecho abren **el mismo menú**: no hay "clic izquierdo abre la ventana". Por eso el menú lleva primero "Abrir VoxMesh".
+    - Si el último ítem no es el de salir, Fyne agrega su propio "Quit", que cierra sin pasar por `a.quit`: no manda el Leave ni borra la regla UPnP. Nuestro "Salir" tiene que llevar `IsQuit = true` y su propia acción.
+    - Fyne crea una ventana oculta ("SystrayMonitor") cuyo cierre llama a `Quit` (por ejemplo, al apagar Windows). Revisar que ese camino también cierre la sala bien.
+  - `Show` y `RequestFocus` no sacan una ventana minimizada: para volver está `restoreWindow` (`window_state_windows.go`, `SW_RESTORE`).
+  - `toggleMute` y `toggleDeafen` ([ui_components.go](internal/ui/ui_components.go)) ya existen. Colgar es lo mismo que "Salir de la sala" o "Parar sala" (`stopConnectionAsync`).
+  - **No hay control de una sola instancia.** Con la ventana oculta es fácil volver a abrir VoxMesh desde el escritorio y quedar con dos: los atajos sonarían dos veces y las dos escribirían `voxmesh.json`.
+- **Arreglo propuesto**:
+  - Param `close_to_tray` (default 1) en "Interfaz y Sistema": "Al cerrar la ventana, seguir abierto en el área de notificaciones". Apagado, la X hace lo de hoy.
+  - Con la opción prendida, la X oculta la ventana (`rememberWindowState` + `Hide`) sin preguntar y sin salir de la sala.
+  - **Menú del ícono:**
+    1. "Abrir VoxMesh": muestra y restaura la ventana.
+    2. "Colgar": deshabilitado fuera de una sala. Hace lo mismo que el botón de la ventana.
+    3. "Silenciar micrófono": con tilde si está muteado.
+    4. "Ensordecer": con tilde si está ensordecido.
+    5. Separador y "Salir": cierra todo por `a.quit` (con `stopConnectionAsync` si hay sala).
+  - El menú se rehace (`fyne.Do` + `SetSystemTrayMenu`) cuando cambian la sala, el mute o el ensordecer, también si se cambian desde la ventana o con un atajo.
+  - **Avisar la primera vez que se oculta** que la app sigue abierta y cómo salir. Para usuarios comunes es clave: si no, creen que se cerró. Puede ser un diálogo con "No volver a mostrar" o una notificación de Windows (`SendNotification` de Fyne corre un script de PowerShell).
+  - **Una sola instancia** (hace falta con esto): si se abre VoxMesh con otra ya abierta, la nueva muestra la que estaba y se cierra. Por ejemplo, con un mutex con nombre y un aviso a la que está abierta. Ojo con el updater: el proceso nuevo espera al viejo (`--wait-pid`) antes de tomar el mutex.
+  - **Decidir en el plan:**
+    - El ícono siempre que la app está abierta, o solo con la ventana oculta.
+    - "Salir" desde el menú: si pregunta estando en una sala (habría que mostrar la ventana para el diálogo) o sale directo, porque lo eligió a propósito.
+    - Cómo es el aviso de la primera vez.
+  - **A considerar (no lo pidió)**: sumar al menú el botón de C20 ("Atajos de la botonera", con tilde) y que el ícono cambie si está muteado o ensordecido.
+- **Tests**: el armado del menú como función pura (estado → ítems con etiquetas, tildes y deshabilitados); la fila de `Params`. A mano:
+  - La X con la opción prendida y apagada.
+  - Cada ítem del menú, dentro y fuera de una sala.
+  - Mute y ensordecer cambiados desde la ventana se ven en el menú.
+  - "Salir" en una sala: el otro ve que se fue.
+  - Volver a abrir el exe con la ventana oculta: aparece la que estaba.
+  - Actualizar con la app oculta.
+- **Docs**: README ("al cerrar queda junto al reloj; para salir, clic derecho → Salir"), AGENT.md §3.G (cierre y bandeja).
 
 ### C15. Paletas de colores (naranja para lo que resalta)
 
