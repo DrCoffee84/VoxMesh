@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"net/netip"
 	"sort"
 	"strings"
 	"time"
@@ -225,15 +226,30 @@ func (s State) UniqueUsername(id, name string) string {
 	return candidate
 }
 
-// Supersede saca de la lista los registros que reemplaza el que entra (id desde address): otro ID
-// en la misma dirección "IP:puerto" es el mismo socket (cambió de nombre y volvió desde el mismo
-// puerto, AGENDA R6). Nunca al host ni al propio id. Al que miraba la pantalla de uno que sale se
-// le borra el Watching. Reemplaza el slice (como SetMuted) y devuelve los que sacó, en el orden de
-// la lista.
-func (s *State) Supersede(id, address string) []Participant {
+// ReturnSilence es cuánto tiene que llevar callado el registro viejo de alguien que vuelve desde
+// otro puerto para darlo por muerto (Supersede): un cliente vivo le manda al host un ping y un pong
+// cada 2 s. Así dos personas detrás del mismo router con el mismo nombre no se pisan.
+const ReturnSilence = 5 * time.Second
+
+// Supersede saca de la lista los registros que reemplaza el que entra (id, con el nombre name, desde
+// address):
+//   - otro ID en la misma dirección "IP:puerto": es el mismo socket (cambió de nombre y volvió desde
+//     el mismo puerto, AGENDA R6);
+//   - el mismo nombre (sin mayúsculas) desde la misma IP y otro puerto, callado hace más de silence:
+//     es la misma persona que volvió antes de que el host la diera por desconectada (AGENDA C2). Uno
+//     que sigue mandando paquetes es otra persona con el mismo nombre (" (2)", como siempre).
+//
+// Nunca al host ni al propio id. Al que miraba la pantalla de uno que sale se le borra el Watching.
+// Reemplaza el slice (como SetMuted) y devuelve los que sacó, en el orden de la lista.
+func (s *State) Supersede(id, name, address string, now time.Time, silence time.Duration) []Participant {
+	name = strings.TrimSpace(name)
 	var kept, removed []Participant
 	for _, participant := range s.Participants {
-		if participant.ID != id && participant.ID != s.HostID && participant.Address == address {
+		sameSocket := participant.Address == address
+		returning := sameIP(participant.Address, address) &&
+			strings.EqualFold(strings.TrimSpace(participant.Username), name) &&
+			now.Sub(participant.LastSeenUTC) > silence
+		if participant.ID != id && participant.ID != s.HostID && (sameSocket || returning) {
 			removed = append(removed, participant)
 		} else {
 			kept = append(kept, participant)
@@ -251,6 +267,14 @@ func (s *State) Supersede(id, address string) []Participant {
 	}
 	s.Participants = kept
 	return removed
+}
+
+// sameIP dice si dos direcciones "IP:puerto" tienen la misma IP (una IPv4 dentro de IPv6 cuenta como
+// la IPv4). Una dirección que no se puede leer no coincide con nada.
+func sameIP(left, right string) bool {
+	a, errA := netip.ParseAddrPort(left)
+	b, errB := netip.ParseAddrPort(right)
+	return errA == nil && errB == nil && a.Addr().Unmap() == b.Addr().Unmap()
 }
 
 // PruneDisconnected saca a los desconectados hace más de olderThan. Nunca al host ni a un

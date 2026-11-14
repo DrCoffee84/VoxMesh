@@ -246,8 +246,10 @@ func (a *App) handleRoomHello(udp *transport.UDP, fo *room.Failover, payload []b
 		candidateName = i18n.T("default.username")
 	}
 	// El que vuelve reemplaza a su registro viejo: otro ID desde esta misma dirección es el mismo
-	// socket (R6). Antes del nombre único, así el viejo no le ocupa el nombre.
-	replaced := a.roomState.Supersede(joining.ID, addrStr)
+	// socket (R6); el mismo nombre desde la misma IP, callado hace más de room.ReturnSilence, es la
+	// misma persona que volvió desde otro puerto (C2). Antes del nombre único, así el viejo no le
+	// ocupa el nombre ("Pepe (2)").
+	replaced := a.roomState.Supersede(joining.ID, candidateName, addrStr, now, room.ReturnSilence)
 	joining.Username = a.roomState.UniqueUsername(joining.ID, candidateName)
 
 	a.roomState.Participants = append([]room.Participant(nil), a.roomState.Participants...)

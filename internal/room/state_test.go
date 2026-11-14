@@ -260,8 +260,9 @@ func TestSupersedeSameAddress(t *testing.T) {
 		{ID: "new", Username: "Pepo", Address: "5.6.7.8:6000", Order: 4, Connected: true},
 	}}
 	before := state.Participants
+	now := time.Now()
 
-	removed := state.Supersede("new", "5.6.7.8:6000")
+	removed := state.Supersede("new", "Pepo", "5.6.7.8:6000", now, ReturnSilence)
 	if len(removed) != 2 || removed[0].ID != "old" || removed[1].ID != "gone" {
 		t.Fatalf("salieron %+v, quería old y gone", removed)
 	}
@@ -280,12 +281,50 @@ func TestSupersedeSameAddress(t *testing.T) {
 	}
 
 	// La dirección del host: el host no sale.
-	if removed := state.Supersede("x", "1.2.3.4:5000"); len(removed) != 0 {
+	if removed := state.Supersede("x", "Coffee", "1.2.3.4:5000", now, ReturnSilence); len(removed) != 0 {
 		t.Fatalf("sacó %+v: el host nunca sale", removed)
 	}
 	// Nada que reemplazar: nil y la lista igual.
-	if removed := state.Supersede("x", "9.9.9.9:1"); removed != nil || len(state.Participants) != 3 {
+	if removed := state.Supersede("x", "Nadie", "9.9.9.9:1", now, ReturnSilence); removed != nil || len(state.Participants) != 3 {
 		t.Fatalf("sacó %+v sin nadie en esa dirección", removed)
+	}
+}
+
+// TestSupersedeSameNameAndIP (C2): el mismo nombre (sin mayúsculas) desde la misma IP y otro
+// puerto es la misma persona que volvió, si su registro viejo está callado hace más de
+// ReturnSilence. Si sigue mandando paquetes es otra persona con el mismo nombre (dos en la misma
+// casa); con otra IP, también.
+func TestSupersedeSameNameAndIP(t *testing.T) {
+	now := time.Now()
+	silent := now.Add(-ReturnSilence - time.Second).UTC()
+	alive := now.Add(-time.Second).UTC()
+	cases := []struct {
+		name    string
+		old     Participant
+		replace bool
+	}{
+		{"callado, otro puerto", Participant{Username: "Pepe", Address: "5.6.7.8:6000", Connected: true, LastSeenUTC: silent}, true},
+		{"sin mayúsculas ni espacios", Participant{Username: " pepe ", Address: "5.6.7.8:6000", Connected: true, LastSeenUTC: silent}, true},
+		{"IPv4 dentro de IPv6", Participant{Username: "Pepe", Address: "[::ffff:5.6.7.8]:6000", Connected: true, LastSeenUTC: silent}, true},
+		{"ya desconectado", Participant{Username: "Pepe", Address: "5.6.7.8:6000", Connected: false, LastSeenUTC: silent}, true},
+		{"sigue vivo: otra persona", Participant{Username: "Pepe", Address: "5.6.7.8:6000", Connected: true, LastSeenUTC: alive}, false},
+		{"otra IP", Participant{Username: "Pepe", Address: "9.9.9.9:6000", Connected: true, LastSeenUTC: silent}, false},
+		{"otro nombre", Participant{Username: "Juan", Address: "5.6.7.8:6000", Connected: true, LastSeenUTC: silent}, false},
+		{"dirección rota", Participant{Username: "Pepe", Address: "basura", Connected: true, LastSeenUTC: silent}, false},
+	}
+	for _, c := range cases {
+		c.old.ID, c.old.Order = "old", 1
+		state := State{HostID: "host", Participants: []Participant{
+			{ID: "host", Username: "Pepe", Address: "5.6.7.8:7000", Order: 0, Connected: true, LastSeenUTC: silent},
+			c.old,
+		}}
+		removed := state.Supersede("new", "Pepe", "5.6.7.8:6001", now, ReturnSilence)
+		if got := len(removed) == 1 && removed[0].ID == "old"; got != c.replace {
+			t.Errorf("%s: salieron %+v, quería reemplazar=%v", c.name, removed, c.replace)
+		}
+		if len(state.Participants) == 0 || state.Participants[0].ID != "host" {
+			t.Errorf("%s: el host (mismo nombre e IP, callado) no puede salir", c.name)
+		}
 	}
 }
 

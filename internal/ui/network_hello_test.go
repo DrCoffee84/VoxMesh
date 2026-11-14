@@ -90,3 +90,44 @@ func TestRoomHelloSameAddressReplacesOldRecord(t *testing.T) {
 		t.Fatalf("lista %+v: el nuevo tiene que quedar en el lugar del viejo", host.roomState.Participants)
 	}
 }
+
+// TestRoomHelloSameNameAndIPKeepsTheName (C2): vuelve desde otro puerto de la misma IP con el mismo
+// nombre, antes de que el host lo diera por desconectado. Si el registro viejo está callado, es él:
+// sale el viejo, entra sin " (2)" y con su lugar. Si el viejo sigue vivo (otra persona en la misma
+// casa con el mismo nombre), " (2)" como siempre.
+func TestRoomHelloSameNameAndIPKeepsTheName(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		lastSeen time.Duration
+		want     string
+		oldStays bool
+	}{
+		{"callado", room.ReturnSilence + 3*time.Second, "Pepe", false},
+		{"vivo", time.Second, "Pepe (2)", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			host, client, fo := helloHost(t, nil)
+			host.roomState.Participants = []room.Participant{
+				{ID: "host", Username: "Coffee", Address: "10.0.0.1:47830", Order: 0, Connected: true},
+				{ID: "old", Username: "Pepe", Address: "127.0.0.1:1", Order: 1, Connected: true, LastSeenUTC: time.Now().Add(-c.lastSeen).UTC()},
+				{ID: "juan", Username: "Juan", Address: "127.0.0.1:2", Order: 2, Connected: true, LastSeenUTC: time.Now().UTC()},
+			}
+
+			sendHello(t, host, client, fo, "new", "Pepe")
+
+			joined, ok := participantByID(host.roomState, "new")
+			if !ok || joined.Username != c.want {
+				t.Fatalf("entró %+v (ok=%v): quería %q", joined, ok, c.want)
+			}
+			if _, stays := participantByID(host.roomState, "old"); stays != c.oldStays {
+				t.Fatalf("el registro viejo sigue=%v, quería %v", stays, c.oldStays)
+			}
+			if !c.oldStays && joined.Order != 1 {
+				t.Fatalf("entró con el lugar %d: quería el 1 del registro viejo", joined.Order)
+			}
+			if err := host.roomState.Validate(); err != nil {
+				t.Fatalf("estado inválido: %v", err)
+			}
+		})
+	}
+}
