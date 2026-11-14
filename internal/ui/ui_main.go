@@ -17,6 +17,7 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/widget"
 
 	"voxmesh/internal/assets"
@@ -177,6 +178,14 @@ type App struct {
 	audioDropReported atomic.Bool // se avisó "se cayó el audio": la próxima apertura dice con qué quedó
 	phoneLostReported atomic.Bool // se avisó "celular desconectado": al volver, una línea
 	echoFailed        atomic.Bool
+
+	// Ícono del área de notificaciones (C21, ui_tray.go). trayDesk nil = sin ícono (la X sale);
+	// trayMenu es siempre el mismo objeto (setupTray). Los bool, solo el hilo de UI.
+	trayDesk     desktop.App
+	trayMenu     *fyne.Menu
+	hiddenToTray bool        // la X ocultó la ventana (su estado ya se guardó al ocultarla)
+	trayHintOpen bool        // el aviso de la primera vez está abierto
+	quitting     atomic.Bool // quit ya empezó: corre una sola vez y nada vuelve a mostrar la ventana
 }
 
 // appTitle es el título de la ventana principal (un nombre: no se traduce). Mientras comparto
@@ -253,7 +262,9 @@ func (a *App) setStatus(msg i18n.Msg) {
 	})
 }
 
-func (a *App) Run() {
+// Run arma la ventana y corre el loop de Fyne. onShowRequest (winproc.Instance.OnShowRequest)
+// recibe lo que hay que hacer cuando otra instancia pide mostrar esta.
+func (a *App) Run(onShowRequest func(func())) {
 	_ = logging.Start()
 	logging.Infof("VoxMesh %s iniciado", version.Value)
 	// Antes de crear la ventana: prioridad, fuera del power throttling, sin ventana fantasma.
@@ -279,18 +290,13 @@ func (a *App) Run() {
 	}
 	cfg := a.conf()
 	a.window.Resize(fyne.NewSize(cfg.WindowWidth, cfg.WindowHeight))
-	a.window.SetCloseIntercept(func() {
-		if a.connected() {
-			dialog.ShowConfirm(i18n.T("main.quit.title"), i18n.T("main.quit.message"), func(confirmed bool) {
-				if confirmed {
-					a.quit(a.stopConnectionAsync(), nil)
-				}
-			}, a.window)
-		} else {
-			a.quit(nil, nil)
-		}
-	})
+	a.window.SetCloseIntercept(a.closeWindow)
 	a.window.SetContent(a.content())
+	// Después del contenido (el menú lee el botón de colgar) y antes de application.Run.
+	a.setupTray(application)
+	if onShowRequest != nil {
+		onShowRequest(func() { fyne.Do(a.showMainWindow) })
+	}
 	a.refreshRoomList("")
 	if a.conf().InputDevice == phoneMicInput {
 		if _, err := a.ensurePhoneMicServer(); err != nil {
@@ -354,8 +360,15 @@ func (a *App) rememberWindowState() {
 // ese estado intermedio, y Quit se demora hasta que termina la limpieza (máx. 3 s).
 // after (opcional) corre después de la limpieza y de guardar la config, antes de Quit: lo usa la
 // actualización para lanzar la versión nueva.
+// Corre una sola vez (la X, "Salir" del ícono, la ventana oculta de Fyne y la actualización pueden
+// llegar juntos).
 func (a *App) quit(cleanup <-chan struct{}, after func()) {
-	a.rememberWindowState() // antes de Hide: oculta, el placement ya no es el que vio el usuario
+	if !a.quitting.CompareAndSwap(false, true) {
+		return
+	}
+	if !a.hiddenToTray {
+		a.rememberWindowState() // antes de Hide: oculta, el placement ya no es el que vio el usuario
+	}
 	a.window.Hide()
 	go func() {
 		if cleanup != nil {

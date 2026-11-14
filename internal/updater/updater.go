@@ -265,6 +265,13 @@ func Relaunch() error {
 	return cmd.Process.Release()
 }
 
+// Relaunched dice si este proceso lo lanzó una actualización (Relaunch, con --wait-pid): la
+// instancia vieja ya terminó o lleva waitPIDTimeout colgada, así que no se le cede el lugar.
+func Relaunched(args []string) bool {
+	_, ok := waitPIDArg(args)
+	return ok
+}
+
 // WaitForParent espera, como máximo waitPIDTimeout, a que termine el proceso indicado con
 // --wait-pid (el que llamó a Relaunch). Sin el argumento, o si ese proceso ya no existe, vuelve
 // enseguida.

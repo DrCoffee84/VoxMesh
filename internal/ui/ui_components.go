@@ -409,6 +409,7 @@ func (a *App) setMuted(muted bool) {
 }
 
 func (a *App) refreshDeafenButton() {
+	a.refreshTrayMenu()
 	if a.deafenButton == nil {
 		return
 	}
@@ -420,6 +421,7 @@ func (a *App) refreshDeafenButton() {
 }
 
 func (a *App) refreshMuteButton() {
+	a.refreshTrayMenu()
 	if a.muteButton == nil {
 		return
 	}
@@ -428,6 +430,19 @@ func (a *App) refreshMuteButton() {
 	} else {
 		a.muteButton.SetIcon(micIcon)
 	}
+}
+
+// setHangupEnabled habilita el botón de colgar de arriba y el "Colgar" del menú del ícono: los
+// dos dicen si hay una sala (o una entrada en curso) que colgar. Hilo de UI.
+func (a *App) setHangupEnabled(enabled bool) {
+	if a.topHangupBtn != nil {
+		if enabled {
+			a.topHangupBtn.Enable()
+		} else {
+			a.topHangupBtn.Disable()
+		}
+	}
+	a.refreshTrayMenu()
 }
 
 // uiCard es una tarjeta: fondo colorNameCard (voxTheme) con el mismo margen y relleno en todas.

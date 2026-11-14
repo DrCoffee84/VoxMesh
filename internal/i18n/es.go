@@ -101,6 +101,8 @@ var es = map[string]string{
 	"param.peer_volume_max.help":           "Tope de los sliders debajo de cada avatar.",
 	"param.live_monitoring.label":          "Escuchar mi voz en vivo (en la sala)",
 	"param.show_status_bar.label":          "Mostrar barra de estado inferior",
+	"param.close_to_tray.label":            "Al cerrar la ventana, seguir abierto junto al reloj",
+	"param.close_to_tray.help":             "La X oculta VoxMesh en el área de notificaciones y seguís en la sala. Para salir del todo: clic en su ícono → Salir.",
 	"param.show_lan_invites.label":         "Mostrar direcciones LAN/VPN al invitar",
 	"param.show_lan_invites.help":          "Para invitar por la misma red o por Radmin, Tailscale o ZeroTier. Por internet no hace falta: si no las usás, podés ocultarlas.",
 	"param.event_sounds_enabled.label":     "Sonidos de eventos (conexión, desconexión, chat)",
@@ -390,6 +392,19 @@ var es = map[string]string{
 	"profile.delete_confirm":          "¿Borrar el perfil %q? Los valores actuales no cambian.",
 	"profile.delete_failed":           "No se pudo borrar el perfil: %s",
 	"profile.deleted":                 "Perfil %q borrado.",
+
+	// Ícono del área de notificaciones y su aviso (ui_tray.go, AGENDA C21).
+	"tray.open":         "Abrir VoxMesh",
+	"tray.hang_up":      "Colgar",
+	"tray.mute":         "Silenciar micrófono",
+	"tray.deafen":       "Ensordecer",
+	"tray.hotkeys":      "Atajos de la botonera",
+	"tray.quit":         "Salir",
+	"tray.hint_title":   "VoxMesh sigue abierto",
+	"tray.hint_message": "Queda junto al reloj (en el área de notificaciones) y, si estás en una sala, seguís en ella. Para salir del todo, hacé clic en su ícono y elegí «Salir». Esto se cambia en Ajustes → Interfaz y Sistema.",
+	"tray.hint_never":   "No volver a mostrar",
+	"tray.hint_quit":    "Salir de VoxMesh",
+	"tray.hint_ok":      "Entendido",
 
 	// Botonera de sonidos (ui_soundboard.go).
 	"sound.block_others":          "Bloquear sonidos ajenos",

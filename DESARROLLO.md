@@ -34,6 +34,7 @@ Para descargar e instalar, ver el [README](README.es.md). Acá está el detalle 
 - Las capturas no se guardan en ningún lado: en el log solo quedan eventos (empezó, terminó, cuántos miran, kbps).
 
 **App**
+- **Área de notificaciones**: la X oculta la ventana y la app sigue junto al reloj, también en la sala (`close_to_tray`, prendido de fábrica; apagado, la X sale como antes). El ícono está siempre; el clic izquierdo y el derecho abren el mismo menú (así es en Fyne 2.6.3): Abrir VoxMesh, Colgar, Silenciar micrófono, Ensordecer, Atajos de la botonera (con tildes) y Salir, que cierra la sala como la X (Leave y regla UPnP) sin preguntar. La primera vez sale un aviso con "No volver a mostrar" (`tray_hint_off`). Un solo VoxMesh por carpeta (mutex con nombre): abrirlo de nuevo muestra el que estaba; dos copias en carpetas distintas siguen andando a la vez (cada una con su `voxmesh.json`). Al apagar Windows la app se cierra sin avisar a la sala (AGENDA R10).
 - En inglés (por defecto) o español: Ajustes → Interfaz → "Language / Idioma", se aplica al reiniciar. La página del celular sale en el mismo idioma.
 - Se actualiza sola desde GitHub Releases (pregunta antes, verifica el SHA-256 publicado y cierra bien la sala antes de reiniciar).
 - Logs diarios en `%AppData%\VoxMesh` (botón del documento, abajo a la derecha), pensados para poder mandarlos cuando algo falla.

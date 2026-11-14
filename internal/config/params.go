@@ -115,6 +115,7 @@ var Params = []Param{
 	// Fuera de los perfiles.
 	{Key: "live_monitoring", Default: 0},
 	{Key: "show_status_bar", Default: 1},
+	{Key: "close_to_tray", Default: 1},
 	{Key: "show_lan_invites", Default: 1},
 	{Key: "event_sounds_enabled", Default: 1},
 	{Key: "allow_host_migration", Default: 1},

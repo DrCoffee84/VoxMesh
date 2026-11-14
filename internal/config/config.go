@@ -60,6 +60,9 @@ type Config struct {
 	// ShowLagGraph muestra la tira de lag debajo de cada participante (AGENDA C18; oculta por
 	// defecto). La escribe el ícono de la barra de participantes; Ajustes no la toca.
 	ShowLagGraph bool `json:"show_lag_graph,omitempty"`
+	// TrayHintOff es el "No volver a mostrar" del aviso que sale cuando la X oculta la app en el
+	// área de notificaciones (AGENDA C21). Lo escribe ese aviso; Ajustes no lo toca.
+	TrayHintOff bool `json:"tray_hint_off,omitempty"`
 }
 
 // Tamaño de ventana por defecto y mínimo aceptado al cargar (más chico = archivo roto).
@@ -162,6 +165,7 @@ type LiveSettings struct {
 	// Fuera de los perfiles.
 	LiveMonitoring     bool `json:"live_monitoring"`
 	ShowStatusBar      bool `json:"show_status_bar"`
+	CloseToTray        bool `json:"close_to_tray"`    // la X oculta la ventana: sigue junto al reloj (AGENDA C21)
 	ShowLANInvites     bool `json:"show_lan_invites"` // "Invitar" del host: también las direcciones LAN/VPN
 	EventSoundsEnabled bool `json:"event_sounds_enabled"`
 	AllowHostMigration bool `json:"allow_host_migration"`

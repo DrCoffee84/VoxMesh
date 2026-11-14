@@ -101,6 +101,8 @@ var en = map[string]string{
 	"param.peer_volume_max.help":           "Limit of the sliders under each avatar.",
 	"param.live_monitoring.label":          "Hear my voice live (in a room)",
 	"param.show_status_bar.label":          "Show bottom status bar",
+	"param.close_to_tray.label":            "Keep running next to the clock when closing the window",
+	"param.close_to_tray.help":             "The X hides VoxMesh in the notification area and you stay in the room. To quit completely: click its icon → Quit.",
 	"param.show_lan_invites.label":         "Show LAN/VPN addresses when inviting",
 	"param.show_lan_invites.help":          "To invite over the same network or Radmin, Tailscale or ZeroTier. Not needed over the internet: if you don't use them, you can hide them.",
 	"param.event_sounds_enabled.label":     "Event sounds (join, leave, chat)",
@@ -390,6 +392,19 @@ var en = map[string]string{
 	"profile.delete_confirm":          "Delete the profile %q? The current values don't change.",
 	"profile.delete_failed":           "Couldn't delete the profile: %s",
 	"profile.deleted":                 "Profile %q deleted.",
+
+	// Ícono del área de notificaciones y su aviso (ui_tray.go, AGENDA C21).
+	"tray.open":         "Open VoxMesh",
+	"tray.hang_up":      "Hang up",
+	"tray.mute":         "Mute microphone",
+	"tray.deafen":       "Deafen",
+	"tray.hotkeys":      "Soundboard hotkeys",
+	"tray.quit":         "Quit",
+	"tray.hint_title":   "VoxMesh is still running",
+	"tray.hint_message": "It stays next to the clock (in the notification area) and, if you are in a room, you stay in it. To quit completely, click its icon and choose «Quit». You can change this in Settings → Interface and system.",
+	"tray.hint_never":   "Don't show again",
+	"tray.hint_quit":    "Quit VoxMesh",
+	"tray.hint_ok":      "Got it",
 
 	// Botonera de sonidos (ui_soundboard.go).
 	"sound.block_others":          "Mute others' sounds",

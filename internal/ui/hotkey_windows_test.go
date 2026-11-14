@@ -4,8 +4,6 @@ package ui
 
 import (
 	"maps"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"fyne.io/fyne/v2"
@@ -103,15 +101,7 @@ func TestBindConflict(t *testing.T) {
 // abriría la salida de audio: acá se prueba el cambio de estado.)
 func TestToggleSoundHotkeys(t *testing.T) {
 	test.NewTempApp(t).Settings().SetTheme(voxTheme{})
-	// Cambiar el estado guarda voxmesh.json desde configSaver (otra goroutine): en t.TempDir() esa
-	// escritura se puede cruzar con el borrado de la carpeta (como en T3). Una carpeta propia, que
-	// se borra sin hacer fallar el test.
-	dir, err := os.MkdirTemp("", "voxmesh-hotkeys")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	a := New(filepath.Join(dir, "voxmesh.exe"))
+	a := newAppWithOwnConfig(t) // cambiar el estado guarda voxmesh.json
 	a.updateConfig(func(c *config.Config) {
 		c.StopSoundBind = "F3"
 		c.ToggleHotkeysBind = "F4"

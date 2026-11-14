@@ -7,4 +7,4 @@ type App struct{}
 
 func New(string) *App { return &App{} }
 
-func (*App) Run() { showHeadlessWarning() }
+func (*App) Run(func(func())) { showHeadlessWarning() }

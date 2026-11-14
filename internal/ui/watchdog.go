@@ -49,6 +49,13 @@ func (a *App) startUIWatchdog() {
 			case <-time.After(uiStallThreshold):
 			}
 			main, busy := stallStacks()
+			if trayMenuOpen(main) {
+				// El menú del ícono del área de notificaciones es modal en el hilo de UI (Fyne
+				// 2.6.3 + systray): mientras está abierto no se repinta nada. No es un bloqueo.
+				<-done
+				lastTick = time.Now()
+				continue
+			}
 			logging.Errorf("hilo de UI bloqueado más de %v (%s); stack del hilo principal:\n%s", uiStallThreshold, runtimeSummary(), main)
 			// goroutine 1 "runnable" = la llamada (p. ej. a OpenGL) ya volvió y espera un P libre:
 			// el bloqueo no es del driver sino de lo que tiene ocupados los P en ese momento.

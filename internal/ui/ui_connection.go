@@ -69,9 +69,7 @@ func (a *App) stopConnectionAsync() <-chan struct{} {
 		if a.stopButton != nil {
 			a.stopButton.Disable()
 		}
-		if a.topHangupBtn != nil {
-			a.topHangupBtn.Disable()
-		}
+		a.setHangupEnabled(false)
 		a.setShareButtonEnabled(false)
 		if a.connectButton != nil {
 			a.connectButton.Enable()
@@ -313,9 +311,7 @@ func (a *App) openHost(roomName, username string) {
 			if a.stopButton != nil {
 				a.stopButton.Enable()
 			}
-			if a.topHangupBtn != nil {
-				a.topHangupBtn.Enable()
-			}
+			a.setHangupEnabled(true)
 			a.setShareButtonEnabled(true)
 			a.hideConnectionPanels()
 		})
@@ -533,9 +529,7 @@ func (a *App) connectClient(raw string) {
 	if a.leaveButton != nil {
 		a.leaveButton.Enable()
 	}
-	if a.topHangupBtn != nil {
-		a.topHangupBtn.Enable()
-	}
+	a.setHangupEnabled(true)
 
 	go func() {
 		start := time.Now()
@@ -557,9 +551,7 @@ func (a *App) connectClient(raw string) {
 					if a.leaveButton != nil {
 						a.leaveButton.Disable()
 					}
-					if a.topHangupBtn != nil {
-						a.topHangupBtn.Disable()
-					}
+					a.setHangupEnabled(false)
 				})
 				return
 			}

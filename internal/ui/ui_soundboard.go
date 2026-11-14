@@ -134,13 +134,14 @@ func (a *App) toggleSoundHotkeys() {
 	go a.playCue(sfx)
 }
 
-// setSoundHotkeysOff guarda y aplica el estado de los atajos de la botonera: la lista del poller
-// y el botón. Hilo de UI.
+// setSoundHotkeysOff guarda y aplica el estado de los atajos de la botonera: la lista del poller,
+// el botón y el menú del ícono. Hilo de UI.
 func (a *App) setSoundHotkeysOff(off bool) {
 	a.updateConfig(func(c *config.Config) { c.SoundHotkeysOff = off })
 	a.publishHotkeys()
 	a.saveConfig()
 	a.refreshHotkeysButton()
+	a.refreshTrayMenu()
 }
 
 // refreshHotkeysButton pone el estado de los atajos en su botón. Hilo de UI (o antes de mostrarlo).

@@ -4,6 +4,7 @@ go 1.26
 
 require (
 	fyne.io/fyne/v2 v2.6.3
+	fyne.io/systray v1.11.0
 	github.com/VoiceBlender/rnnoise-go v0.1.0
 	github.com/VoiceBlender/rnnoise-go/model v0.1.0
 	github.com/atotto/clipboard v0.1.4
@@ -18,7 +19,6 @@ require (
 )
 
 require (
-	fyne.io/systray v1.11.0 // indirect
 	github.com/BurntSushi/toml v1.4.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fredbi/uri v1.1.0 // indirect
