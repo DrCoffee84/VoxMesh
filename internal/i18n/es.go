@@ -540,7 +540,17 @@ var es = map[string]string{
 	"lag.summary_loss": "pérdida máxima %d %%",
 	"lag.summary_none": "Todavía no hay datos en este rango.",
 	"lag.hover_hint":   "Pasá el mouse por el gráfico para ver cada momento.",
-	"lag.legend":       "Línea: ida y vuelta en ms (verde < 80, amarillo hasta 200, naranja hasta 400, rojo más). Barras rojas de abajo: pérdida de audio. Un hueco es un rato sin datos.",
+	"lag.legend":       "Línea: ida y vuelta en ms (verde < 80, amarillo hasta 200, naranja hasta 400, rojo más). Barras rojas de abajo: pérdida de audio. Franja roja arriba: un rato largo con lag (lo avisa el registro de actividad). Un hueco es un rato sin datos.",
+
+	// Lag prolongado en el registro de actividad (lag_watch.go, C13).
+	"lag.started":        "Hay lag con %s desde las %s (%s).",
+	"lag.started_host":   "Hay lag con el host (%s) desde las %s (%s).",
+	"lag.help":           "Si es siempre la misma persona, suele ser su Wi-Fi o alguien que descarga en su red; si pasa con todos, es tu conexión. Detalle: gráfico de lag (ícono al lado de «En sala»).",
+	"lag.ended":          "Se normalizó la conexión con %s (duró %s; lo peor: %s).",
+	"lag.ended_host":     "Se normalizó la conexión con el host (%s) (duró %s; lo peor: %s).",
+	"lag.duration_s":     "%d s",
+	"lag.duration_min_s": "%d min %d s",
+	"lag.duration_h_min": "%d h %d min",
 
 	// Error de usuario del celular (error_text.go).
 	"err.phone.no_local_ip": "no se encontró una IP local privada%s",

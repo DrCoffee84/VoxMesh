@@ -110,7 +110,8 @@ func (r *lagRing) push(sample lagSample, max int) {
 
 type lagSeries struct {
 	ring    lagRing
-	version uint64 // sube con cada medida: la tira se redibuja solo si cambió
+	version uint64   // sube con cada medida: la tira se redibuja solo si cambió
+	watch   lagWatch // lag prolongado (C13): ve cada casillero cuando se cierra
 }
 
 type lagHistory struct {
@@ -130,21 +131,23 @@ func newLagHistoryMax(max int) *lagHistory {
 	return &lagHistory{max: max, series: make(map[string]*lagSeries)}
 }
 
-// addRTT guarda el ms de ida y vuelta medido a las at con name.
-func (h *lagHistory) addRTT(name string, at time.Time, rtt time.Duration) {
+// addRTT guarda el ms de ida y vuelta medido a las at con name. Si con eso se cerró un casillero que
+// empieza o termina un tramo con lag (C13), devuelve el aviso.
+func (h *lagHistory) addRTT(name string, at time.Time, rtt time.Duration) (lagEvent, bool) {
 	ms := min(max(int((rtt+time.Millisecond/2)/time.Millisecond), 0), lagNoRTT-1)
-	h.add(name, at, func(s *lagSample) {
+	return h.add(name, at, func(s *lagSample) {
 		if s.rtt == lagNoRTT || uint16(ms) > s.rtt {
 			s.rtt = uint16(ms)
 		}
 	})
 }
 
-// addNet guarda la pérdida (%) y el jitter (ms) del audio de name en el intervalo que terminó a las at.
-func (h *lagHistory) addNet(name string, at time.Time, lossPct, jitterMS float64) {
+// addNet guarda la pérdida (%) y el jitter (ms) del audio de name en el intervalo que terminó a las
+// at. Devuelve el aviso de lag, como addRTT.
+func (h *lagHistory) addNet(name string, at time.Time, lossPct, jitterMS float64) (lagEvent, bool) {
 	loss := uint8(min(max(math.Round(lossPct), 0), 100))
 	jitter := uint8(min(max(math.Round(jitterMS), 0), lagNoByte-1))
-	h.add(name, at, func(s *lagSample) {
+	return h.add(name, at, func(s *lagSample) {
 		if s.loss == lagNoByte || loss > s.loss {
 			s.loss = loss
 		}
@@ -154,9 +157,9 @@ func (h *lagHistory) addNet(name string, at time.Time, lossPct, jitterMS float64
 	})
 }
 
-func (h *lagHistory) add(name string, at time.Time, fill func(*lagSample)) {
+func (h *lagHistory) add(name string, at time.Time, fill func(*lagSample)) (event lagEvent, ok bool) {
 	if name == "" {
-		return
+		return lagEvent{}, false
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -164,7 +167,7 @@ func (h *lagHistory) add(name string, at time.Time, fill func(*lagSample)) {
 		h.origin, h.started = at.Truncate(lagSlot), true
 	}
 	if at.Before(h.origin) {
-		return // antes de la primera medida (un reloj que volvió): no hay casillero
+		return lagEvent{}, false // antes de la primera medida (un reloj que volvió): no hay casillero
 	}
 	slot := uint32(at.Sub(h.origin) / lagSlot)
 	series := h.series[name]
@@ -178,18 +181,52 @@ func (h *lagHistory) add(name string, at time.Time, fill func(*lagSample)) {
 		sample := series.ring.at(series.ring.len() - 1 - back)
 		if sample.slot == slot {
 			fill(sample)
-			return
+			return lagEvent{}, false
 		}
 		if sample.slot < slot {
 			break
 		}
 	}
-	if n := series.ring.len(); n > 0 && series.ring.at(n-1).slot > slot {
-		return // más vieja que lo que se busca para atrás: se descarta
+	n := series.ring.len()
+	if n > 0 && series.ring.at(n-1).slot > slot {
+		return lagEvent{}, false // más vieja que lo que se busca para atrás: se descarta
+	}
+	if n > 0 {
+		// Casillero nuevo: el anterior quedó cerrado y lo ve la máquina del lag prolongado.
+		closed := *series.ring.at(n - 1)
+		if kind, episode := series.watch.observe(closed.point(h.slotTime(closed.slot))); kind != 0 {
+			event, ok = lagEvent{kind: kind, name: name, episode: episode}, true
+		}
 	}
 	sample := lagSample{slot: slot, rtt: lagNoRTT, loss: lagNoByte, jitter: lagNoByte}
 	fill(&sample)
 	series.ring.push(sample, h.max)
+	return event, ok
+}
+
+// episodes copia los tramos con lag de name que tocan [from, to) (C13), para marcarlos en el gráfico.
+func (h *lagHistory) episodes(name string, from, to time.Time) []lagEpisode {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	series := h.series[name]
+	if series == nil {
+		return nil
+	}
+	var episodes []lagEpisode
+	for _, episode := range series.watch.episodes {
+		if episode.drawEnd().After(from) && episode.start.Before(to) {
+			episodes = append(episodes, episode)
+		}
+	}
+	return episodes
+}
+
+// drawEnd es hasta dónde se marca el tramo: su fin o, si sigue, lo que cubre su última muestra.
+func (e lagEpisode) drawEnd() time.Time {
+	if !e.end.IsZero() {
+		return e.end
+	}
+	return e.last.Add(lagSampleSpan)
 }
 
 // version es el contador de medidas de name (0 = ninguna).

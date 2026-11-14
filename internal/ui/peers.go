@@ -10,6 +10,7 @@ import (
 	"voxmesh/internal/audio"
 	"voxmesh/internal/config"
 	"voxmesh/internal/i18n"
+	"voxmesh/internal/logging"
 	"voxmesh/internal/room"
 )
 
@@ -117,21 +118,31 @@ func (a *App) setSelfMuted(muted bool) {
 func (a *App) updatePeerLag(id, address string, lag time.Duration) {
 	a.rttFloor.Add(address, lag) // ritmo de la pantalla compartida: ¿es LAN?
 	now := time.Now()
-	name := ""
+	name, isHost := "", false
 	a.peerMu.Lock()
 	for index := range a.peerNames {
 		p := &a.peerNames[index]
 		if !p.isSelf && ((id != "" && p.id == id) || (id == "" && p.address == address)) {
 			p.lag, p.lagAt, p.lagViaHost = lag, now, false
-			name = p.name
+			name, isHost = p.name, p.isHost
 			break
 		}
 	}
 	a.peerMu.Unlock()
 	if name != "" {
-		a.lagHistory.addRTT(name, now, lag)
+		if event, ok := a.lagHistory.addRTT(name, now, lag); ok {
+			a.reportLag(event, isHost)
+		}
 	}
 	a.refreshPeerAvatars()
+}
+
+// reportLag deja en el registro de actividad (solo local: es la red de esta PC) y en el log el aviso
+// de un lag prolongado que empezó o terminó (C13). isHost: la persona es el host de la sala.
+func (a *App) reportLag(event lagEvent, isHost bool) {
+	msg := lagEventMsg(event, isHost && !a.hostMode.Load())
+	logging.Infof("%s", msg.In(i18n.ES))
+	a.addActivity(msg.String())
 }
 
 // peerLagFresh es cuánto vale un lag medido: el host no le manda a los clientes uno más viejo (el
@@ -258,8 +269,9 @@ func (a *App) updatePeerNetStats(stats map[string]peerNetStats) {
 	}
 	now := time.Now()
 	type measured struct {
-		name string
-		net  peerNetStats
+		name   string
+		isHost bool
+		net    peerNetStats
 	}
 	var history []measured
 	a.peerMu.Lock()
@@ -271,7 +283,7 @@ func (a *App) updatePeerNetStats(stats map[string]peerNetStats) {
 		}
 		next, ok := stats[p.id]
 		if ok {
-			history = append(history, measured{p.name, next})
+			history = append(history, measured{p.name, p.isHost, next})
 		}
 		if ok && next != p.net {
 			p.net = next
@@ -280,7 +292,9 @@ func (a *App) updatePeerNetStats(stats map[string]peerNetStats) {
 	}
 	a.peerMu.Unlock()
 	for _, m := range history {
-		a.lagHistory.addNet(m.name, now, m.net.lossPct, m.net.jitterMS)
+		if event, ok := a.lagHistory.addNet(m.name, now, m.net.lossPct, m.net.jitterMS); ok {
+			a.reportLag(event, m.isHost)
+		}
 	}
 	if changed {
 		a.refreshPeerAvatars()

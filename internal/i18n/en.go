@@ -540,7 +540,17 @@ var en = map[string]string{
 	"lag.summary_loss": "max loss %d %%",
 	"lag.summary_none": "No data in this range yet.",
 	"lag.hover_hint":   "Hover over the graph to see each moment.",
-	"lag.legend":       "Line: round trip in ms (green < 80, yellow up to 200, orange up to 400, red above). Red bars at the bottom: audio loss. A gap is a while without data.",
+	"lag.legend":       "Line: round trip in ms (green < 80, yellow up to 200, orange up to 400, red above). Red bars at the bottom: audio loss. Red band on top: a long stretch of lag (the activity log reports it). A gap is a while without data.",
+
+	// Lag prolongado en el registro de actividad (lag_watch.go, C13).
+	"lag.started":        "Lag with %s since %s (%s).",
+	"lag.started_host":   "Lag with the host (%s) since %s (%s).",
+	"lag.help":           "If it's always the same person, it's usually their Wi-Fi or someone downloading on their network; if it's everyone, it's your connection. Details: lag graph (icon next to “In room”).",
+	"lag.ended":          "Connection with %s back to normal (lasted %s; worst: %s).",
+	"lag.ended_host":     "Connection with the host (%s) back to normal (lasted %s; worst: %s).",
+	"lag.duration_s":     "%d s",
+	"lag.duration_min_s": "%d min %d s",
+	"lag.duration_h_min": "%d h %d min",
 
 	// Error de usuario del celular (error_text.go).
 	"err.phone.no_local_ip": "no private local IP found (connect the PC to Wi-Fi or a LAN)%s",

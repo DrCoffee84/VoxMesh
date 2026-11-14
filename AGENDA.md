@@ -33,7 +33,7 @@ Cada tarea tiene un **ID** (`S7`, `F1`...) y está escrita para que un chat nuev
 
 ### Prioridad (2026-11-13)
 
-Va antes que todo lo demás. Detalle en "Próximo: cómoda para usuarios comunes". **Un chat por fila**, en este orden. C8 + C9, C10 + C11 + C12 y F6 + F7 hechos el 2026-11-13 (falta probarlos a mano); de paso apareció C17 (el registro de actividad queda oculto dentro de la sala). El 2026-11-13 se sumó C18 (gráfico de lag): va con C13 en la fila 4 y C14 pasa a su propia fila. También el 2026-11-13: F8 (que un grito no deje sordo), C19 (plantilla fija "Sin filtros") y C20 (apagar los atajos de la botonera), juntos en la fila 6, antes de C15 y C16 para que el lavado de cara cubra los controles nuevos. Decidido con Coffee el 2026-11-13: C17 queda como está (el registro se ve con ☰) y C2 entra en la fila 4.
+Va antes que todo lo demás. Detalle en "Próximo: cómoda para usuarios comunes". **Un chat por fila**, en este orden. C8 + C9, C10 + C11 + C12, F6 + F7 y C18 + C13 + C2 (con R6) hechos el 2026-11-13 (falta probarlos a mano); de paso apareció C17 (el registro de actividad queda oculto dentro de la sala). El 2026-11-13 se sumó C18 (gráfico de lag): va con C13 en la fila 4 y C14 pasa a su propia fila. También el 2026-11-13: F8 (que un grito no deje sordo), C19 (plantilla fija "Sin filtros") y C20 (apagar los atajos de la botonera), juntos en la fila 6, antes de C15 y C16 para que el lavado de cara cubra los controles nuevos. Decidido con Coffee el 2026-11-13: C17 queda como está (el registro se ve con ☰) y C2 entra en la fila 4.
 
 | # | IDs | Qué, en simple | Tamaño |
 |---|-----|----------------|--------|
@@ -258,7 +258,14 @@ Solo si aparece el problema: **R1** (data race del estado de la sala, ver "Si ap
 
 ### C13. Lag prolongado en el registro de actividad
 
-- [ ] **Pedido (Coffee)**: cuando hay mucho lag por un rato largo, que el registro diga desde cuándo. Fijarse a partir de cuánto deja de ser normal.
+- [x] **Pedido (Coffee)**: cuando hay mucho lag por un rato largo, que el registro diga desde cuándo. Fijarse a partir de cuánto deja de ser normal.
+  - **Hecho** (2026-11-13): [lag_watch.go](internal/ui/lag_watch.go). `lagWatch`, pura, una por persona dentro del historial de C18: ve cada casillero de 2 s **cuando se cierra** (al abrirse el siguiente), así no mide nada nuevo y corre en la goroutine que alimentó el historial.
+    - Umbrales confirmados con los logs del 11 al 13/11 (resúmenes de 5 min entre 0 y 1,5 % de pérdida; 12 de 217 intervalos con problemas pasan del 5 %; el RTT no se loguea): lag = más de 200 ms (`lagWarnMS`, el mismo del chip) o 5 % de pérdida (`lagLossPct`). Entra con 10 s seguidos (`lagSustain`) y sale con 10 s normales. Lo sin medir no cuenta, y más de 6 s sin muestras corta la racha.
+    - Una línea al empezar: "Hay lag con Pepe desde las 21:34 (350 ms, 8 % de pérdida)." + la ayuda (misma persona → su Wi-Fi; todos → la tuya; el detalle, en el gráfico al lado de «En sala»). Otra al terminar: "Se normalizó la conexión con Pepe (duró 1 min 20 s; lo peor: 600 ms, 12 % de pérdida)." En el cliente, del host: "con el host (Pepe)". De los demás, el cliente usa solo la pérdida que mide él (decidido en el plan).
+    - `reportLag` ([peers.go](internal/ui/peers.go)): `addActivity` + log en castellano; nunca `addSystemMessage`, sin barra de estado. Tope: un aviso por persona cada 5 min (`lagLineCooldown`, decidido con Coffee); los tramos del medio no avisan pero se guardan.
+    - Cada tramo queda marcado en el gráfico grande: franja roja arriba y el fondo apenas sombreado (`lagHistory.episodes`, `lagEpisodeSpans`, `drawLagEpisodes`). La leyenda lo explica.
+    - Tests `TestLagWatchEntersAndLeaves`, `TestLagWatchShortSpike`, `TestLagWatchDoesNotAlternate`, `TestLagWatchGapCutsStreak`, `TestLagWatchLossOnly`, `TestLagWatchCooldown`, `TestLagHistoryReportsOnSlotClose` y `TestLagEventMsg` (es y en, duraciones). Se miró con capturas: las dos líneas en el registro y los tramos en el gráfico.
+    - **Quedó afuera**: un corte total no avisa como lag (es un hueco; lo cubren "Reconectando…" y "X salió"); si la persona se va con lag, el tramo queda abierto, sin línea de fin; la tira del chip no marca los tramos.
 - **Hoy**:
   - El RTT de cada participante sale del Ping/Pong (`updatePeerLag`, [network.go](internal/ui/network.go)): el host mide a cada uno; el cliente, al host.
   - Pérdida y jitter por emisor, cada 2 s (`updatePeerNetStats`, desde `audioMonitorLoop`).
@@ -736,6 +743,21 @@ Las anteriores se hicieron todas el 2026-11-02 y salieron bien (resumen en "Hist
   - Ensordecido: un sonido que estaba sonando se corta; los que tira el otro no suenan (tampoco después, al volver, uno que se estaba bajando); el que tocás vos no suena acá pero el otro lo escucha. Los sonidos de aviso (alguien entra, un mensaje) sí suenan. Mientras habla el otro, su avatar sigue marcando que habla.
   - Con "Escuchar mi voz en vivo" prendido: ensordecido no te escuchás.
   - "Reiniciar audio" y una migración de host estando ensordecido: sigue ensordecido.
+
+- [ ] **R6 + C2. Volver a entrar sin "Nombre (2)"** (2026-11-13), host en una PC y un cliente en otra (misma red o internet):
+  - El cliente cierra la app de golpe (Administrador de tareas) y vuelve a entrar enseguida, con el puerto 47830 ocupado (por ejemplo, otra instancia abierta en esa PC, que así escucha en otro puerto): entra con su nombre, sin "(2)", en el mismo lugar de la lista; no aparece "X salió" a los 20 s; el log del host dice "Vuelve X: reemplaza su registro anterior…".
+  - Dos instancias en la misma PC con el **mismo** nombre y las dos vivas: la segunda entra como "Nombre (2)" y la primera no desaparece de la lista.
+  - Cambiarse el nombre en Ajustes y volver a entrar desde el mismo puerto (R6): queda un solo registro, con el nombre nuevo, y no se cae a los 20 s.
+- [ ] **C18. Gráfico de lag** (2026-11-13), un host y dos clientes (uno idealmente por Wi-Fi):
+  - Al abrir la app el ícono del gráfico (a la derecha de "En sala") está gris y no hay tiras; con el mouse encima dice "Mostrar detalle de lag". Tocarlo → aparecen las tiras debajo de cada uno (no en el propio) y el ícono queda en color; "Ocultar detalle de lag". Cerrar y abrir la app: sigue como quedó y el historial arranca vacío.
+  - Con el mouse sobre la tira: "21:34:12 · 35 ms · 0 % de pérdida". Tocarla → el gráfico grande, con "Toda la sesión", 5 min y 1 h; el renglón de abajo muestra el momento bajo el mouse; "Cerrar" lo cierra.
+  - Cortar el Wi-Fi de un cliente unos segundos: en el host y en el otro cliente, su tira y su gráfico muestran el hueco (o el pico) en el momento justo; al volver, sigue en el mismo gráfico (también si reconecta).
+  - En un cliente: el chip del host dice sus ms (también si entró por una dirección LAN/VPN) y el de los demás "≈NN ms"; el gráfico de alguien que no es el host avisa que desde ahí solo se mide la pérdida.
+  - Salir y volver a entrar a la sala, y una migración de host: los gráficos siguen con lo anterior.
+- [ ] **C13. Lag largo en el registro** (2026-11-13), con un cliente al que se le pueda empeorar la red (Wi-Fi lejos del router, una descarga grande, o `clumsy` en Windows con 300 ms de demora):
+  - Más de 10 s con lag: una sola línea "Hay lag con X desde las HH:MM (… ms, … % de pérdida)." con la ayuda; al volver a lo normal 10 s, otra "Se normalizó la conexión con X (duró …; lo peor: …)." En el cliente, del host: "con el host (X)".
+  - Un pico de pocos segundos no avisa nada; lag que va y viene no llena el registro (como mucho un aviso por persona cada 5 min).
+  - En el gráfico grande, el tramo queda con la franja roja arriba. Todo en inglés también.
 
 - [ ] **F5. Pantalla compartida**, lo que no se pudo probar en una sola PC (incluye la segunda vuelta del 2026-11-04: por internet el log tiene que decir "ritmo de internet"; el cursor tiene que verse fluido y en el lugar justo, también el de texto, que va negro con borde blanco):
   - Windows al **125 % y 150 %** (Configuración → Pantalla → Escala) en quien comparte y en quien mira: la captura sale entera y del tamaño físico (`go test -run TestMonitorsArePhysicalPixels -v ./internal/screen/` con ese escalado) y en "Tamaño real (1:1)" la letra chica se lee igual que en la pantalla original.

@@ -403,7 +403,7 @@ func (v *lagView) update(now time.Time) {
 	from, to := v.window(now)
 	points := v.app.lagHistory.points(v.name, from, to)
 	summary := summarizeLag(points)
-	v.graph.set(points, from, to, lagScaleMS(summary.maxRTT))
+	v.graph.set(points, v.app.lagHistory.episodes(v.name, from, to), from, to, lagScaleMS(summary.maxRTT))
 	layout := "15:04"
 	if to.Sub(from) <= 10*time.Minute {
 		layout = "15:04:05"
@@ -445,6 +445,7 @@ type lagGraph struct {
 	widget.BaseWidget
 	view     *lagView
 	points   []lagPoint
+	episodes []lagEpisode // tramos con lag (C13): franja roja arriba
 	from, to time.Time
 	scale    int        // ms del borde de arriba
 	columns  []lagPoint // las del último dibujo
@@ -456,8 +457,8 @@ func newLagGraph(view *lagView) *lagGraph {
 	return g
 }
 
-func (g *lagGraph) set(points []lagPoint, from, to time.Time, scale int) {
-	g.points, g.from, g.to, g.scale = points, from, to, scale
+func (g *lagGraph) set(points []lagPoint, episodes []lagEpisode, from, to time.Time, scale int) {
+	g.points, g.episodes, g.from, g.to, g.scale = points, episodes, from, to, scale
 	g.Refresh()
 }
 
@@ -482,6 +483,7 @@ func (g *lagGraph) CreateRenderer() fyne.WidgetRenderer {
 	r.raster = canvas.NewRaster(func(width, height int) image.Image {
 		img := image.NewRGBA(image.Rect(0, 0, width, height))
 		g.columns = lagColumns(g.points, g.from, g.to, width)
+		drawLagEpisodes(img, lagEpisodeSpans(g.episodes, g.from, g.to, width))
 		drawLagGraph(img, g.columns, g.scale)
 		return img
 	})
@@ -536,6 +538,36 @@ func (r *lagGraphRenderer) Refresh() {
 
 func (r *lagGraphRenderer) Objects() []fyne.CanvasObject { return r.objects }
 func (r *lagGraphRenderer) Destroy()                     {}
+
+// lagEpisodeSpans son las columnas [desde, hasta] de cada tramo con lag en width columnas de
+// [from, to). Un tramo que sigue llega hasta lo que cubre su última muestra.
+func lagEpisodeSpans(episodes []lagEpisode, from, to time.Time, width int) [][2]int {
+	span := to.Sub(from)
+	if width <= 0 || span <= 0 {
+		return nil
+	}
+	column := func(at time.Time) int {
+		return min(max(int(at.Sub(from)*time.Duration(width)/span), 0), width-1)
+	}
+	var spans [][2]int
+	for _, episode := range episodes {
+		end := episode.drawEnd()
+		if !end.After(from) || !episode.start.Before(to) {
+			continue
+		}
+		spans = append(spans, [2]int{column(episode.start), column(end.Add(-time.Nanosecond))})
+	}
+	return spans
+}
+
+// drawLagEpisodes marca los tramos con lag: el fondo apenas más rojo y una franja roja arriba.
+func drawLagEpisodes(img *image.RGBA, spans [][2]int) {
+	height := img.Bounds().Dy()
+	for _, span := range spans {
+		fillRect(img, image.Rect(span[0], 0, span[1]+1, height), withAlpha(lagRed, 22))
+		fillRect(img, image.Rect(span[0], 0, span[1]+1, 5), withAlpha(lagRed, 210))
+	}
+}
 
 // drawLagGraph dibuja el gráfico grande: franjas del semáforo de fondo con su línea, la pérdida en
 // barras desde abajo (100 % = todo el alto) y la línea de ms en el color de cada tramo. Una columna
