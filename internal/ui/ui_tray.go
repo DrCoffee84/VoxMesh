@@ -34,6 +34,7 @@ func (a *App) setupTray(application fyne.App) {
 	a.trayMenu.Items = a.trayMenuItems()
 	desk.SetSystemTrayMenu(a.trayMenu)
 	a.trayDesk = desk
+	a.hookTrayLeftClick()        // clic izquierdo = abrir (C27); el derecho sigue abriendo el menú
 	systray.SetTooltip(appTitle) // Fyne no le pone leyenda en Windows
 	// El cierre de esa ventana oculta llamaba al Quit de Fyne, que no manda el Leave ni borra la
 	// regla UPnP: ahora es "Salir".

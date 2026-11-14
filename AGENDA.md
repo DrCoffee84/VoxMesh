@@ -548,7 +548,8 @@ Solo si aparece el problema: **R1** (data race del estado de la sala, ver "Si ap
 
 ### C27. Clic izquierdo en el ícono de la bandeja abre la app
 
-- [ ] **Pedido (Coffee, 2026-11-14)**: con la app en el área de notificaciones, un clic común la abre de una; el derecho muestra las opciones (que ya andan bien).
+- [x] **Pedido (Coffee, 2026-11-14)**: con la app en el área de notificaciones, un clic común la abre de una; el derecho muestra las opciones (que ya andan bien).
+  - **Hecho** (2026-11-14): [tray_click_windows.go](internal/ui/tray_click_windows.go): `hookTrayLeftClick` (lo llama `setupTray`) busca la ventana oculta de systray (clase "SystrayClass", la del hilo actual: el principal la creó dentro de `SetSystemTrayMenu`) y le cambia el procedimiento de ventana (`SetWindowLongPtrW`): el clic izquierdo (`WM_USER+1` con `WM_LBUTTONUP`, `isTrayLeftClick`) → `fyne.Do(showMainWindow)`; todo lo demás sigue en el de systray (el derecho abre el menú como antes). Si no la encuentra, una línea en el log y el clic izquierdo abre el menú. Fuera de Windows, nada (`tray_click_other.go`). El aviso de la primera vez y el README dicen "clic derecho y Salir". Test `TestIsTrayLeftClick`; **falta probarlo a mano** (no se puede crear el ícono en los tests).
 - **Hoy**: fyne.io/systray v1.11.0 (el de Fyne 2.6.3) abre el menú con los dos clics (`WM_LBUTTONUP` y `WM_RBUTTONUP` en su `wndProc`) y no deja cambiarlo; Fyne no expone nada.
 
 ### C28. El log más nuevo nunca se borra

@@ -470,7 +470,7 @@ var es = map[string]string{
 	"tray.hotkeys":      "Atajos de la botonera",
 	"tray.quit":         "Salir",
 	"tray.hint_title":   "VoxMesh sigue abierto",
-	"tray.hint_message": "Queda junto al reloj (en el área de notificaciones) y, si estás en una sala, seguís en ella. Para salir del todo, hacé clic en su ícono y elegí «Salir». Esto se cambia en Ajustes → Interfaz y Sistema.",
+	"tray.hint_message": "Queda junto al reloj (en el área de notificaciones) y, si estás en una sala, seguís en ella. Clic en su ícono la vuelve a abrir; para salir del todo, clic derecho y «Salir». Esto se cambia en Ajustes → Interfaz y Sistema.",
 	"tray.hint_never":   "No volver a mostrar",
 	"tray.hint_quit":    "Salir de VoxMesh",
 	"tray.hint_hide":    "Ocultar",
