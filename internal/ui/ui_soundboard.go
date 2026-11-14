@@ -69,6 +69,15 @@ func (a *App) buildSoundPanel() {
 	// el ancho: con el botón de atajo al lado el texto no entra en la columna.
 	stopAllButton := widget.NewButtonWithIcon(i18n.T("sound.stop_all"), theme.MediaStopIcon(), a.stopSoundsForAll)
 
+	// Prender y apagar los atajos de la botonera (C20), para jugar con teclado sin que suenen. Con
+	// la forma de "Detener": el botón (muestra el estado) y su atajo, que sigue andando apagados.
+	a.hotkeysButton = widget.NewButtonWithIcon("", keyboardIcon, a.toggleSoundHotkeys)
+	a.refreshHotkeysButton()
+	a.toggleBindBtn = a.newBindButton(cfg.ToggleHotkeysBind, a.showToggleHotkeysBindDialog)
+	toggleBindWrap := container.NewGridWrap(fyne.NewSize(bindButtonWidth, 34), a.toggleBindBtn)
+	toggleSpacer := container.NewGridWrap(fyne.NewSize(34, 34), layout.NewSpacer())
+	hotkeysRow := container.NewBorder(nil, nil, nil, container.NewHBox(toggleBindWrap, toggleSpacer), a.hotkeysButton)
+
 	searchEntry := widget.NewEntry()
 	searchEntry.SetPlaceHolder(i18n.T("sound.search_placeholder"))
 	clearSearch := widget.NewButtonWithIcon("", theme.CancelIcon(), func() { searchEntry.SetText("") })
@@ -90,12 +99,62 @@ func (a *App) buildSoundPanel() {
 		volRow,
 		stopRow,
 		stopAllButton,
+		hotkeysRow,
 		searchEntry,
 		widget.NewSeparator(),
 	)
 	soundContent := container.NewBorder(soundHeader, addButton, nil, nil, soundScroll)
 	a.soundPanel = container.New(fixedWidthLayout{soundPanelWidth}, uiCard(soundContent))
 	a.rebuildSoundboard()
+}
+
+// Íconos del botón de los atajos de la botonera (Material "keyboard"): apagados, en rojo como el
+// micrófono muteado.
+var (
+	keyboardResource = fyne.NewStaticResource("keyboard.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path d="M20 5H4c-1.1 0-1.99.9-1.99 2L2 17c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm-9 3h2v2h-2V8zm0 3h2v2h-2v-2zM8 8h2v2H8V8zm0 3h2v2H8v-2zm-1 2H5v-2h2v2zm0-3H5V8h2v2zm9 7H8v-2h8v2zm0-4h-2v-2h2v2zm0-3h-2V8h2v2zm3 3h-2v-2h2v2zm0-3h-2V8h2v2z"/></svg>`))
+	keyboardIcon     = theme.NewThemedResource(keyboardResource)
+	keyboardOffIcon  = theme.NewErrorThemedResource(keyboardResource)
+)
+
+// toggleSoundHotkeys prende o apaga los atajos de la botonera (C20): lo llaman el botón, su atajo
+// (el poller, con fyne.Do) y el menú de la bandeja. Apagados solo anda el atajo que los prende
+// (hotkeyBinds); el estado se guarda y sigue igual al volver a abrir la app. Hilo de UI.
+func (a *App) toggleSoundHotkeys() {
+	off := !a.conf().SoundHotkeysOff
+	a.setSoundHotkeysOff(off)
+	sfx, key := audio.SFXHotkeysOn, "sound.hotkeys_on_notice"
+	if off {
+		sfx, key = audio.SFXHotkeysOff, "sound.hotkeys_off_notice"
+	}
+	msg := i18n.M(key)
+	a.setStatus(msg)
+	a.addActivity(msg.String())
+	// Dentro del juego la ventana no se ve: el aviso suena siempre, también con los sonidos de
+	// eventos apagados. Puede abrir la salida de sonidos: fuera del hilo de UI.
+	go a.playCue(sfx)
+}
+
+// setSoundHotkeysOff guarda y aplica el estado de los atajos de la botonera: la lista del poller
+// y el botón. Hilo de UI.
+func (a *App) setSoundHotkeysOff(off bool) {
+	a.updateConfig(func(c *config.Config) { c.SoundHotkeysOff = off })
+	a.publishHotkeys()
+	a.saveConfig()
+	a.refreshHotkeysButton()
+}
+
+// refreshHotkeysButton pone el estado de los atajos en su botón. Hilo de UI (o antes de mostrarlo).
+func (a *App) refreshHotkeysButton() {
+	if a.hotkeysButton == nil {
+		return
+	}
+	if a.conf().SoundHotkeysOff {
+		a.hotkeysButton.SetText(i18n.T("sound.hotkeys_off"))
+		a.hotkeysButton.SetIcon(keyboardOffIcon)
+	} else {
+		a.hotkeysButton.SetText(i18n.T("sound.hotkeys_on"))
+		a.hotkeysButton.SetIcon(keyboardIcon)
+	}
 }
 
 func (a *App) soundFilterText() string {

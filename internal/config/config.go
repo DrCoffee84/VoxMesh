@@ -36,6 +36,12 @@ type Config struct {
 	SoundboardVolume float32           `json:"soundboard_volume"`
 	SoundBinds       map[string]string `json:"sound_binds,omitempty"`
 	StopSoundBind    string            `json:"stop_sound_bind,omitempty"`
+	// ToggleHotkeysBind es el atajo que prende y apaga los atajos de la botonera (AGENDA C20; sin
+	// tecla por defecto, para no chocar con un juego). Es el único que anda con los atajos
+	// apagados. SoundHotkeysOff = apagados (SoundBinds, StopSoundBind y Detener quedan guardados).
+	// Los escribe la botonera (botón, su atajo, el menú de la bandeja); Ajustes no los toca.
+	ToggleHotkeysBind string `json:"toggle_hotkeys_bind,omitempty"`
+	SoundHotkeysOff   bool   `json:"sound_hotkeys_off,omitempty"`
 	// PeerVolumes guarda el volumen por usuario (slider debajo de cada avatar) por nombre de
 	// usuario: el ID de participante cambia con la dirección, el nombre no. 1.0 no se guarda.
 	PeerVolumes map[string]float64 `json:"peer_volumes,omitempty"`

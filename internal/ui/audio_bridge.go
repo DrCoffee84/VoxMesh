@@ -240,8 +240,19 @@ func (a *App) playSoundPCM(data []byte) {
 	}
 }
 
+// playEventSound toca un sonido de evento (entrar, salir, mensaje) si están prendidos en Ajustes.
 func (a *App) playEventSound(sfx []byte) {
-	if len(sfx) == 0 || !a.conf().EventSoundsEnabled {
+	if !a.conf().EventSoundsEnabled {
+		return
+	}
+	a.playCue(sfx)
+}
+
+// playCue toca un sonido corto en esta PC: por el Engine de la sala (suena aunque esté
+// ensordecido, como los SFX) o por la salida de la botonera. Puede abrir el dispositivo: nunca en
+// el hilo de UI.
+func (a *App) playCue(sfx []byte) {
+	if len(sfx) == 0 {
 		return
 	}
 	if engine := a.engine(); engine != nil {

@@ -3,6 +3,8 @@
 package ui
 
 import (
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -175,27 +177,61 @@ func (a *App) triggerSoundByID(id string) {
 	}
 }
 
-// boundHotkey es un atajo ya parseado; soundID vacío = "detener sonido".
+// hotkeyAction es lo que dispara un atajo de la botonera.
+type hotkeyAction int
+
+const (
+	hotkeySound  hotkeyAction = iota // un sonido (boundHotkey.soundID)
+	hotkeyStop                       // "Detener"
+	hotkeyToggle                     // prender/apagar los atajos de la botonera (AGENDA C20)
+)
+
+// boundHotkey es un atajo ya parseado; soundID solo con hotkeySound.
 type boundHotkey struct {
+	action  hotkeyAction
 	soundID string
 	hk      parsedHotkey
+}
+
+// pollKey identifica el atajo en el estado de teclas apretadas del poller.
+func (b boundHotkey) pollKey() string {
+	switch b.action {
+	case hotkeyStop:
+		return "__stop__"
+	case hotkeyToggle:
+		return "__toggle__"
+	}
+	return b.soundID
 }
 
 // activeHotkeys es lo único que lee el poller. publishHotkeys lo reemplaza entero cada vez que
 // cambia un atajo, así el poller no itera cfg.SoundBinds ni re-parsea strings cada 25 ms.
 var activeHotkeys atomic.Pointer[[]boundHotkey]
 
-func (a *App) publishHotkeys() {
+// hotkeyBinds arma la lista del poller. Con los atajos de la botonera apagados
+// (SoundHotkeysOff) queda solo el que los prende: los demás siguen en la config y vuelven al
+// prenderlos.
+func hotkeyBinds(cfg *config.Config) []boundHotkey {
 	var list []boundHotkey
-	cfg := a.conf()
+	if hk, ok := parseHotkeyString(cfg.ToggleHotkeysBind); ok {
+		list = append(list, boundHotkey{action: hotkeyToggle, hk: hk})
+	}
+	if cfg.SoundHotkeysOff {
+		return list
+	}
 	if hk, ok := parseHotkeyString(cfg.StopSoundBind); ok {
-		list = append(list, boundHotkey{hk: hk})
+		list = append(list, boundHotkey{action: hotkeyStop, hk: hk})
 	}
 	for soundID, bind := range cfg.SoundBinds {
 		if hk, ok := parseHotkeyString(bind); ok {
-			list = append(list, boundHotkey{soundID: soundID, hk: hk})
+			list = append(list, boundHotkey{action: hotkeySound, soundID: soundID, hk: hk})
 		}
 	}
+	return list
+}
+
+func (a *App) publishHotkeys() {
+	list := hotkeyBinds(a.conf())
 	activeHotkeys.Store(&list)
 }
 
@@ -232,10 +268,7 @@ func (a *App) pollHotkeys() {
 			continue
 		}
 		for _, bound := range *list {
-			key := bound.soundID
-			if key == "" {
-				key = "__stop__"
-			}
+			key := bound.pollKey()
 			active := isHotkeyActive(bound.hk)
 			pressed := active && !wasDown[key]
 			wasDown[key] = active
@@ -248,27 +281,89 @@ func (a *App) pollHotkeys() {
 			if !hk.shift && !hk.ctrl && !hk.alt && !isFunctionOrNumpad(hk.vk) && a.isTypingInApp() {
 				continue
 			}
-			if bound.soundID == "" {
+			switch bound.action {
+			case hotkeyStop:
 				a.stopSoundboard()
-			} else {
+			case hotkeyToggle:
+				fyne.Do(a.toggleSoundHotkeys)
+			default:
 				a.triggerSoundByID(bound.soundID)
 			}
 		}
 	}
 }
 
-func (a *App) showSoundBindDialog(sound room.Sound) {
-	currentBind := a.conf().SoundBinds[sound.ID]
+// bindTarget es el dueño de un atajo: un sonido (por ID), "Detener" o el que prende y apaga los
+// atajos.
+type bindTarget struct {
+	action  hotkeyAction
+	soundID string
+}
 
-	detectedCombo := currentBind
+// bindConflict dice si combo ya lo usa otro atajo que no sea self y, si es así, su nombre en la
+// botonera. Compara la tecla parseada ("Ctrl + K" y "ctrl+k" son la misma). Un atajo de un sonido
+// que no está en soundNames (de otra sala o borrado) no cuenta: hoy no suena.
+func bindConflict(cfg *config.Config, soundNames map[string]string, combo string, self bindTarget) (string, bool) {
+	want, ok := parseHotkeyString(combo)
+	if !ok {
+		return "", false
+	}
+	same := func(bind string) bool {
+		hk, ok := parseHotkeyString(bind)
+		return ok && hk == want
+	}
+	if self.action != hotkeyToggle && same(cfg.ToggleHotkeysBind) {
+		return i18n.T("hotkey.toggle_name"), true
+	}
+	if self.action != hotkeyStop && same(cfg.StopSoundBind) {
+		return i18n.T("sound.stop"), true
+	}
+	for _, id := range slices.Sorted(maps.Keys(cfg.SoundBinds)) {
+		if self.action == hotkeySound && id == self.soundID {
+			continue
+		}
+		if name, present := soundNames[id]; present && same(cfg.SoundBinds[id]) {
+			return name, true
+		}
+	}
+	return "", false
+}
 
-	titleLabel := widget.NewLabelWithStyle(i18n.T("hotkey.sound_title", sound.Name), fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+// soundNames es el nombre de cada sonido de la botonera por ID (bindConflict).
+func (a *App) soundNames() map[string]string {
+	a.soundMu.RLock()
+	defer a.soundMu.RUnlock()
+	names := make(map[string]string, len(a.sounds))
+	for _, sound := range a.sounds {
+		names[sound.ID] = sound.Name
+	}
+	return names
+}
+
+// bindDialog es el diálogo que elige un atajo: el de un sonido, el de "Detener" y el que prende y
+// apaga los atajos son iguales salvo los textos y qué se guarda.
+type bindDialog struct {
+	dialogTitle string
+	title       string
+	current     string
+	target      bindTarget
+	accept      func(combo string) // hilo de UI
+	unbind      func()             // hilo de UI
+}
+
+// showBindDialog lee el teclado mientras está abierto. Una tecla que ya usa otro atajo no se
+// acepta: lo dice y el diálogo queda abierto para elegir otra.
+func (a *App) showBindDialog(spec bindDialog) {
+	detectedCombo := spec.current
+
+	titleLabel := widget.NewLabelWithStyle(spec.title, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
 
 	statusText := i18n.T("hotkey.press_keys")
-	if currentBind != "" {
-		statusText = i18n.T("hotkey.current", currentBind)
+	if spec.current != "" {
+		statusText = i18n.T("hotkey.current", spec.current)
 	}
 	comboLabel := widget.NewLabelWithStyle(statusText, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	comboLabel.Wrapping = fyne.TextWrapWord
 
 	helpLabel := widget.NewLabel(i18n.T("hotkey.help"))
 	helpLabel.Alignment = fyne.TextAlignCenter
@@ -326,22 +421,21 @@ func (a *App) showSoundBindDialog(sound room.Sound) {
 	var d dialog.Dialog
 
 	btnAccept := widget.NewButton(i18n.T("common.accept"), func() {
-		cleanup()
 		if detectedCombo != "" {
-			combo := detectedCombo
-			a.updateSoundBinds(func(binds map[string]string) { binds[sound.ID] = combo })
-			a.rebuildSoundboard()
-			a.setStatus(i18n.M("hotkey.assigned", detectedCombo, sound.Name))
+			if name, taken := bindConflict(a.conf(), a.soundNames(), detectedCombo, spec.target); taken {
+				comboLabel.SetText(i18n.T("hotkey.in_use", detectedCombo, name))
+				return
+			}
+			spec.accept(detectedCombo)
 		}
+		cleanup()
 		d.Hide()
 	})
 	btnAccept.Importance = widget.HighImportance
 
 	btnUnbind := widget.NewButton(i18n.T("hotkey.unbind"), func() {
 		cleanup()
-		a.updateSoundBinds(func(binds map[string]string) { delete(binds, sound.ID) })
-		a.rebuildSoundboard()
-		a.setStatus(i18n.M("hotkey.removed", sound.Name))
+		spec.unbind()
 		d.Hide()
 	})
 	btnUnbind.Importance = widget.DangerImportance
@@ -361,125 +455,78 @@ func (a *App) showSoundBindDialog(sound room.Sound) {
 		buttons,
 	)
 
-	d = dialog.NewCustomWithoutButtons(i18n.T("hotkey.dialog_title"), content, a.window)
+	d = dialog.NewCustomWithoutButtons(spec.dialogTitle, content, a.window)
 	d.Resize(fyne.NewSize(380, 180))
 	d.SetOnClosed(cleanup)
 	d.Show()
 }
 
-func (a *App) showStopSoundBindDialog() {
-	currentBind := a.conf().StopSoundBind
-	detectedCombo := currentBind
-
-	titleLabel := widget.NewLabelWithStyle(i18n.T("hotkey.stop_title"), fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
-
-	statusText := i18n.T("hotkey.press_keys")
-	if currentBind != "" {
-		statusText = i18n.T("hotkey.current", currentBind)
-	}
-	comboLabel := widget.NewLabelWithStyle(statusText, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
-
-	helpLabel := widget.NewLabel(i18n.T("hotkey.help"))
-	helpLabel.Alignment = fyne.TextAlignCenter
-
-	stopScan := make(chan struct{})
-	var closeOnce sync.Once
-	cleanup := func() {
-		closeOnce.Do(func() {
-			close(stopScan)
-		})
-	}
-
-	go func() {
-		ticker := time.NewTicker(30 * time.Millisecond)
-		defer ticker.Stop()
-		lastCombo := ""
-		for {
-			select {
-			case <-stopScan:
-				return
-			case <-ticker.C:
-				shift := getAsyncKey(vkShift)
-				ctrl := getAsyncKey(vkControl)
-				alt := getAsyncKey(vkMenu)
-
-				for _, k := range candidateKeys {
-					if getAsyncKey(k.vk) {
-						var parts []string
-						if ctrl {
-							parts = append(parts, "Ctrl")
-						}
-						if alt {
-							parts = append(parts, "Alt")
-						}
-						if shift {
-							parts = append(parts, "Shift")
-						}
-						parts = append(parts, k.name)
-						comboStr := strings.Join(parts, " + ")
-						if comboStr != lastCombo {
-							lastCombo = comboStr
-							// detectedCombo lo lee el botón Aceptar: se escribe en el hilo de UI.
-							fyne.Do(func() {
-								detectedCombo = comboStr
-								comboLabel.SetText(i18n.T("hotkey.detected", comboStr))
-							})
-						}
-						break
-					}
-				}
-			}
-		}
-	}()
-
-	var d dialog.Dialog
-
-	btnAccept := widget.NewButton(i18n.T("common.accept"), func() {
-		cleanup()
-		if detectedCombo != "" {
-			combo := detectedCombo
-			a.updateConfig(func(c *config.Config) { c.StopSoundBind = combo })
-			a.publishHotkeys()
-			a.saveConfig()
-			if a.stopBindBtn != nil {
-				a.stopBindBtn.SetCombo(detectedCombo)
-			}
-			a.setStatus(i18n.M("hotkey.stop_assigned", detectedCombo))
-		}
-		d.Hide()
+func (a *App) showSoundBindDialog(sound room.Sound) {
+	a.showBindDialog(bindDialog{
+		dialogTitle: i18n.T("hotkey.dialog_title"),
+		title:       i18n.T("hotkey.sound_title", sound.Name),
+		current:     a.conf().SoundBinds[sound.ID],
+		target:      bindTarget{action: hotkeySound, soundID: sound.ID},
+		accept: func(combo string) {
+			a.updateSoundBinds(func(binds map[string]string) { binds[sound.ID] = combo })
+			a.rebuildSoundboard()
+			a.setStatus(i18n.M("hotkey.assigned", combo, sound.Name))
+		},
+		unbind: func() {
+			a.updateSoundBinds(func(binds map[string]string) { delete(binds, sound.ID) })
+			a.rebuildSoundboard()
+			a.setStatus(i18n.M("hotkey.removed", sound.Name))
+		},
 	})
-	btnAccept.Importance = widget.HighImportance
+}
 
-	btnUnbind := widget.NewButton(i18n.T("hotkey.unbind"), func() {
-		cleanup()
-		a.updateConfig(func(c *config.Config) { c.StopSoundBind = "" })
+func (a *App) showStopSoundBindDialog() {
+	set := func(combo string) {
+		a.updateConfig(func(c *config.Config) { c.StopSoundBind = combo })
 		a.publishHotkeys()
 		a.saveConfig()
 		if a.stopBindBtn != nil {
-			a.stopBindBtn.SetCombo("")
+			a.stopBindBtn.SetCombo(combo)
 		}
-		a.setStatus(i18n.M("hotkey.stop_removed"))
-		d.Hide()
+	}
+	a.showBindDialog(bindDialog{
+		dialogTitle: i18n.T("hotkey.stop_dialog_title"),
+		title:       i18n.T("hotkey.stop_title"),
+		current:     a.conf().StopSoundBind,
+		target:      bindTarget{action: hotkeyStop},
+		accept: func(combo string) {
+			set(combo)
+			a.setStatus(i18n.M("hotkey.stop_assigned", combo))
+		},
+		unbind: func() {
+			set("")
+			a.setStatus(i18n.M("hotkey.stop_removed"))
+		},
 	})
-	btnUnbind.Importance = widget.DangerImportance
+}
 
-	btnCancel := widget.NewButton(i18n.T("common.cancel"), func() {
-		cleanup()
-		d.Hide()
+// showToggleHotkeysBindDialog elige el atajo que prende y apaga los atajos de la botonera (C20).
+func (a *App) showToggleHotkeysBindDialog() {
+	set := func(combo string) {
+		a.updateConfig(func(c *config.Config) { c.ToggleHotkeysBind = combo })
+		a.publishHotkeys()
+		a.saveConfig()
+		if a.toggleBindBtn != nil {
+			a.toggleBindBtn.SetCombo(combo)
+		}
+	}
+	a.showBindDialog(bindDialog{
+		dialogTitle: i18n.T("hotkey.toggle_dialog_title"),
+		title:       i18n.T("hotkey.toggle_name"),
+		current:     a.conf().ToggleHotkeysBind,
+		target:      bindTarget{action: hotkeyToggle},
+		accept: func(combo string) {
+			set(combo)
+			a.setStatus(i18n.M("hotkey.toggle_assigned", combo))
+		},
+		unbind: func() {
+			set("")
+			a.setStatus(i18n.M("hotkey.toggle_removed"))
+		},
 	})
-
-	buttons := container.NewGridWithColumns(3, btnAccept, btnUnbind, btnCancel)
-	content := container.NewVBox(
-		titleLabel,
-		widget.NewSeparator(),
-		comboLabel,
-		helpLabel,
-		widget.NewSeparator(),
-		buttons,
-	)
-
-	d = dialog.NewCustomWithoutButtons(i18n.T("hotkey.stop_dialog_title"), content, a.window)
-	d.Resize(fyne.NewSize(380, 180))
-	d.SetOnClosed(cleanup)
-	d.Show()
 }

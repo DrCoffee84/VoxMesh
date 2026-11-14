@@ -7,6 +7,10 @@ var (
 	SFXConnect    = generateTwoTone(523.25, 659.25, 0.09, 0.14, 0.65) // C5 -> E5
 	SFXDisconnect = generateTwoTone(659.25, 440.00, 0.09, 0.14, 0.65) // E5 -> A4
 	SFXMessage    = generateBlip(880.0, 0.06, 0.55)                   // A5 blip
+	// Atajos de la botonera prendidos / apagados (AGENDA C20): más agudos y cortos que conectar y
+	// desconectar, para no confundirlos con alguien que entra o sale.
+	SFXHotkeysOn  = generateTwoTone(783.99, 1046.50, 0.06, 0.09, 0.6) // G5 -> C6
+	SFXHotkeysOff = generateTwoTone(1046.50, 783.99, 0.06, 0.09, 0.6) // C6 -> G5
 )
 
 func generateTwoTone(freq1, freq2 float64, dur1, dur2 float64, gain float64) []byte {

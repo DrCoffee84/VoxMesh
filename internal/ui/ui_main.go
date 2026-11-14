@@ -136,7 +136,9 @@ type App struct {
 	soundPicking    atomic.Bool            // hay un selector de sonido abierto (evita abrir dos con doble clic)
 	soundPlayer     *audio.Player
 	stopBindBtn     *bindButton
-	tooltip         *tooltip // leyenda de la ventana principal (atajos de la botonera); solo el hilo de UI
+	hotkeysButton   *widget.Button // prende y apaga los atajos de la botonera (C20); solo el hilo de UI
+	toggleBindBtn   *bindButton    // su atajo
+	tooltip         *tooltip       // leyenda de la ventana principal (atajos de la botonera); solo el hilo de UI
 	soundMu         logging.TracedRWMutex
 	sounds          []room.Sound
 	pendingPlays    map[string]time.Time // sonidos tocados sin audio en disco → cuándo se pidieron (sound_sync.go)
