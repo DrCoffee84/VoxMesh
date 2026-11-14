@@ -43,7 +43,7 @@ Va antes que todo lo demás. Detalle en "Próximo: cómoda para usuarios comunes
 | 4 | **C18 + C13 + C2** | Gráfico del lag debajo de cada nombre (oculto por defecto, un ícono lo muestra; toda la sesión en memoria) y el registro avisa el lag largo (desde cuándo y cuánto duró); quien se reconecta desde la misma IP sigue siendo él (no "Nombre (2)"), así su gráfico no se parte | Mediano-grande. C18 suma un mensaje del host (los ms de cada uno); C13 lee las mismas muestras; C2 va en `handleRoomHello` |
 | 5 | **C14** | Los problemas que hoy solo van al log o a la barra (dispositivo, celular, micrófono que pierde audio…), en el registro y con cómo arreglarlos | Mediano |
 | 6 | **C21 + C20** | VoxMesh de fondo mientras jugás: la X la manda al área de notificaciones (configurable, prendido por defecto), con un menú para colgar, mutear, ensordecer y salir; un botón (con su atajo, como "Detener") que prende y apaga los atajos de la botonera | Mediano. C21 suma el ícono de bandeja de Fyne y el control de una sola instancia; C20 es chico |
-| 7 | **F8 + C19 + C22** | Que un grito no deje sordo a nadie (el que escucha baja los gritos que le llegan, con su propio slider en Salida); plantilla fija "Sin filtros" en Entrada y Salida, que no se puede pisar al guardar, para probar los filtros de a uno; debajo de mi nombre, un slider de desde qué volumen me toma la voz, con el nivel en vivo detrás | Mediano-grande. F8 toca la mezcla del Engine; C19 generaliza el perfil fijo "Default"; C22 guarda en el perfil de Entrada por el mismo camino que C19 |
+| 7 | **F8 + C19 + C22 + C23** | Que un grito no deje sordo a nadie (el que escucha baja los gritos que le llegan, con su propio slider en Salida); plantilla fija "Sin filtros" en Entrada y Salida, que no se puede pisar al guardar, para probar los filtros de a uno; debajo de mi nombre, un slider de desde qué volumen me toma la voz, con el nivel en vivo detrás; los sliders de volumen con curva logarítmica (como el oído) | Mediano-grande. F8 toca la mezcla del Engine; C19 generaliza el perfil fijo "Default"; C22 guarda en el perfil de Entrada por el mismo camino que C19; C23 es chico y toca los mismos sliders |
 | 8 | **C15** | Paletas de colores en Ajustes: naranja para lo que resalta, plantillas y paletas propias | Grande. Antes que C16 |
 | 9 | **C16** | Lavado de cara de toda la app (botones, Ajustes) sin perder el estilo clásico de escritorio | Grande. Al final: cubre los botones nuevos de las filas anteriores |
 
@@ -403,6 +403,22 @@ Solo si aparece el problema: **R1** (data race del estado de la sala, ver "Si ap
     - Si se avisa "Se creó el perfil Personalizado" la primera vez.
 - **Tests**: slider → valor del parámetro (escala, rango y paso de `Params`); con Default activo se crea "Personalizado"; el listener múltiple. A mano: hablar bajo y fuerte mientras se mueve el slider, mirar la barrita, reiniciar y que el valor siga.
 - **Docs**: README ("el slider debajo de tu nombre"), AGENT.md (§3.A, envío).
+
+### C23. Sliders de volumen con curva logarítmica
+
+- [ ] **Pedido (Coffee, 2026-11-13)**: que los sliders de volumen sean logarítmicos.
+- **Hoy**: son lineales. El valor multiplica la señal tal cual:
+  - el volumen por persona (`newPeerVolumeSlider` → `setPeerVolume` → `Engine.SetStreamVolume`, de 0 a 300 %, guardado por nombre en `PeerVolumes`);
+  - el de la botonera (`SoundboardVolume`, `applyVolume`).
+
+  El oído percibe el volumen de forma logarítmica: el 50 % se escucha apenas más bajo (−6 dB) y casi todo el cambio que se nota queda entre 0 y 20 %.
+- **Arreglo propuesto**:
+  - El slider se mueve en una escala perceptual: la posición pasa a ganancia con una curva (por ejemplo, en dB o con una potencia).
+  - **Se sigue guardando la ganancia real**: los volúmenes ya guardados no cambian, solo dónde queda la perilla.
+  - El rótulo puede seguir en % o pasar a mostrar dB (decidir en el plan). El 0 sigue siendo silencio y el 100 % queda en un lugar fácil de encontrar (por ejemplo, con una marca o un "clic" al pasar).
+  - Los sliders en dB (el "cuánto bajar los gritos" de F8, el umbral de C22) ya son logarítmicos y no cambian.
+- **Tests**: posición ↔ ganancia (ida y vuelta, extremos y 100 %); un valor guardado vuelve a la misma ganancia.
+- **Docs**: AGENT.md (sliders de volumen).
 
 ### C20. Un atajo para prender y apagar los atajos de la botonera (para jugar con teclado)
 
