@@ -15,7 +15,7 @@ import (
 // C22: el slider del chip propio mueve threshold_db (rango y paso de Params), prende la puerta y,
 // con un perfil de fábrica activo, guarda el valor en "Personalizado".
 func TestSelfGateSlider(t *testing.T) {
-	test.NewTempApp(t)
+	test.NewTempApp(t).Settings().SetTheme(voxTheme{})
 	a := newAppWithOwnConfig(t)
 	a.profiles.Dir = t.TempDir()
 	setLanguage(t, "es")
@@ -92,7 +92,7 @@ func TestReportMeterFansOut(t *testing.T) {
 
 // La barrita se pinta en la escala del slider, verde si se manda, y a lo sumo cada 50 ms.
 func TestSelfGateMeterPaint(t *testing.T) {
-	test.NewTempApp(t)
+	test.NewTempApp(t).Settings().SetTheme(voxTheme{})
 	a := newAppWithOwnConfig(t)
 	test.NewTempWindow(t, a.content())
 	a.peerNames = []peerView{{id: "aaaaaaaaaaaaaaaa", name: "Yo", isSelf: true}}

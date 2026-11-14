@@ -33,25 +33,35 @@ import (
 )
 
 func (a *App) buildSoundPanel() {
+	// autoBlocked: el slider llegó a 0 y prendió "Bloquear sonidos ajenos"; al subirlo se apaga
+	// (si lo tocó el usuario en el medio, queda como lo dejó). Solo hilo de UI.
+	autoBlocked := false
 	muteCheck := widget.NewCheck(i18n.T("sound.block_others"), func(checked bool) {
+		autoBlocked = false
 		a.updateConfig(func(c *config.Config) { c.SoundboardMuted = checked })
 		a.saveConfig()
 	})
 	cfg := a.conf()
 	muteCheck.SetChecked(cfg.SoundboardMuted)
 
-	volVal := cfg.SoundboardVolume
-	if volVal <= 0.01 {
-		volVal = 1.0
-	}
-	volPercent := widget.NewLabel(fmt.Sprintf("%d%%", int(volVal*100)))
+	// Curva en dB (C23); el 0 es silencio (antes sonaba al 100 %) y bloquea los sonidos ajenos.
+	curve := newVolumeCurve(1)
+	volPercent := widget.NewLabel(formatPeerVolume(float64(cfg.SoundboardVolume)))
 	volPercent.Alignment = fyne.TextAlignTrailing
 	volSlider := widget.NewSlider(0, 1)
-	volSlider.Step = 0.05
-	volSlider.Value = float64(volVal)
-	volSlider.OnChanged = func(val float64) {
+	volSlider.Step = volumeSliderStep
+	volSlider.Value = curve.pos(float64(cfg.SoundboardVolume))
+	volSlider.OnChanged = func(pos float64) {
+		val := curve.gain(pos)
 		a.updateConfig(func(c *config.Config) { c.SoundboardVolume = float32(val) })
-		volPercent.SetText(fmt.Sprintf("%d%%", int(val*100)))
+		volPercent.SetText(formatPeerVolume(val))
+		switch {
+		case val == 0 && !muteCheck.Checked:
+			muteCheck.SetChecked(true) // guarda la config (OnChanged del check)
+			autoBlocked = true
+		case val > 0 && autoBlocked:
+			muteCheck.SetChecked(false)
+		}
 		a.saveConfig()
 	}
 

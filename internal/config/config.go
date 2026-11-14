@@ -264,9 +264,8 @@ func Load(path string) (Config, error) {
 	if cfg.PhoneMicPort <= 0 {
 		cfg.PhoneMicPort = DefaultPhoneMicPort
 	}
-	if cfg.SoundboardVolume <= 0 {
-		cfg.SoundboardVolume = 1.0
-	}
+	// 0 es silencio (el slider de la botonera en el 0); fuera de 0–1, editado a mano, al rango.
+	cfg.SoundboardVolume = min(max(cfg.SoundboardVolume, 0), 1)
 	cfg.Language = string(i18n.Normalize(cfg.Language))
 	// Valores fuera de rango (archivo editado a mano o de otra versión) vuelven a su default.
 	ResetOutOfRange(&cfg.LiveSettings)

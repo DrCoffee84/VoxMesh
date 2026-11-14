@@ -29,7 +29,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 // apaga los filtros; Guardar sobre él pide un nombre (no lo pisa) y el Guardar de Ajustes con
 // cambios crea "Custom" / "Personalizado".
 func TestProfileBarNoFilters(t *testing.T) {
-	test.NewTempApp(t)
+	test.NewTempApp(t).Settings().SetTheme(voxTheme{})
 	a := newAppWithOwnConfig(t)
 	a.profiles.Dir = t.TempDir()
 	setLanguage(t, "en")

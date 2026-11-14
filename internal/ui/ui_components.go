@@ -822,24 +822,27 @@ func (a *App) newPeerChip(peer peerView) *peerChip {
 	return chip
 }
 
-// newPeerVolumeSlider es el control de volumen individual debajo del avatar. Mientras se
-// arrastra el volumen cambia al instante en el Engine; al soltar se guarda por nombre.
+// newPeerVolumeSlider es el control de volumen individual debajo del avatar, con curva en dB
+// (volumeCurve, C23). Mientras se arrastra el volumen cambia al instante en el Engine; al soltar
+// se guarda por nombre (la ganancia real, no la posición).
 func (a *App) newPeerVolumeSlider(chip *peerChip) fyne.CanvasObject {
 	volume := a.peerVolume(chip.id, chip.name)
+	curve := newVolumeCurve(float64(a.conf().PeerVolumeMax))
 	chip.volumeTxt = canvas.NewText(formatPeerVolume(volume), mutedTextColor)
 	chip.volumeTxt.TextSize = 10
-	slider := widget.NewSlider(0, float64(a.conf().PeerVolumeMax))
-	slider.Step = 0.05
-	slider.Value = volume
-	slider.OnChanged = func(value float64) {
+	slider := widget.NewSlider(0, 1)
+	slider.Step = volumeSliderStep
+	slider.Value = curve.pos(volume)
+	slider.OnChanged = func(pos float64) {
+		value := curve.gain(pos)
 		chip.volumeTxt.Text = formatPeerVolume(value)
 		chip.volumeTxt.Refresh()
 		a.setPeerVolume(chip.id, chip.name, value, false)
 	}
-	slider.OnChangeEnded = func(value float64) {
-		a.setPeerVolume(chip.id, chip.name, value, true)
+	slider.OnChangeEnded = func(pos float64) {
+		a.setPeerVolume(chip.id, chip.name, curve.gain(pos), true)
 	}
-	sliderBox := container.NewGridWrap(fyne.NewSize(110, slider.MinSize().Height), slider)
+	sliderBox := container.NewGridWrap(fyne.NewSize(peerSliderWidth, slider.MinSize().Height), slider)
 	return container.NewHBox(sliderBox, container.NewCenter(chip.volumeTxt))
 }
 

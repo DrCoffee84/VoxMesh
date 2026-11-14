@@ -229,11 +229,7 @@ func applyVolume(pcm []byte, volume float32) []byte {
 }
 
 func (a *App) playSoundPCM(data []byte) {
-	vol := a.conf().SoundboardVolume
-	if vol <= 0.01 {
-		vol = 1.0
-	}
-	scaled := applyVolume(data, vol)
+	scaled := applyVolume(data, a.conf().SoundboardVolume) // 0 = silencio
 	if player := a.ensureSoundPlayer(); player != nil {
 		player.Clear()
 		player.Play(scaled)

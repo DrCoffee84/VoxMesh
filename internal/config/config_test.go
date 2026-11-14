@@ -44,6 +44,26 @@ func TestLoadFlatFileFillsLiveSettings(t *testing.T) {
 	}
 }
 
+// La botonera en 0 es silencio (C23): se guarda y vuelve en 0, no al 100 %. Sin la clave, 100 %.
+func TestLoadSoundboardVolume(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "voxmesh.json")
+	for content, want := range map[string]float32{
+		`{"soundboard_volume":0}`:    0,
+		`{"soundboard_volume":0.25}`: 0.25,
+		`{"soundboard_volume":7}`:    1,
+		`{"soundboard_volume":-1}`:   0,
+		`{}`:                         1,
+	} {
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(path)
+		if err != nil || cfg.SoundboardVolume != want {
+			t.Fatalf("%s: %v, %v; quería %v", content, cfg.SoundboardVolume, err, want)
+		}
+	}
+}
+
 func TestLoadWindowState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "voxmesh.json")
 	write := func(content string) Config {
