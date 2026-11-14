@@ -783,6 +783,14 @@ Las anteriores se hicieron todas el 2026-11-02 y salieron bien (resumen en "Hist
 - **Seguridad del conjunto**: el servidor solo ve IPs y blobs. No puede entrar a la sala (no tiene el secreto) ni redirigir a nadie (los clientes verifican la firma del host). Si lo apagan o lo hackean, lo peor que pasa es que hay que volver a pasar la invitación por WhatsApp como hoy.
 - **Relación con S4 + F3**: compatible. El código de invitación de F3 ya lleva versión, así que más adelante puede pasar a llevar el secreto de largo plazo en vez de la clave de sesión. No hay que cambiar nada de S4 + F3 ahora.
 
+### R9. Optimizar RAM y CPU
+
+- [ ] **Idea (Coffee, 2026-11-13)**: optimizar de verdad, sin trucos (nada de achicar a la fuerza el número del Administrador de tareas). Se piensa más adelante. Hoy usa entre 130 y 200 MB en una PC floja, y no es urgente.
+- **Puntas vistas el 2026-11-13**:
+  - Medir primero: Go (heap y sys) contra la memoria del proceso.
+  - `thumbCache` no tiene tope (ver R2).
+  - `memoryLimit` (512 MB) nunca actúa.
+
 ---
 
 # Descartado / quizás
