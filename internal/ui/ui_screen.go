@@ -36,8 +36,7 @@ func (a *App) newShareControls() (*widget.Button, *fyne.Container) {
 	a.shareBannerText.TextStyle = fyne.TextStyle{Bold: true}
 	stop := widget.NewButtonWithIcon(i18n.T("screen.stop"), theme.MediaStopIcon(), func() { go a.stopScreenShare(true) })
 	a.shareResolution = widget.NewSelect(nil, nil) // las opciones las pone showBannerResolution
-	background := canvas.NewRectangle(sharingColor)
-	background.CornerRadius = 6
+	background := newThemedRect(colorNameSharing, 6)
 	a.shareBanner = container.NewStack(background, container.NewBorder(nil, nil, widget.NewIcon(theme.ComputerIcon()),
 		container.NewHBox(a.shareResolution, stop), a.shareBannerText))
 	a.shareBanner.Hide()

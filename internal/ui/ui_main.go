@@ -14,7 +14,6 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
-	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
@@ -47,6 +46,8 @@ type App struct {
 	cfgSaveMu       sync.Mutex
 	cfgBaseline     atomic.Pointer[config.LiveSettings] // != nil con ajustes abiertos: se persiste esto, no el borrador
 	profiles        config.Profiles                     // perfiles de audio de entrada/salida (%AppData%\VoxMesh\perfiles)
+	palettes        config.Palettes                     // paletas de colores propias (%AppData%\VoxMesh\paletas)
+	palette         palette                             // paleta aplicada (C15); solo hilo de UI después de New
 	levelListener   atomic.Pointer[func(inputMeter)]    // medidor de Ajustes abierto: cada frame de entrada procesado (reportMeter)
 	selfGateMeter   atomic.Pointer[func(inputMeter)]    // barrita del slider propio (C22), mientras existe el chip propio
 	selfGate        *selfGate                           // slider propio de la barra de participantes (C22); solo hilo de UI
@@ -100,7 +101,7 @@ type App struct {
 	chatMessages    []history.Message
 	chatMu          logging.TracedRWMutex
 	selfNameLabel   *widget.Label
-	voiceIndicator  *canvas.Circle
+	voiceIndicator  *themedRect
 	voiceLastAt     atomic.Int64 // UnixNano del último frame de voz mandado (lo apaga sweepVoiceIndicator)
 	voiceActive     atomic.Bool
 	isMuted         atomic.Bool // mute del micrófono: lo lee el callback de captura por frame (sendOutgoingPCM)
@@ -224,11 +225,18 @@ func New(executable string) *App {
 	}
 	// Los perfiles de fábrica no se guardan: el que usa uno recibe los valores de esta versión.
 	defaultsApplied := config.ApplyBuiltinProfiles(&cfg.LiveSettings)
+	var palettes config.Palettes
+	if palettesDir, err := config.PalettesDir(); err == nil {
+		palettes.Dir = palettesDir
+	} else {
+		logging.Errorf("paletas de colores: %s", logging.FormatError(err))
+	}
 	voiceProcessor, _ := audio.NewRNNoise()
 	a := &App{
 		cfgPath:        cfgPath,
 		cfgSave:        make(chan struct{}, 1),
 		profiles:       profiles,
+		palettes:       palettes,
 		voiceProcessor: voiceProcessor,
 		effects:        &audio.Effects{},
 		assetAssembler: assets.NewAssembler(),
@@ -242,6 +250,8 @@ func New(executable string) *App {
 		soundMu:        logging.NewTracedRWMutex("soundMu"),
 	}
 	a.cfg.Store(&cfg)
+	// La paleta, antes de la ventana (un archivo chico, como la config; nunca en el hilo de UI).
+	a.palette = a.readPalette(cfg.ActivePalette)
 	go a.configSaver()
 	if defaultsApplied {
 		a.saveConfig()
@@ -283,7 +293,8 @@ func (a *App) Run(onShowRequest func(func())) {
 		logging.Close()
 	}()
 	application := app.NewWithID("com.voxmesh.desktop")
-	application.Settings().SetTheme(voxTheme{}) // antes de armar la ventana: uiCard lee sus colores
+	active := a.palette
+	application.Settings().SetTheme(voxTheme{p: &active}) // la paleta activa, antes de armar la ventana
 	if len(appIconBytes) > 0 {
 		appIcon := fyne.NewStaticResource("icon.png", appIconBytes)
 		application.SetIcon(appIcon)

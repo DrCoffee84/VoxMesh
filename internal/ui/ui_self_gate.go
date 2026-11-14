@@ -81,7 +81,7 @@ func (a *App) newSelfGate() *selfGate {
 	g.slider.Min, g.slider.Max, g.slider.Step = param.Min, param.Max, param.Step
 	g.slider.Orientation = widget.Horizontal
 	g.slider.ExtendBaseWidget(g.slider)
-	g.value = canvas.NewText("", mutedTextColor)
+	g.value = canvas.NewText("", mutedTextColor())
 	g.value.TextSize = 10
 	g.slider.OnChanged = func(value float64) {
 		a.setSelfGate(value)
@@ -92,7 +92,7 @@ func (a *App) newSelfGate() *selfGate {
 		g.refresh(a.conf())
 		go a.saveSelfGate()
 	}
-	g.bar.SetColor(meterQuietColor)
+	g.bar.SetColor(meterQuietColor())
 	g.refresh(a.conf())
 	track := container.New(sliderTrackLayout{}, g.bar)
 	box := container.NewGridWrap(fyne.NewSize(peerSliderWidth, g.slider.MinSize().Height), container.NewStack(track, g.slider))
@@ -123,14 +123,14 @@ func (g *selfGate) refresh(cfg *config.Config) {
 		g.slider.Refresh()
 	}
 	g.value.Text = strconv.FormatFloat(float64(cfg.ThresholdDB), 'f', -1, 32) + " dB"
-	g.value.Color = mutedTextColor
+	g.value.Color = mutedTextColor()
 	switch {
 	case !filter:
 		g.slider.hint = i18n.T("main.self_gate_filter_off")
 		g.slider.Disable()
 	case !on:
 		g.slider.hint = i18n.T("main.self_gate_hint") + " " + i18n.T("main.self_gate_off")
-		g.value.Color = meterMarkerOffColor
+		g.value.Color = meterMarkerOffColor()
 		g.slider.Enable()
 	default:
 		g.slider.hint = i18n.T("main.self_gate_hint")
@@ -144,9 +144,9 @@ func (g *selfGate) refresh(cfg *config.Config) {
 func (g *selfGate) paint(cfg *config.Config, postDB float32, sent bool) {
 	g.refresh(cfg)
 	g.bar.SetValue(selfGatePos(postDB))
-	fill := meterQuietColor
+	fill := meterQuietColor()
 	if sent {
-		fill = levelFillColor
+		fill = levelFillColor()
 	}
 	g.bar.SetColor(fill)
 }

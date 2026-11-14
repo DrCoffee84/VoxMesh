@@ -99,7 +99,7 @@ func TestSelfGateMeterPaint(t *testing.T) {
 	a.refreshPeerAvatars()
 	a.onSelfGateMeter(inputMeter{postDB: -42, sent: true})
 	bar := a.selfGate.bar
-	if math.Abs(bar.value-selfGatePos(-42)) > 1e-9 || bar.fill != levelFillColor {
+	if math.Abs(bar.value-selfGatePos(-42)) > 1e-9 || bar.fill != levelFillColor() {
 		t.Fatalf("barra %v en %v, quería %v en verde", bar.fill, bar.value, selfGatePos(-42))
 	}
 	a.onSelfGateMeter(inputMeter{postDB: -10, sent: false}) // enseguida: no se repinta

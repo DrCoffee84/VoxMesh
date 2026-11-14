@@ -239,7 +239,7 @@ func TestDrawLagStrip(t *testing.T) {
 	if !same(img.At(0, lagStripHeight-1), lagRed) || !same(img.At(0, 0), lagRed) {
 		t.Error("450 ms con pérdida: quería barra roja y marca arriba")
 	}
-	if !same(img.At(2, lagStripHeight-1), speakingColor) {
+	if !same(img.At(2, lagStripHeight-1), speakingColor()) {
 		t.Error("30 ms: quería la barrita verde")
 	}
 	if _, _, _, alpha := img.At(2, 0).RGBA(); alpha != uint32(lagStripBackground.A)*0x101 {

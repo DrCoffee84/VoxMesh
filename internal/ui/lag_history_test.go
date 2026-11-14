@@ -154,7 +154,7 @@ func TestLagColorMatchesChip(t *testing.T) {
 	for _, c := range []struct {
 		ms   int
 		want any
-	}{{0, speakingColor}, {79, speakingColor}, {80, lagYellow}, {200, lagYellow}, {201, lagOrange}, {400, lagOrange}, {401, lagRed}, {5000, lagRed}} {
+	}{{0, speakingColor()}, {79, speakingColor()}, {80, lagYellow}, {200, lagYellow}, {201, lagOrange}, {400, lagOrange}, {401, lagRed}, {5000, lagRed}} {
 		if got := lagColor(c.ms); got != c.want {
 			t.Errorf("lagColor(%d) = %v, quería %v", c.ms, got, c.want)
 		}

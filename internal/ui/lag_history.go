@@ -53,7 +53,7 @@ var (
 func lagColor(ms int) color.Color {
 	switch {
 	case ms < lagGoodMS:
-		return speakingColor
+		return speakingColor()
 	case ms <= lagWarnMS:
 		return lagYellow
 	case ms <= lagBadMS:

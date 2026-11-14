@@ -37,6 +37,7 @@ Para descargar e instalar, ver el [README](README.es.md). Acá está el detalle 
 
 **App**
 - **Área de notificaciones**: la X oculta la ventana y la app sigue junto al reloj, también en la sala (`close_to_tray`, prendido de fábrica; apagado, la X sale como antes). El ícono está siempre; el clic izquierdo y el derecho abren el mismo menú (así es en Fyne 2.6.3): Abrir VoxMesh, Colgar, Silenciar micrófono, Ensordecer, Atajos de la botonera (con tildes) y Salir, que cierra la sala como la X (Leave y regla UPnP) sin preguntar. La primera vez sale un aviso con "No volver a mostrar" (`tray_hint_off`). Un solo VoxMesh por carpeta (mutex con nombre): abrirlo de nuevo muestra el que estaba; dos copias en carpetas distintas siguen andando a la vez (cada una con su `voxmesh.json`). Al apagar Windows la app se cierra sin avisar a la sala (AGENDA R10).
+- **Paletas de colores** (Ajustes → Interfaz y Sistema): Default (la de siempre), Naranja (con el resaltado naranja) y Clara (fondos claros, texto oscuro), más las propias: "Editar colores…" cambia cada color con un selector, "Aplicar" lo muestra sin guardar y "Guardar como…" crea una paleta (un JSON en `paletas\`). Elegir una se aplica al instante, sin reiniciar; "Descartar" en Ajustes vuelve a la de antes.
 - En inglés (por defecto) o español: Ajustes → Interfaz → "Language / Idioma", se aplica al reiniciar. La página del celular sale en el mismo idioma.
 - Se actualiza sola desde GitHub Releases (pregunta antes, verifica el SHA-256 publicado y cierra bien la sala antes de reiniciar).
 - Logs diarios en `%AppData%\VoxMesh` (botón del documento, abajo a la derecha), pensados para poder mandarlos cuando algo falla.
@@ -66,6 +67,7 @@ Cada "Iniciar sala" genera una clave nueva (solo en memoria) que viaja dentro de
 | Configuración | `voxmesh.json` junto al `.exe` |
 | Historial, imágenes y sonidos por sala | `%AppData%\VoxMesh\salas\<sala>\` |
 | Perfiles de audio | `%AppData%\VoxMesh\perfiles\entrada\` y `...\salida\` |
+| Paletas de colores propias | `%AppData%\VoxMesh\paletas\` |
 | Logs (se borran a las 48 h) | `%AppData%\VoxMesh\log-AAAA-MM-DD.log` |
 | Certificado y token del celular | `%AppData%\VoxMesh\` |
 

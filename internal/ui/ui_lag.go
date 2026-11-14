@@ -487,11 +487,11 @@ func (g *lagGraph) CreateRenderer() fyne.WidgetRenderer {
 		drawLagGraph(img, g.columns, g.scale)
 		return img
 	})
-	r.top = canvas.NewText("", mutedTextColor)
+	r.top = canvas.NewText("", mutedTextColor())
 	r.top.TextSize = 10
 	r.objects = []fyne.CanvasObject{r.raster, r.top}
 	for range lagGraphMarks {
-		mark := canvas.NewText("", mutedTextColor)
+		mark := canvas.NewText("", mutedTextColor())
 		mark.TextSize = 10
 		r.marks = append(r.marks, mark)
 		r.objects = append(r.objects, mark)
@@ -581,7 +581,7 @@ func drawLagGraph(img *image.RGBA, columns []lagPoint, scale int) {
 	bands := []struct {
 		from, to int
 		color    color.Color
-	}{{0, lagGoodMS, speakingColor}, {lagGoodMS, lagWarnMS, lagYellow}, {lagWarnMS, lagBadMS, lagOrange}, {lagBadMS, scale, lagRed}}
+	}{{0, lagGoodMS, speakingColor()}, {lagGoodMS, lagWarnMS, lagYellow}, {lagWarnMS, lagBadMS, lagOrange}, {lagBadMS, scale, lagRed}}
 	for _, band := range bands {
 		if band.from >= scale {
 			break

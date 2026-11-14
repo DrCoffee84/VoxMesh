@@ -4,7 +4,6 @@ package ui
 
 import (
 	"fmt"
-	"image/color"
 	"strconv"
 	"strings"
 	"sync"
@@ -41,13 +40,17 @@ func (a *App) showSettings() {
 		cfg := a.conf()
 		inputProfiles := a.loadProfileState(config.InputProfile, cfg)
 		outputProfiles := a.loadProfileState(config.OutputProfile, cfg)
+		palettes, err := a.palettes.List(paletteReservedNames())
+		if err != nil {
+			logging.Errorf("paletas de colores: %s", logging.FormatError(err))
+		}
 		fyne.Do(func() {
-			a.renderSettingsView(devices, inputProfiles, outputProfiles)
+			a.renderSettingsView(devices, inputProfiles, outputProfiles, palettes)
 		})
 	}()
 }
 
-func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outputProfiles profileState) {
+func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outputProfiles profileState, palettes []string) {
 	// cfg es la instantánea al abrir la vista: solo para valores iniciales de los widgets. Los
 	// callbacks publican con updateConfig y, si necesitan el valor vigente, leen a.conf().
 	cfg := a.conf()
@@ -136,16 +139,16 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 		if now-last < int64(levelPaintInterval) || !lastLevelPaint.CompareAndSwap(last, now) {
 			return
 		}
-		fill, state := meterQuietColor, ""
+		fill, state := meterQuietColor(), ""
 		switch {
 		case m.muted:
-			fill, state = meterHeldColor, i18n.T("settings.meter.muted")
+			fill, state = meterHeldColor(), i18n.T("settings.meter.muted")
 		case now-lastShout.Load() < int64(meterHold):
-			fill, state = shoutColor, i18n.T("settings.meter.shout")
+			fill, state = shoutColor(), i18n.T("settings.meter.shout")
 		case now-lastSent.Load() < int64(meterHold):
-			fill, state = levelFillColor, i18n.T("settings.meter.sending")
+			fill, state = levelFillColor(), i18n.T("settings.meter.sending")
 		case m.db > meterQuietDB:
-			fill, state = meterHeldColor, i18n.T("settings.meter.not_sending")
+			fill, state = meterHeldColor(), i18n.T("settings.meter.not_sending")
 		}
 		clipping := now-lastClip.Load() < int64(clipHold)
 		fyne.Do(func() {
@@ -153,7 +156,7 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 			level.SetValue(meterPos(m.db))
 			level.SetColor(fill)
 			if cfg.ShoutEnabled {
-				level.SetMarker(meterPos(cfg.ShoutThresholdDB), shoutColor)
+				level.SetMarker(meterPos(cfg.ShoutThresholdDB), shoutColor())
 			} else {
 				level.SetMarker(0, nil)
 			}
@@ -252,8 +255,8 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 			refreshPhoneStatus()
 		}()
 	})
-	serverLED := canvas.NewCircle(color.NRGBA{R: 210, G: 85, B: 85, A: 255})
-	connectionLED := canvas.NewCircle(color.NRGBA{R: 210, G: 85, B: 85, A: 255})
+	serverLED := newThemedCircle(theme.ColorNameError)
+	connectionLED := newThemedCircle(theme.ColorNameError)
 	serverLabel := widget.NewLabel(i18n.T("settings.phone_server_off"))
 	connectionLabel := widget.NewLabel(i18n.T("settings.phone_not_connected"))
 	previewButton = widget.NewButton(i18n.T("settings.preview_start"), func() {
@@ -328,20 +331,18 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 				return
 			}
 			lastPhoneState = state
-			serverLED.FillColor = color.NRGBA{R: 210, G: 85, B: 85, A: 255}
+			serverLED.setFill(theme.ColorNameError)
 			serverLabel.SetText(i18n.T("settings.phone_server_off"))
-			connectionLED.FillColor = color.NRGBA{R: 210, G: 85, B: 85, A: 255}
+			connectionLED.setFill(theme.ColorNameError)
 			connectionLabel.SetText(i18n.T("settings.phone_not_connected"))
 			if listening {
-				serverLED.FillColor = color.NRGBA{R: 90, G: 205, B: 120, A: 255}
+				serverLED.setFill(theme.ColorNameSuccess)
 				serverLabel.SetText(i18n.T("settings.phone_server_on"))
 			}
 			if connected {
-				connectionLED.FillColor = color.NRGBA{R: 90, G: 205, B: 120, A: 255}
+				connectionLED.setFill(theme.ColorNameSuccess)
 				connectionLabel.SetText(i18n.T("settings.phone_connected"))
 			}
-			serverLED.Refresh()
-			connectionLED.Refresh()
 			if phoneSelected {
 				showQR.Enable()
 				if listening {
@@ -519,7 +520,15 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 	// El dispositivo de la sala no se toca en vivo (solo Guardar reinicia el audio), así que no hay
 	// nada que reabrir.
 	discardSettings := func() {
+		changedPalette := canonicalPaletteName(a.conf().ActivePalette) != canonicalPaletteName(baseline.ActivePalette)
 		a.updateConfig(func(c *config.Config) { c.LiveSettings = baseline })
+		if changedPalette {
+			// La paleta se aplicó al elegirla: vuelve la de antes (puede leer un archivo).
+			go func() {
+				p := a.readPalette(baseline.ActivePalette)
+				fyne.Do(func() { a.applyPalette(p) })
+			}()
+		}
 		logging.SetLevel(baseline.LogLevel)
 		a.phoneMicMu.RLock()
 		phoneRunning := a.phoneMic != nil
@@ -671,11 +680,13 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 	} else {
 		logLevelSelect.SetSelected(logNormal)
 	}
+	_, paletteRow := a.newPaletteBar(palettes)
 	interfaceCard := uiCard(container.NewVBox(
 		widget.NewLabelWithStyle(i18n.T("settings.card.interface"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		widget.NewLabel(languageLabel),
 		languageSelect,
 		languageHint,
+		paletteRow,
 		closeToTrayCheck,
 		showStatusBarCheck,
 		showLANInvitesCheck,
@@ -739,18 +750,11 @@ func (a *App) showPhoneMic() {
 const levelPaintInterval = 66 * time.Millisecond
 
 // Estados del medidor de nivel (renderSettingsView): gris silencio, amarillo hay sonido pero la
-// cadena no lo manda, verde se manda (levelFillColor), rojo modo grito (shoutColor).
+// cadena no lo manda, verde se manda (levelFillColor()), rojo modo grito (shoutColor()).
 const (
 	meterQuietDB = -50                    // por debajo, silencio (gris) y no "no se envía"
 	meterHold    = 150 * time.Millisecond // cuánto se sostiene "enviando" / "modo grito"
 	clipHold     = time.Second            // cuánto queda el aviso "SATURA"
-)
-
-var (
-	meterQuietColor     = color.NRGBA{R: 105, G: 112, B: 125, A: 255}
-	meterHeldColor      = color.NRGBA{R: 235, G: 190, B: 60, A: 255}
-	meterMarkerColor    = color.NRGBA{R: 235, G: 235, B: 240, A: 255}
-	meterMarkerOffColor = color.NRGBA{R: 235, G: 235, B: 240, A: 70}
 )
 
 // meterPos lleva un nivel en dBFS a la posición de la barra (LevelFloorDB → 0, 0 dBFS → 1).
@@ -768,16 +772,16 @@ func paintVADMeter(cfg *config.Config, m inputMeter, vadText *widget.Label, vadB
 		vadText.SetText(i18n.T("settings.vad_off"))
 	default:
 		vadBar.SetValue(float64(m.vad))
-		vadColor := meterHeldColor
+		vadColor := meterHeldColor()
 		if m.vad >= cfg.VADThreshold {
-			vadColor = levelFillColor
+			vadColor = levelFillColor()
 		}
 		vadBar.SetColor(vadColor)
 		text := i18n.T("settings.vad_value", m.vad*100, cfg.VADThreshold*100)
-		marker := color.Color(meterMarkerColor)
+		marker := meterMarkerColor()
 		if !cfg.VADEnabled {
 			text += i18n.T("settings.vad_disabled")
-			marker = meterMarkerOffColor
+			marker = meterMarkerOffColor()
 		}
 		vadBar.SetMarker(float64(cfg.VADThreshold), marker)
 		vadText.SetText(text)
@@ -788,16 +792,16 @@ func paintVADMeter(cfg *config.Config, m inputMeter, vadText *widget.Label, vadB
 // de ruido mide ese audio, por eso su línea va acá y no en la barra de entrada.
 func paintPostMeter(cfg *config.Config, m inputMeter, postText *widget.Label, postBar *levelBar) {
 	postBar.SetValue(meterPos(m.postDB))
-	postColor, state := meterQuietColor, i18n.T("settings.post.not_sent")
+	postColor, state := meterQuietColor(), i18n.T("settings.post.not_sent")
 	if m.sent {
-		postColor, state = levelFillColor, i18n.T("settings.post.sent")
+		postColor, state = levelFillColor(), i18n.T("settings.post.sent")
 	}
 	postBar.SetColor(postColor)
 	gate := i18n.T("settings.post.gate", cfg.ThresholdDB)
-	marker := color.Color(meterMarkerColor)
+	marker := meterMarkerColor()
 	if !cfg.NoiseGateEnabled {
 		gate += i18n.T("settings.post.gate_off")
-		marker = meterMarkerOffColor
+		marker = meterMarkerOffColor()
 	}
 	postBar.SetMarker(meterPos(cfg.ThresholdDB), marker)
 	postText.SetText(i18n.T("settings.post_value", m.postDB, state, gate))

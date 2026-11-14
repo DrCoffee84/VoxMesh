@@ -22,22 +22,6 @@ import (
 	"voxmesh/internal/version"
 )
 
-var (
-	// shoutColor es el rojo del modo grito (aro del avatar y barra del medidor).
-	shoutColor = color.NRGBA{R: 230, G: 60, B: 60, A: 255}
-	// speakingColor es el verde de "hablando": avatar, indicador de voz propia y ping bueno.
-	speakingColor = color.NRGBA{R: 46, G: 204, B: 113, A: 255}
-	// idleColor es el gris del indicador de voz propia apagado.
-	idleColor = color.NRGBA{R: 100, G: 110, B: 120, A: 255}
-	// avatarColor es el círculo del avatar de quien no habla.
-	avatarColor = color.NRGBA{R: 60, G: 70, B: 85, A: 255}
-	// mutedTextColor es el texto secundario de los chips (lag, volumen).
-	mutedTextColor = color.NRGBA{R: 160, G: 170, B: 185, A: 255}
-	// sharingColor es el fondo del banner "Estás compartiendo tu pantalla" y la insignia del avatar
-	// de quien comparte: un naranja oscuro que se ve sin parecer un error.
-	sharingColor = color.NRGBA{R: 176, G: 84, B: 20, A: 255}
-)
-
 // voiceHold es cuánto queda prendido el indicador de voz propia después del último frame mandado.
 const voiceHold = 350 * time.Millisecond
 
@@ -73,14 +57,11 @@ func (a *App) setVoiceIndicator(on bool) {
 	if a.voiceIndicator == nil {
 		return
 	}
-	fill := idleColor
+	fill := colorNameIdle
 	if on {
-		fill = speakingColor
+		fill = colorNameSpeaking
 	}
-	fyne.Do(func() {
-		a.voiceIndicator.FillColor = fill
-		a.voiceIndicator.Refresh()
-	})
+	fyne.Do(func() { a.voiceIndicator.setFill(fill) })
 }
 
 type chatInputEntry struct {
@@ -234,7 +215,7 @@ func (a *App) content() fyne.CanvasObject {
 
 	title := widget.NewLabelWithStyle("VoxMesh", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	// Nombre propio e indicador de voz: los actualizan la conexión, Ajustes y flashVoiceIndicator.
-	a.voiceIndicator = canvas.NewCircle(idleColor)
+	a.voiceIndicator = newThemedCircle(colorNameIdle)
 	voiceDot := container.NewCenter(container.NewGridWrap(fyne.NewSize(10, 10), a.voiceIndicator))
 	a.selfNameLabel = widget.NewLabel(a.conf().Username)
 	a.selfNameLabel.Truncation = fyne.TextTruncateEllipsis
@@ -297,10 +278,8 @@ type tooltip struct {
 
 func newTooltip() *tooltip {
 	t := &tooltip{text: widget.NewLabel("")}
-	background := canvas.NewRectangle(theme.Color(theme.ColorNameMenuBackground))
-	background.CornerRadius = theme.InputRadiusSize()
-	background.StrokeColor = theme.Color(theme.ColorNameInputBorder)
-	background.StrokeWidth = 1
+	background := newThemedRect(theme.ColorNameMenuBackground, theme.InputRadiusSize())
+	background.stroke, background.strokeWidth = theme.ColorNameInputBorder, 1
 	t.box = container.NewStack(background, t.text)
 	t.box.Hide()
 	t.layer = container.NewWithoutLayout(t.box)
@@ -447,8 +426,7 @@ func (a *App) setHangupEnabled(enabled bool) {
 
 // uiCard es una tarjeta: fondo colorNameCard (voxTheme) con el mismo margen y relleno en todas.
 func uiCard(content fyne.CanvasObject) *fyne.Container {
-	background := canvas.NewRectangle(theme.Color(colorNameCard))
-	background.CornerRadius = 6
+	background := newThemedRect(colorNameCard, 6)
 	card := container.NewStack(background, container.NewPadded(content))
 	return container.NewPadded(card)
 }
@@ -636,10 +614,10 @@ func (v *lightboxView) TypedKey(key *fyne.KeyEvent) {
 
 func formatPeerLag(p peerView) (string, color.Color) {
 	if p.isSelf {
-		return i18n.T("main.peer_local"), speakingColor
+		return i18n.T("main.peer_local"), speakingColor()
 	}
 	if p.lag <= 0 {
-		return "… ms", mutedTextColor
+		return "… ms", mutedTextColor()
 	}
 	ms := p.lag.Milliseconds()
 	str := fmt.Sprintf("%d ms", ms)
@@ -662,7 +640,7 @@ const avatarSize = 30
 // estira al tamaño del avatar y el badge conserva su posición. refreshPeerAvatars la muestra u
 // oculta según peerView.muted.
 func newMuteBadge() *fyne.Container {
-	bg := canvas.NewCircle(theme.Color(colorNameCard))
+	bg := newThemedCircle(colorNameCard)
 	muteIco := theme.NewErrorThemedResource(fyne.NewStaticResource("mic_off.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z"/></svg>`)))
 	icon := canvas.NewImageFromResource(theme.NewErrorThemedResource(muteIco))
 	icon.FillMode = canvas.ImageFillContain
@@ -674,9 +652,9 @@ func newMuteBadge() *fyne.Container {
 }
 
 // newScreenBadge es la insignia de pantalla compartida: un monitor blanco sobre un círculo de
-// sharingColor, arriba a la derecha del avatar (el mute va abajo). Mismo patrón que newMuteBadge.
+// colorNameSharing, arriba a la derecha del avatar (el mute va abajo). Mismo patrón que newMuteBadge.
 func newScreenBadge() *fyne.Container {
-	bg := canvas.NewCircle(sharingColor)
+	bg := newThemedCircle(colorNameSharing)
 	icon := canvas.NewImageFromResource(theme.NewColoredResource(theme.ComputerIcon(), theme.ColorNameForeground))
 	icon.FillMode = canvas.ImageFillContain
 	badge := container.NewStack(bg, icon)
@@ -781,9 +759,9 @@ func (a *App) newPeerChip(peer peerView) *peerChip {
 	if trimmed := strings.TrimSpace(peer.name); len(trimmed) > 0 {
 		initial = strings.ToUpper(string([]rune(trimmed)[:1]))
 	}
-	chip.circle = canvas.NewCircle(avatarColor)
+	chip.circle = canvas.NewCircle(avatarColor())
 	chip.circle.Resize(fyne.NewSquareSize(avatarSize))
-	chip.initial = canvas.NewText(initial, color.NRGBA{R: 240, G: 245, B: 255, A: 255})
+	chip.initial = canvas.NewText(initial, theme.Color(colorNameAvatarText))
 	chip.initial.TextStyle = fyne.TextStyle{Bold: true}
 	chip.initial.TextSize = 14
 	chip.initial.Alignment = fyne.TextAlignCenter
@@ -795,7 +773,7 @@ func (a *App) newPeerChip(peer peerView) *peerChip {
 	chip.nameTxt = canvas.NewText("", theme.Color(theme.ColorNameForeground))
 	chip.nameTxt.TextSize = 12
 	chip.nameTxt.TextStyle = fyne.TextStyle{Bold: true}
-	chip.lagTxt = canvas.NewText("", mutedTextColor)
+	chip.lagTxt = canvas.NewText("", mutedTextColor())
 	chip.lagTxt.TextSize = 10
 
 	var content fyne.CanvasObject = container.NewHBox(avatarBox, container.NewVBox(chip.nameTxt, chip.lagTxt))
@@ -816,8 +794,7 @@ func (a *App) newPeerChip(peer peerView) *peerChip {
 		content = container.NewVBox(content, chip.gate.object)
 	}
 
-	pillBg := canvas.NewRectangle(theme.Color(colorNameChip))
-	pillBg.CornerRadius = 8
+	pillBg := newThemedRect(colorNameChip, 8)
 	chip.object = container.NewStack(pillBg, container.NewPadded(content))
 	return chip
 }
@@ -828,7 +805,7 @@ func (a *App) newPeerChip(peer peerView) *peerChip {
 func (a *App) newPeerVolumeSlider(chip *peerChip) fyne.CanvasObject {
 	volume := a.peerVolume(chip.id, chip.name)
 	curve := newVolumeCurve(float64(a.conf().PeerVolumeMax))
-	chip.volumeTxt = canvas.NewText(formatPeerVolume(volume), mutedTextColor)
+	chip.volumeTxt = canvas.NewText(formatPeerVolume(volume), mutedTextColor())
 	chip.volumeTxt.TextSize = 10
 	slider := widget.NewSlider(0, 1)
 	slider.Step = volumeSliderStep
@@ -856,11 +833,11 @@ func (c *peerChip) update(peer peerView, now time.Time) {
 	if c.strip != nil {
 		c.strip.setName(peer.name)
 	}
-	circleColor := avatarColor
-	textColor := color.NRGBA{R: 240, G: 245, B: 255, A: 255}
+	circleColor := avatarColor()
+	textColor := theme.Color(colorNameAvatarText)
 	if peer.speaking && now.Before(peer.speakStop) {
-		circleColor = speakingColor
-		textColor = color.NRGBA{R: 15, G: 35, B: 15, A: 255}
+		circleColor = speakingColor()
+		textColor = theme.Color(colorNameAvatarTextSpeaking)
 	}
 	// Aro rojo mientras habla en modo grito (markPeerShouting).
 	var strokeWidth float32
@@ -869,7 +846,7 @@ func (c *peerChip) update(peer peerView, now time.Time) {
 	}
 	if c.circle.FillColor != circleColor || c.circle.StrokeWidth != strokeWidth {
 		c.circle.FillColor = circleColor
-		c.circle.StrokeColor = shoutColor
+		c.circle.StrokeColor = shoutColor()
 		c.circle.StrokeWidth = strokeWidth
 		c.circle.Refresh()
 	}

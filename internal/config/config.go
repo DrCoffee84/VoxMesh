@@ -90,6 +90,9 @@ type LiveSettings struct {
 	// Perfil cargado ("" = Default). Ver profiles.go.
 	ActiveInputProfile  string `json:"active_input_profile,omitempty"`
 	ActiveOutputProfile string `json:"active_output_profile,omitempty"`
+	// ActivePalette es la paleta de colores (AGENDA C15): "" = Default, una de fábrica por su clave
+	// o una propia (<AppDir>/paletas). Se aplica al instante al elegirla en Ajustes.
+	ActivePalette string `json:"active_palette,omitempty"`
 
 	// Perfil de entrada.
 	AudioFilterEnabled    bool    `json:"audio_filter_enabled"`

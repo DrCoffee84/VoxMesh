@@ -5,7 +5,6 @@ package ui
 import (
 	"errors"
 	"fmt"
-	"image/color"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -15,7 +14,6 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -363,8 +361,7 @@ func (a *App) buildChatMessageObject(m history.Message, isMatch bool) fyne.Canva
 	}
 
 	if isMatch {
-		highlightBg := canvas.NewRectangle(color.NRGBA{R: 70, G: 65, B: 30, A: 255})
-		highlightBg.CornerRadius = 4
+		highlightBg := newThemedRect(colorNameChatMatch, 4)
 		row = container.NewStack(highlightBg, container.NewPadded(row))
 	}
 

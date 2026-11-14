@@ -623,9 +623,10 @@ func drawWaveform(img *image.RGBA, peaks []int16, startFrac, endFrac float64) {
 	height := img.Bounds().Dy()
 	midY := height / 2
 
-	bgColor := color.RGBA{R: 24, G: 28, B: 34, A: 255}
-	selectedColor := color.RGBA{R: 46, G: 204, B: 113, A: 255}
-	unselectedColor := color.RGBA{R: 70, G: 80, B: 95, A: 255}
+	// Colores de la paleta (C15): se leen en cada dibujo.
+	bgColor := color.RGBAModel.Convert(theme.Color(theme.ColorNameInputBackground)).(color.RGBA)
+	selectedColor := color.RGBAModel.Convert(theme.Color(colorNameSpeaking)).(color.RGBA)
+	unselectedColor := color.RGBAModel.Convert(theme.Color(colorNameAvatar)).(color.RGBA)
 
 	startX := int(startFrac * float64(width))
 	endX := int(endFrac * float64(width))

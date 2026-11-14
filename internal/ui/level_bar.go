@@ -8,6 +8,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -17,7 +18,7 @@ type levelBar struct {
 	widget.BaseWidget
 	mu          sync.RWMutex
 	value       float64
-	fill        color.Color // nil = levelFillColor
+	fill        color.Color // nil = levelFillColor() (del tema al repintar)
 	markerPos   float64     // 0–1
 	markerColor color.Color // nil = sin marca
 }
@@ -28,8 +29,6 @@ type levelBarRenderer struct {
 	fill     *canvas.Rectangle
 	marker   *canvas.Rectangle
 }
-
-var levelFillColor = color.NRGBA{R: 55, G: 190, B: 125, A: 255}
 
 // levelMarkerWidth es el ancho de la línea de umbral.
 const levelMarkerWidth = 3
@@ -85,8 +84,8 @@ func (bar *levelBar) CreateRenderer() fyne.WidgetRenderer {
 	marker.Hide()
 	return &levelBarRenderer{
 		bar:      bar,
-		backdrop: canvas.NewRectangle(color.NRGBA{R: 50, G: 55, B: 65, A: 255}),
-		fill:     canvas.NewRectangle(levelFillColor),
+		backdrop: canvas.NewRectangle(theme.Color(colorNameMeterBackdrop)),
+		fill:     canvas.NewRectangle(levelFillColor()),
 		marker:   marker,
 	}
 }
@@ -116,8 +115,9 @@ func (renderer *levelBarRenderer) Refresh() {
 	fill, markerColor := renderer.bar.fill, renderer.bar.markerColor
 	renderer.bar.mu.RUnlock()
 	if fill == nil {
-		fill = levelFillColor
+		fill = levelFillColor()
 	}
+	renderer.backdrop.FillColor = theme.Color(colorNameMeterBackdrop) // sigue la paleta
 	renderer.fill.FillColor = fill
 	if markerColor == nil {
 		renderer.marker.Hide()
