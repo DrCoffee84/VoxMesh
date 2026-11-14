@@ -76,7 +76,9 @@ func (a *App) onShareButton() {
 // "Completa" solo aparece si el monitor elegido pasa de screen.DefaultMaxWidth.
 func (a *App) showShareDialog(monitors []screen.Monitor, err error) {
 	if err != nil {
-		a.setStatus(i18n.M("status.screen_failed", err.Error()))
+		msg := i18n.M("status.screen_failed", err.Error())
+		a.setStatus(msg)
+		go a.reportProblem(problemScreenFailed, msg) // hilo de UI: el log escribe en disco
 		return
 	}
 	text := widget.NewLabel(i18n.T("screen.dialog_text"))

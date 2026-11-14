@@ -155,7 +155,8 @@ var sealBuffers = sync.Pool{New: func() any {
 // los escritores entre sí y nunca a un lector.
 //
 // Todo lo que entra y sale de la sala pasa por acá sellado con la clave de la sala (AES-256-GCM,
-// crypto.go): lo que no abre se descarta en Receive y se cuenta en Invalid.
+// crypto.go): lo que no abre se descarta en Receive y se cuenta en Invalid (y en WrongKey si
+// tenía forma de datagrama VoxMesh).
 type UDP struct {
 	conn        *net.UDPConn
 	key         Key
@@ -165,6 +166,7 @@ type UDP struct {
 	readBuf     []byte                         // buffer de lectura de Receive (un solo lector: receiveLoop)
 	invalid     atomic.Uint64                  // datagramas descartados por Receive (no abren)
 	lastInvalid atomic.Pointer[net.UDPAddr]    // origen del último descartado (para el log)
+	wrongKey    atomic.Uint64                  // de esos, los que tenían forma de VoxMesh (otra clave)
 
 	bulk      *lane // archivos (SendBulk, BroadcastBulk, TryRelayBulk)
 	screen    *lane // pantalla compartida (SendScreen, TryRelayScreen)
@@ -372,6 +374,7 @@ func (u *UDP) Receive() (Packet, *net.UDPAddr, error) {
 		copy(sealed, u.readBuf[:n])
 		packet, err := u.cipher.open(block[n:], sealed)
 		if err != nil {
+			u.wrongKey.Add(1)
 			u.reject(addr)
 			continue
 		}
@@ -390,6 +393,10 @@ func (u *UDP) Invalid() uint64 { return u.invalid.Load() }
 
 // LastInvalid es el origen del último datagrama descartado (nil si no hubo).
 func (u *UDP) LastInvalid() *net.UDPAddr { return u.lastInvalid.Load() }
+
+// WrongKey cuenta los descartados que tenían forma de datagrama VoxMesh (magic y largo) pero no
+// abrieron: alguien con una invitación vieja o de otra sala. La basura de un scanner no cuenta.
+func (u *UDP) WrongKey() uint64 { return u.wrongKey.Load() }
 
 // SendBulk encola un paquete de archivo para addr (ritmo BulkRateBytes). Espera si la cola está
 // llena, así que se llama desde goroutines propias, nunca desde receiveLoop. Devuelve false si el

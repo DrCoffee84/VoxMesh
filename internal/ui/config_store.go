@@ -50,7 +50,9 @@ func (a *App) configSaver() {
 	for range a.cfgSave {
 		if err := a.writeConfig(); err != nil {
 			logging.Errorf("guardar configuración: %s", logging.FormatError(err))
-			a.setStatus(i18n.M("status.config_save_failed"))
+			msg := i18n.M("status.config_save_failed")
+			a.setStatus(msg)
+			a.reportProblem(problemConfigSave, msg)
 		}
 	}
 }

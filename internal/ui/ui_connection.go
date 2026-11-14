@@ -235,7 +235,10 @@ func (a *App) openHost(roomName, username string) {
 			time.Sleep(200 * time.Millisecond)
 		}
 		if err != nil {
-			a.setStatus(i18n.M("conn.port_failed", listenAddr, err.Error()))
+			logging.Errorf("abrir el puerto de la sala %s: %s", listenAddr, logging.FormatError(err))
+			msg := i18n.M("conn.port_failed", listenAddr)
+			a.setStatus(msg)
+			a.reportProblem(problemPortFailed, msg)
 			return
 		}
 
@@ -512,7 +515,9 @@ func (a *App) connectClient(raw string) {
 	}
 	code, err := invite.Parse(raw)
 	if err != nil {
-		a.setStatus(i18n.M("conn.invite_invalid", errorMsg(err)))
+		msg := i18n.M("conn.invite_invalid", errorMsg(err))
+		a.setStatus(msg)
+		go a.reportProblem(problemInviteInvalid, msg) // hilo de UI: el log escribe en disco
 		return
 	}
 	raw = invite.Format(code.Addr, code.Key)

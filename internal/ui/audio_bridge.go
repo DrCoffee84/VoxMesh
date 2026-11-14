@@ -29,7 +29,7 @@ func (a *App) ensurePhoneMicServer() (*phonemic.Server, error) {
 		DriftSlackFrames: cfg.PhoneDriftSlackMS / 20,
 		DriftForceFrames: cfg.PhoneDriftForceMS / 20,
 	}
-	server, err := phonemic.Start(cfg.PhoneMicToken, cfg.PhoneMicPort, buffer, cfg.Username, a.receivePhonePCM, a.setStatus)
+	server, err := phonemic.Start(cfg.PhoneMicToken, cfg.PhoneMicPort, buffer, cfg.Username, a.receivePhonePCM, a.phoneStatus)
 	if err != nil {
 		return nil, err
 	}
@@ -53,6 +53,26 @@ func (a *App) ensurePhoneMicServer() (*phonemic.Server, error) {
 		a.setStatus(i18n.M("phone.ready_no_buffer"))
 	}
 	return server, nil
+}
+
+// phoneStatus es un aviso del servidor del celular (sus goroutines): va a la barra de estado y, si
+// es un problema, al registro de actividad (C14). Que se desconecte solo importa en una sala con el
+// celular de entrada (al apagarlo uno mismo, a.phoneMic ya es nil); cuando vuelve, una línea, solo
+// si se había avisado que se fue.
+func (a *App) phoneStatus(msg i18n.Msg) {
+	a.setStatus(msg)
+	switch msg.Key {
+	case "phone.disconnected":
+		if a.connected() && a.phoneMicEnabled() && a.reportProblem(problemPhoneLost, msg) {
+			a.phoneLostReported.Store(true)
+		}
+	case "phone.connected":
+		if a.phoneLostReported.Swap(false) {
+			a.addActivity(msg.String())
+		}
+	case "phone.server_stopped":
+		a.reportProblem(problemPhoneServer, msg)
+	}
 }
 
 func (a *App) stopPhoneMic() {
@@ -286,7 +306,9 @@ func (a *App) startAudio(udp *transport.UDP) {
 	})
 	if err != nil {
 		logging.Errorf("audio no disponible: %s", logging.FormatError(err))
-		a.setStatus(i18n.M("audio.unavailable", err.Error()))
+		msg := i18n.M("audio.unavailable")
+		a.setStatus(msg)
+		a.reportProblem(problemAudioUnavailable, msg)
 		return
 	}
 	engine.SetPlaybackSettings(a.playbackSettings)
@@ -300,7 +322,11 @@ func (a *App) startAudio(udp *transport.UDP) {
 	// De nuevo ya publicado: si se tocó el botón mientras se abría, toggleDeafen todavía no veía
 	// este Engine.
 	engine.SetDeafened(a.isDeafened.Load())
-	a.setStatus(i18n.Join(notice, i18n.M("audio.ready", audioDevicesText(cfg, input, output))))
+	ready := i18n.M("audio.ready", audioDevicesText(cfg, input, output))
+	a.setStatus(i18n.Join(notice, ready))
+	if a.audioDropReported.Swap(false) {
+		a.addActivity(ready.String()) // el registro dijo que se cayó: con qué quedó (C14)
+	}
 }
 
 // inputChoice es el micrófono elegido en la config. El celular no es un dispositivo de Windows:
@@ -324,8 +350,9 @@ func outputChoice(cfg *config.Config) audio.Device {
 // applyResolvedDevices guarda lo que se abrió para cada elección: si el elegido ya no estaba queda
 // el predeterminado de Windows (no se recuerda: el próximo cambio de dispositivo lo resuelve
 // Windows); si estaba, se actualiza su nombre si Windows lo cambió. Solo
-// pisa una elección que no cambió mientras se abría el audio. Devuelve el aviso para la barra de
-// estado (vacío si no faltó ninguno).
+// pisa una elección que no cambió mientras se abría el audio. Si faltó alguno lo avisa en el
+// registro de actividad (C14) y devuelve el aviso para la barra de estado, con un espacio al final
+// para lo que sigue (vacío si no faltó ninguno).
 func (a *App) applyResolvedDevices(inputWant, outputWant audio.Device, input, output audio.Resolved) i18n.Msg {
 	before := a.conf()
 	after := a.updateConfig(func(c *config.Config) {
@@ -340,16 +367,21 @@ func (a *App) applyResolvedDevices(inputWant, outputWant audio.Device, input, ou
 		after.OutputDevice != before.OutputDevice || after.OutputDeviceID != before.OutputDeviceID {
 		a.saveConfig()
 	}
-	var notice []i18n.Msg
+	var missing []i18n.Msg
 	if input.Missing && before.InputDevice != phoneMicInput {
 		logging.Errorf("micrófono %q no encontrado: se usa el predeterminado de Windows", inputWant.Name)
-		notice = append(notice, i18n.M("audio.input_missing", inputWant.Name))
+		missing = append(missing, i18n.M("audio.input_missing", inputWant.Name))
 	}
 	if output.Missing {
 		logging.Errorf("salida %q no encontrada: se usa la predeterminada de Windows", outputWant.Name)
-		notice = append(notice, i18n.M("audio.output_missing", outputWant.Name))
+		missing = append(missing, i18n.M("audio.output_missing", outputWant.Name))
 	}
-	return i18n.Join(notice...)
+	if len(missing) == 0 {
+		return i18n.Msg{}
+	}
+	notice := sentences(missing...)
+	a.reportProblem(problemDevice, notice)
+	return i18n.Join(notice, i18n.Plain(" "))
 }
 
 // audioDevicesText dice por dónde entra y sale el audio, para la barra de estado.
@@ -380,7 +412,7 @@ func (a *App) dropSoundPlayer() {
 	}
 }
 
-// restartAudioInRoom es "Refresh Audio" (y Guardar en Ajustes con otro dispositivo): vuelve a
+// restartAudioInRoom es "Reiniciar audio" (y Guardar en Ajustes con otro dispositivo): vuelve a
 // pedirle a Windows los dispositivos y abre el elegido si sigue, si no el predeterminado. Corre
 // fuera del hilo de UI.
 func (a *App) restartAudioInRoom() {

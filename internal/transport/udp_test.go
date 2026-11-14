@@ -224,4 +224,7 @@ func TestReceiveSurvivesJunkAndClosedPeer(t *testing.T) {
 	if server.Invalid() != 1 {
 		t.Fatalf("Invalid() = %d, quería 1", server.Invalid())
 	}
+	if server.WrongKey() != 0 {
+		t.Fatalf("WrongKey() = %d: la basura que no es VoxMesh no es una invitación vieja", server.WrongKey())
+	}
 }

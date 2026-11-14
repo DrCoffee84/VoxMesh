@@ -93,6 +93,7 @@ func (a *App) sendOutgoingPCM(frame audio.CapturedFrame, udp *transport.UDP) {
 	if engine := a.engine(); engine != nil {
 		if err := engine.CancelEcho(frame.PCM, frame.At, audio.InputEchoSettings(a.conf(), frame.Phone)); err != nil {
 			logging.Errorf("%s", logging.FormatError(err))
+			a.echoFailed.Store(true) // el aviso al registro lo da audioMonitorLoop (C14)
 		}
 	}
 	frames, ok, postDB := a.prepareOutgoingFrames(frame.PCM)

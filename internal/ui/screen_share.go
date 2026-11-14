@@ -98,7 +98,9 @@ func (a *App) runScreenShare(session *shareSession) {
 	if err != nil {
 		logging.Errorf("Pantalla: no se pudo abrir la captura: %s", logging.FormatError(err))
 		a.stopScreenShare(false)
-		a.setStatus(i18n.M("status.screen_failed", err.Error()))
+		msg := i18n.M("status.screen_failed", err.Error())
+		a.setStatus(msg)
+		a.reportProblem(problemScreenFailed, msg)
 		return
 	}
 	defer capturer.Close()

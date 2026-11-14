@@ -10,6 +10,7 @@ import (
 
 	"voxmesh/internal/audio"
 	"voxmesh/internal/config"
+	"voxmesh/internal/i18n"
 	"voxmesh/internal/logging"
 )
 
@@ -53,6 +54,7 @@ type audioLogState struct {
 	capture captureSnapshot              // captura del intervalo anterior
 	senders map[string]*senderSummary    // resumen en curso por emisor
 	sending captureInterval              // resumen en curso del envío
+	watch   sendWatch                    // racha de un problema del envío para el registro (C14)
 }
 
 // audioMonitorLoop vive lo que la app. Un panic en una vuelta queda en el log y el monitor vuelve
@@ -84,6 +86,7 @@ func (a *App) runAudioMonitor() {
 		engine := a.engine()
 		if engine == nil {
 			prevStats = nil
+			a.echoFailed.Store(false) // era de un Engine que ya no está
 			flushAudioLog(&logState, now)
 			a.stopArrivalRecorder()
 			continue
@@ -106,7 +109,12 @@ func (a *App) runAudioMonitor() {
 			lastLog = now
 			capture := captureSnapshot{at: now, engine: engine, stats: engine.TakeCaptureStats(), sent: a.audioSent.Load()}
 			a.logJitterReport(&logState, now, report)
-			logCaptureStats(&logState, capture)
+			interval, measured := logCaptureStats(&logState, capture)
+			a.watchSend(&logState.watch, interval, measured)
+		}
+		// La cancelación de eco falló en la goroutine de envío: el aviso sale de acá (C14).
+		if a.echoFailed.Swap(false) {
+			a.reportProblem(problemEchoFailed, i18n.M("audio.echo_failed"))
 		}
 	}
 }
@@ -298,17 +306,18 @@ func (c captureInterval) String() string {
 }
 
 // logCaptureStats mide el intervalo del lado que envía: lo suma al resumen y lo deja en el log si
-// tuvo un problema (con nivel 2, siempre).
-func logCaptureStats(st *audioLogState, current captureSnapshot) {
+// tuvo un problema (con nivel 2, siempre). Devuelve el intervalo; measured es false con un Engine
+// nuevo (todavía no hay con qué comparar).
+func logCaptureStats(st *audioLogState, current captureSnapshot) (interval captureInterval, measured bool) {
 	previous := st.capture
 	st.capture = current
 	if previous.engine != current.engine || previous.at.IsZero() {
 		// Engine nuevo: todavía no hay intervalo para comparar.
 		flushSendSummary(st)
 		logging.Infof("Envío: hilo de envío con %s", current.engine.SendThreadPriority())
-		return
+		return captureInterval{}, false
 	}
-	interval := captureInterval{
+	interval = captureInterval{
 		elapsed:       current.at.Sub(previous.at),
 		frames:        current.stats.Frames - previous.stats.Frames,
 		dropped:       current.stats.Dropped - previous.stats.Dropped,
@@ -329,6 +338,7 @@ func logCaptureStats(st *audioLogState, current captureSnapshot) {
 	if st.sending.elapsed >= netStatsSummaryInterval {
 		flushSendSummary(st)
 	}
+	return interval, true
 }
 
 func flushSendSummary(st *audioLogState) {

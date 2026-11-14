@@ -167,6 +167,14 @@ type App struct {
 	lagView             *lagView // nil = ninguno abierto
 	lagToggle           *hintButton
 	peerLagRejectLogged time.Time // último PacketPeerLag descartado en el log; solo receiveLoop
+
+	// Problemas en el registro de actividad (C14, problem_log.go): el tope por tipo (con su mutex) y
+	// las marcas que cada aviso deja para la línea de "volvió". echoFailed lo prende la goroutine de
+	// envío y lo lee audioMonitorLoop.
+	problems          problemCap
+	audioDropReported atomic.Bool // se avisó "se cayó el audio": la próxima apertura dice con qué quedó
+	phoneLostReported atomic.Bool // se avisó "celular desconectado": al volver, una línea
+	echoFailed        atomic.Bool
 }
 
 // appTitle es el título de la ventana principal (un nombre: no se traduce). Mientras comparto
@@ -285,7 +293,9 @@ func (a *App) Run() {
 	if a.conf().InputDevice == phoneMicInput {
 		if _, err := a.ensurePhoneMicServer(); err != nil {
 			logging.Errorf("iniciar micrófono de celular: %s", logging.FormatError(err))
-			a.setStatus(i18n.M("status.phone_server_start_failed", errorMsg(err)))
+			msg := i18n.M("status.phone_server_start_failed", errorMsg(err))
+			a.setStatus(msg)
+			go a.reportProblem(problemPhoneServer, msg)
 		}
 	}
 	a.startHotkeyListener()

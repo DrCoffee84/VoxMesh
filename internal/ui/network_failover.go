@@ -49,7 +49,10 @@ func (a *App) failoverLoop(udp *transport.UDP, fo *room.Failover, stop <-chan st
 			}
 		case <-fo.Wake():
 		}
-		rejected.check(udp)
+		// Un VoxMesh con otra clave es una invitación vieja o de otra sala: el host lo avisa (C14).
+		if rejected.check(udp) && a.hostMode.Load() {
+			a.reportProblem(problemWrongKey, i18n.M("conn.wrong_key"))
+		}
 		for _, action := range fo.Drain() {
 			if a.transport.Load() != udp {
 				return // la sala se cerró (también por un ActGiveUp de este mismo lote)
@@ -64,17 +67,25 @@ func (a *App) failoverLoop(udp *transport.UDP, fo *room.Failover, stop <-chan st
 // sala (un desconocido, una invitación vieja o equivocada, basura de un scanner): como máximo una
 // línea cada receiveErrorLogEvery, a nivel 1.
 type rejectedPackets struct {
-	logged  uint64
-	lastLog time.Time
+	logged, loggedWrong uint64
+	lastLog             time.Time
+	wrongKey            uint64 // udp.WrongKey() en la vuelta anterior
 }
 
-func (r *rejectedPackets) check(udp *transport.UDP) {
+// check escribe la línea del log, si toca, y dice si desde la vuelta anterior llegaron datagramas
+// con forma de VoxMesh y otra clave (alguien con una invitación vieja o de otra sala, no un scanner).
+func (r *rejectedPackets) check(udp *transport.UDP) (wrongKey bool) {
+	if n := udp.WrongKey(); n != r.wrongKey {
+		r.wrongKey, wrongKey = n, true
+	}
 	total := udp.Invalid()
 	if total == r.logged || time.Since(r.lastLog) < receiveErrorLogEvery {
-		return
+		return wrongKey
 	}
-	logging.Infof("Paquetes descartados (%d): no abren con la clave de la sala (último de %s)", total-r.logged, udp.LastInvalid())
-	r.logged, r.lastLog = total, time.Now()
+	logging.Infof("Paquetes descartados (%d, %d de VoxMesh con otra clave): no abren con la clave de la sala (último de %s)",
+		total-r.logged, r.wrongKey-r.loggedWrong, udp.LastInvalid())
+	r.logged, r.loggedWrong, r.lastLog = total, r.wrongKey, time.Now()
+	return wrongKey
 }
 
 func (a *App) runFailoverAction(udp *transport.UDP, fo *room.Failover, action room.Action) {

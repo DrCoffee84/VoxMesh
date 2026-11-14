@@ -153,6 +153,9 @@ func TestReceiveDropsWrongKey(t *testing.T) {
 	if server.Invalid() != 1 || server.LastInvalid() == nil || server.LastInvalid().Port != intruder.Address().Port {
 		t.Fatalf("Invalid() = %d, LastInvalid() = %v", server.Invalid(), server.LastInvalid())
 	}
+	if server.WrongKey() != 1 {
+		t.Fatalf("WrongKey() = %d, quería 1 (un VoxMesh de otra clave)", server.WrongKey())
+	}
 }
 
 // El host reenvía los mismos bytes que recibió (voz con Relay, archivos con TryRelayBulk,

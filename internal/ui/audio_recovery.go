@@ -13,8 +13,8 @@ import (
 
 // Recuperación automática del audio de la sala. Windows invalida un dispositivo abierto sin que
 // la app haga nada (USB o Bluetooth desconectado, vuelta de una suspensión, cambio de driver) y
-// antes el audio quedaba muerto hasta apretar "Refresh Audio". audioMonitorLoop consulta
-// Engine.Health cada audioHealthInterval y, si falla, reabre el audio como Refresh Audio (el
+// antes el audio quedaba muerto hasta apretar "Reiniciar audio". audioMonitorLoop consulta
+// Engine.Health cada audioHealthInterval y, si falla, reabre el audio como "Reiniciar audio" (el
 // elegido si sigue, si no el predeterminado de Windows).
 const (
 	audioHealthInterval = 2 * time.Second
@@ -92,6 +92,9 @@ func (a *App) checkAudioHealth(now time.Time) {
 		a.awakeErrLogged = true
 		logging.Errorf("evitar la suspensión durante la sala: %s", logging.FormatError(err))
 	}
+	if !inRoom {
+		a.audioDropReported.Store(false) // fuera de la sala no hay audio que vuelva
+	}
 	engine := a.engine()
 	ok, health := engine.Health(now)
 	reason := i18n.Plain(health) // el motivo del Engine es un detalle técnico: va tal cual
@@ -102,6 +105,11 @@ func (a *App) checkAudioHealth(now time.Time) {
 		return
 	}
 	logging.Errorf("audio caído (%s): reabriendo (intento %d, %d en total)", reason.In(i18n.ES), a.audioRecovery.attempts, a.audioRecovery.total)
-	a.setStatus(i18n.M("audio.dropped", reason))
+	msg := i18n.M("audio.dropped", reason)
+	a.setStatus(msg)
+	// Al registro solo si había audio abierto: sin Engine lo cuenta el aviso de audio.unavailable.
+	if engine != nil && a.reportProblem(problemAudioDropped, msg) {
+		a.audioDropReported.Store(true)
+	}
 	go a.restartAudioInRoom() // cerrar un dispositivo invalidado puede tardar: el monitor sigue
 }
