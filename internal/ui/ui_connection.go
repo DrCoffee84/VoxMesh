@@ -4,6 +4,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/netip"
 	"strconv"
@@ -131,78 +132,139 @@ func sendRepeated(send func()) {
 	}
 }
 
+const (
+	startRoomWidth    = 460 // ancho del diálogo "Iniciar sala"; el alto lo da su contenido
+	savedRoomsVisible = 5   // renglones de "Salas guardadas" a la vista; con más, la lista hace scroll
+)
+
+// createHost abre "Iniciar sala": las salas guardadas en una lista, cada una con Abrir y un tacho
+// para borrarla (C30), y abajo la entrada para una nueva.
 func (a *App) createHost() {
 	root, _ := config.AppDir()
-	existingRooms, _ := history.ListRooms(root)
+	rooms, _ := history.ListRooms(root)
 
 	var d dialog.Dialog
-
-	newRoomEntry := widget.NewEntry()
-	newRoomEntry.SetPlaceHolder(i18n.T("conn.new_room_placeholder"))
-	newRoomEntry.SetText(a.conf().RoomName)
-
-	btnCreate := widget.NewButtonWithIcon(i18n.T("conn.create_and_open"), theme.ContentAddIcon(), func() {
-		roomName := history.ClampRoomName(newRoomEntry.Text)
-		if roomName == "" {
-			a.setStatus(i18n.M("conn.room_name_missing"))
-			return
-		}
+	open := func(roomName string) {
 		d.Hide()
 		username := strings.TrimSpace(a.conf().Username)
 		if username == "" {
 			username = i18n.T("default.username")
 		}
 		go a.openHost(roomName, username)
+	}
+
+	newRoomEntry := widget.NewEntry()
+	newRoomEntry.SetPlaceHolder(i18n.T("conn.new_room_placeholder"))
+	if len(rooms) == 0 {
+		// Con salas guardadas la entrada arranca vacía: el nombre de la última ya está en la lista.
+		newRoomEntry.SetText(a.conf().RoomName)
+	}
+	btnCreate := widget.NewButtonWithIcon(i18n.T("conn.create_and_open"), theme.ContentAddIcon(), func() {
+		roomName := history.ClampRoomName(newRoomEntry.Text)
+		if roomName == "" {
+			a.setStatus(i18n.M("conn.room_name_missing"))
+			return
+		}
+		open(roomName)
 	})
 	newRoomEntry.OnSubmitted = func(string) {
 		btnCreate.OnTapped()
 	}
 
-	var content *fyne.Container
-
-	if len(existingRooms) > 0 {
-		existingSelect := widget.NewSelect(existingRooms, nil)
-		existingSelect.PlaceHolder = i18n.T("conn.pick_saved_placeholder")
-		if savedRoom := a.conf().RoomName; savedRoom != "" {
-			for _, r := range existingRooms {
-				if r == savedRoom {
-					existingSelect.SetSelected(r)
-					break
-				}
-			}
+	savedList := container.NewVBox()
+	savedScroll := container.NewVScroll(savedList)
+	savedSection := container.NewVBox(
+		widget.NewLabelWithStyle(i18n.T("conn.saved_rooms"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		savedScroll,
+		widget.NewSeparator(),
+	)
+	var showRooms func(rooms []string)
+	showRooms = func(rooms []string) {
+		rows := make([]fyne.CanvasObject, 0, len(rooms))
+		for _, name := range rooms {
+			roomName := name
+			label := widget.NewLabel(roomName)
+			label.Truncation = fyne.TextTruncateEllipsis
+			openBtn := widget.NewButtonWithIcon(i18n.T("conn.open"), theme.MediaPlayIcon(), func() { open(roomName) })
+			deleteBtn := widget.NewButtonWithIcon("", theme.DeleteIcon(), func() {
+				a.confirmDeleteRoom(roomName, func(left []string) {
+					showRooms(left)
+					d.Resize(fyne.NewSize(startRoomWidth, 0)) // vuelve a medir el alto
+				})
+			})
+			deleteBtn.Importance = widget.LowImportance
+			rows = append(rows, container.NewBorder(nil, nil, nil, container.NewHBox(openBtn, deleteBtn), label))
 		}
+		savedList.Objects = rows
+		savedList.Refresh()
+		if len(rows) == 0 {
+			savedSection.Hide()
+			return
+		}
+		visible := min(len(rows), savedRoomsVisible)
+		rowHeight := rows[0].MinSize().Height
+		savedScroll.SetMinSize(fyne.NewSize(0, float32(visible)*rowHeight+float32(visible-1)*theme.Padding()))
+		savedSection.Show()
+	}
+	showRooms(rooms)
 
-		btnOpenExisting := widget.NewButtonWithIcon(i18n.T("conn.open_selected"), theme.MediaPlayIcon(), func() {
-			roomName := strings.TrimSpace(existingSelect.Selected)
-			if roomName == "" {
-				a.setStatus(i18n.M("conn.pick_saved_missing"))
+	content := container.NewVBox(
+		savedSection,
+		widget.NewLabelWithStyle(i18n.T("conn.new_room"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		container.NewBorder(nil, nil, nil, btnCreate, newRoomEntry),
+	)
+	d = dialog.NewCustom(i18n.T("conn.start_room_title"), i18n.T("common.cancel"), content, a.window)
+	d.Resize(fyne.NewSize(startRoomWidth, 0)) // el alto, el mínimo del contenido
+	d.Show()
+}
+
+// confirmDeleteRoom pregunta antes de borrar la sala name y, si se borró, llama a done (en el
+// hilo de UI) con las salas que quedan. Si no se pudo, lo dice en un aviso.
+func (a *App) confirmDeleteRoom(name string, done func(rooms []string)) {
+	confirm := dialog.NewConfirm(i18n.T("conn.delete_room_title", name), i18n.T("conn.delete_room_confirm"), func(ok bool) {
+		if !ok {
+			return
+		}
+		go func() { // borrar una carpeta con imágenes y sonidos es disco: fuera del hilo de UI
+			if err := a.deleteSavedRoom(name); err != nil {
+				fyne.Do(func() {
+					dialog.ShowInformation(i18n.T("conn.delete_room_failed_title"), i18n.T("conn.delete_room_failed", name), a.window)
+				})
 				return
 			}
-			d.Hide()
-			username := strings.TrimSpace(a.conf().Username)
-			if username == "" {
-				username = i18n.T("default.username")
-			}
-			go a.openHost(roomName, username)
-		})
+			root, _ := config.AppDir()
+			rooms, _ := history.ListRooms(root)
+			fyne.Do(func() { done(rooms) })
+		}()
+	}, a.window)
+	confirm.SetConfirmText(i18n.T("conn.delete_room"))
+	confirm.SetDismissText(i18n.T("common.cancel"))
+	confirm.SetConfirmImportance(widget.DangerImportance)
+	confirm.Show()
+}
 
-		content = container.NewVBox(
-			widget.NewLabelWithStyle(i18n.T("conn.saved_rooms"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-			container.NewBorder(nil, nil, nil, btnOpenExisting, existingSelect),
-			widget.NewSeparator(),
-			widget.NewLabelWithStyle(i18n.T("conn.new_room"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-			container.NewBorder(nil, nil, nil, btnCreate, newRoomEntry),
-		)
-	} else {
-		content = container.NewVBox(
-			widget.NewLabelWithStyle(i18n.T("conn.new_room"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-			container.NewBorder(nil, nil, nil, btnCreate, newRoomEntry),
-		)
+// deleteSavedRoom borra la sala guardada name (su carpeta: chat, imágenes y botonera). Nunca la
+// sala en la que estoy. Si el chat la está mostrando ("Ver otra sala…"), primero lo cierra:
+// Windows no borra lo que está en uso y el chat no puede quedar mostrando una sala borrada.
+func (a *App) deleteSavedRoom(name string) error {
+	if a.connected() && name == a.activeRoomName {
+		return fmt.Errorf("la sala %q es la de la llamada", name)
 	}
-
-	d = dialog.NewCustom(i18n.T("conn.start_room_title"), i18n.T("common.cancel"), content, a.window)
-	d.Resize(fyne.NewSize(440, 220))
-	d.Show()
+	root, err := config.AppDir()
+	if err != nil {
+		return err
+	}
+	if name == a.viewingRoomName {
+		a.closeRoomView()
+	}
+	if err := history.DeleteRoom(root, name); err != nil {
+		logging.Errorf("borrar la sala %q: %s", name, logging.FormatError(err))
+		return err
+	}
+	logging.Infof("Sala %q borrada", name)
+	a.refreshRoomList(a.viewingRoomName) // "Ver otra sala…" sin la borrada
+	a.setStatus(i18n.M("conn.room_deleted", name))
+	return nil
 }
 
 func (a *App) openHost(roomName, username string) {

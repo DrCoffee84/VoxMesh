@@ -35,7 +35,7 @@ If a new version won't install over the old one, uninstall the old one and try a
 The first time you open the app it asks for your name (that's how others see you); you can change it anytime in Settings.
 
 **To start a room:**
-1. Click **Start room** and pick a name.
+1. Click **Start room**. Your saved rooms are listed there: **Open** goes into one (each room keeps its own chat and soundboard) and the trash can deletes it from this PC, after asking. To make a new one, type a name under **New room** and click **Create and open**.
 2. At the top, next to the microphone, click **Invite** and pick the first line, **Internet**. The invite (`VM1-…`) is copied. If the button shows an orange clock, wait a few seconds: the app is opening the port on your router and getting your public IP (the activity log says when it's ready).
 3. Paste it on WhatsApp for your friends.
 

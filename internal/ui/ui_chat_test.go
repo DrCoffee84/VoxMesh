@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/test"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"voxmesh/internal/config"
@@ -74,7 +76,8 @@ func newRoomTestApp(t *testing.T) (*App, string) {
 	t.Setenv("AppData", t.TempDir())
 	test.NewTempApp(t).Settings().SetTheme(voxTheme{})
 	a := New(filepath.Join(t.TempDir(), "voxmesh.exe"))
-	test.NewTempWindow(t, a.content())
+	a.window = test.NewTempWindow(t, a.content())
+	a.window.Resize(fyne.NewSize(1000, 700))
 	root, err := config.AppDir()
 	if err != nil {
 		t.Fatal(err)
@@ -116,10 +119,20 @@ func tinyPNG(t *testing.T) []byte {
 	return buf.Bytes()
 }
 
+// walkWithScrolls es walkObjects que además entra en el contenido de los container.Scroll.
+func walkWithScrolls(object fyne.CanvasObject, visit func(fyne.CanvasObject)) {
+	walkObjects(object, func(o fyne.CanvasObject) {
+		visit(o)
+		if scroll, ok := o.(*container.Scroll); ok {
+			walkWithScrolls(scroll.Content, visit)
+		}
+	})
+}
+
 // labelTexts junta los textos de los Label que hay en object.
 func labelTexts(object fyne.CanvasObject) []string {
 	var texts []string
-	walkObjects(object, func(o fyne.CanvasObject) {
+	walkWithScrolls(object, func(o fyne.CanvasObject) {
 		if label, ok := o.(*widget.Label); ok {
 			texts = append(texts, label.Text)
 		}
@@ -252,5 +265,114 @@ func TestSystemMessageInReceiverLanguage(t *testing.T) {
 		if got := systemMessageText(received); got != "Ana joined." {
 			t.Fatalf("clave %q: %q, quería el Text del host", key, got)
 		}
+	}
+}
+
+// TestDeleteSavedRoom (C30): borra la carpeta de la sala; si el chat la estaba mostrando, vuelve
+// a "no estás en ninguna sala"; la sala de la llamada no se borra.
+func TestDeleteSavedRoom(t *testing.T) {
+	setLanguage(t, "es")
+	a, root := newRoomTestApp(t)
+	saveRoom(t, root, "Sala", false)
+	saveRoom(t, root, "Otra", true)
+
+	a.viewRoom("Otra") // fuera de la sala, mirando su chat
+	if err := a.deleteSavedRoom("Otra"); err != nil {
+		t.Fatal(err)
+	}
+	if rooms, _ := history.ListRooms(root); len(rooms) != 1 || rooms[0] != "Sala" {
+		t.Fatalf("salas que quedan: %v", rooms)
+	}
+	if a.viewingRoomName != "" || a.viewStore.Load() != nil || !contains(labelTexts(a.chatBox), i18n.T("chat.no_room")) {
+		t.Fatalf("el chat sigue mostrando la sala borrada (%q)", a.viewingRoomName)
+	}
+	if contains(a.roomSelect.Options, "Otra") {
+		t.Fatalf("Ver otra sala… todavía la ofrece: %v", a.roomSelect.Options)
+	}
+
+	key, err := transport.NewKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	udp, err := transport.Listen("127.0.0.1:0", key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udp.Close()
+	a.initHistory("Sala")
+	a.transport.Store(udp) // en la llamada
+	defer a.transport.Store(nil)
+	if err := a.deleteSavedRoom("Sala"); err == nil {
+		t.Fatal("se borró la sala de la llamada")
+	}
+	if rooms, _ := history.ListRooms(root); !contains(rooms, "Sala") || a.historyStore.Load() == nil {
+		t.Fatalf("la sala de la llamada: %v", rooms)
+	}
+}
+
+// TestStartRoomDialogDeletesRoom (C30): "Iniciar sala" lista las salas guardadas con Abrir y el
+// tacho; el tacho pide confirmación, borra la sala y la saca de la lista. Con salas guardadas,
+// la entrada de una nueva arranca vacía.
+func TestStartRoomDialogDeletesRoom(t *testing.T) {
+	setLanguage(t, "es")
+	a, root := newRoomTestApp(t)
+	saveRoom(t, root, "Sala", false)
+	saveRoom(t, root, "Otra", false)
+
+	a.createHost()
+	dialogContent := func() fyne.CanvasObject {
+		pop, ok := a.window.Canvas().Overlays().Top().(*widget.PopUp)
+		if !ok {
+			t.Fatal("no hay un diálogo abierto")
+		}
+		return pop.Content
+	}
+	start := dialogContent()
+	var opens, trashes []*widget.Button
+	var entries []*widget.Entry
+	walkWithScrolls(start, func(o fyne.CanvasObject) {
+		switch w := o.(type) {
+		case *widget.Button:
+			if w.Text == i18n.T("conn.open") {
+				opens = append(opens, w)
+			}
+			if w.Text == "" && w.Icon != nil && w.Icon.Name() == theme.DeleteIcon().Name() {
+				trashes = append(trashes, w)
+			}
+		case *widget.Entry:
+			entries = append(entries, w)
+		}
+	})
+	labels := labelTexts(start)
+	if len(opens) != 2 || len(trashes) != 2 || !contains(labels, "Sala") || !contains(labels, "Otra") {
+		t.Fatalf("lista: %d Abrir, %d tachos, textos %v", len(opens), len(trashes), labels)
+	}
+	if len(entries) != 1 || entries[0].Text != "" {
+		t.Fatalf("la entrada de una sala nueva tendría que arrancar vacía: %+v", entries)
+	}
+
+	test.Tap(trashes[0]) // "Otra" (orden alfabético)
+	var confirmBtn *widget.Button
+	walkObjects(dialogContent(), func(o fyne.CanvasObject) {
+		if b, ok := o.(*widget.Button); ok && b.Text == i18n.T("conn.delete_room") {
+			confirmBtn = b
+		}
+	})
+	if confirmBtn == nil {
+		t.Fatal("el tacho no pidió confirmación")
+	}
+	test.Tap(confirmBtn)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		rooms, _ := history.ListRooms(root)
+		left := labelTexts(dialogContent())
+		if len(rooms) == 1 && rooms[0] == "Sala" && !contains(left, "Otra") && contains(left, "Sala") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("después de borrar: salas %v, diálogo %v", rooms, left)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

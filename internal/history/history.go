@@ -555,6 +555,25 @@ func ListRooms(root string) ([]string, error) {
 	return names, nil
 }
 
+// DeleteRoom borra la carpeta de la sala name (chat, imágenes y sonidos de su botonera) que
+// está bajo root. name es el nombre de la carpeta, como lo da ListRooms: uno que safeName
+// cambiaría ("..", "a/b", vacío) es un error y no borra nada. Pasa por os.Root, así nunca sale
+// de salas\. Si la sala no existe, no hace nada.
+func DeleteRoom(root, name string) error {
+	if strings.TrimSpace(name) == "" || safeName(name) != name {
+		return fmt.Errorf("nombre de sala inválido: %q", name)
+	}
+	rooms, err := os.OpenRoot(filepath.Join(root, "salas"))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer rooms.Close()
+	return rooms.RemoveAll(safeName(name))
+}
+
 func (s *Store) SaveImage(id, extension string, data []byte) (string, error) {
 	name, _, err := imageName(id, extension)
 	if err != nil {

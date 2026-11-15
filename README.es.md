@@ -35,7 +35,7 @@ Si una versión nueva no se instala encima de la vieja, desinstalá la anterior 
 La primera vez que abrís la app te pide tu nombre (así te ven los demás); lo podés cambiar cuando quieras en Ajustes.
 
 **Para abrir una sala:**
-1. Tocá **Iniciar sala** y elegí un nombre.
+1. Tocá **Iniciar sala**. Ahí están tus salas guardadas: **Abrir** entra a una (cada sala tiene su propio chat y su botonera) y el tacho la borra de esta PC, después de preguntar. Para una nueva, escribí el nombre en **Nueva sala** y tocá **Crear y abrir**.
 2. Arriba, al lado del micrófono, tocá **Invitar** y elegí el primer renglón, **Internet**. La invitación (`VM1-…`) queda copiada. Si el botón tiene un reloj naranja, esperá unos segundos: la app está abriendo el puerto del router y obteniendo tu IP pública (el registro de actividad dice cuándo está lista).
 3. Pegala en WhatsApp para tus amigos.
 

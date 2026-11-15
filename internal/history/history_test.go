@@ -350,3 +350,65 @@ func TestStoreRenamesSound(t *testing.T) {
 		t.Fatal("expected an error for a sound that is not on disk")
 	}
 }
+
+// TestDeleteRoom: borra la carpeta entera de la sala (chat, imágenes y sonidos) y nada más; un
+// nombre raro no sale de salas\.
+func TestDeleteRoom(t *testing.T) {
+	root := t.TempDir()
+	if err := DeleteRoom(root, "Gaming"); err != nil {
+		t.Fatalf("sin carpeta de salas: %v", err)
+	}
+	gaming, err := New(root, "Gaming")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gaming.Add(Message{ID: imageID, Kind: "text", Text: "hola"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gaming.SaveImage(imageID, ".png", []byte("png")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gaming.SaveSound(SoundMeta{ID: soundID, Ext: ".pcm", Name: "Bocina"}, []byte{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"Charla", "sala", "a_b"} {
+		if _, err := New(root, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	outside := filepath.Join(root, "secreto.txt")
+	if err := os.WriteFile(outside, []byte("no tocar"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := DeleteRoom(root, "Gaming"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "salas", "Gaming")); !os.IsNotExist(err) {
+		t.Fatalf("la carpeta de la sala sigue: %v", err)
+	}
+	rooms, err := ListRooms(root)
+	if err != nil || strings.Join(rooms, ",") != "Charla,a_b,sala" {
+		t.Fatalf("salas que quedan: %v (%v)", rooms, err)
+	}
+
+	if err := DeleteRoom(root, "No existe"); err != nil {
+		t.Fatalf("una sala que no existe: %v", err)
+	}
+	if err := DeleteRoom(root, "  "); err == nil {
+		t.Fatal("un nombre vacío no tiene que borrar nada")
+	}
+	// Solo nombres de carpeta como los da ListRooms: ".." no es "sala" ni "a/b" es "a_b".
+	for _, name := range []string{"..", `..\secreto.txt`, "../secreto.txt", "a/b", "CON", "sala."} {
+		if err := DeleteRoom(root, name); err == nil {
+			t.Fatalf("%q: tendría que ser un error", name)
+		}
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatalf("se borró algo fuera de salas: %v", err)
+	}
+	rooms, _ = ListRooms(root)
+	if strings.Join(rooms, ",") != "Charla,a_b,sala" {
+		t.Fatalf("salas después de los nombres raros: %v", rooms)
+	}
+}
