@@ -3,16 +3,22 @@
 package ui
 
 import (
+	"bytes"
+	"image"
+	"image/png"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/test"
+	"fyne.io/fyne/v2/widget"
 
 	"voxmesh/internal/config"
 	"voxmesh/internal/history"
 	"voxmesh/internal/i18n"
 	"voxmesh/internal/room"
+	"voxmesh/internal/transport"
 )
 
 // TestActivityLogIsSessionOnly: el registro de actividad es solo de la sesión. Los avisos viejos
@@ -59,6 +65,164 @@ func TestActivityLogIsSessionOnly(t *testing.T) {
 	a.addActivity("Pepe se conectó.") // en vivo, sí
 	if n := len(a.activityBox.Objects); n != 1 {
 		t.Fatalf("aviso en vivo: %d entradas, quería 1", n)
+	}
+}
+
+// newRoomTestApp: App con ventana y las salas en una carpeta temporal (config.AppDir).
+func newRoomTestApp(t *testing.T) (*App, string) {
+	t.Helper()
+	t.Setenv("AppData", t.TempDir())
+	test.NewTempApp(t).Settings().SetTheme(voxTheme{})
+	a := New(filepath.Join(t.TempDir(), "voxmesh.exe"))
+	test.NewTempWindow(t, a.content())
+	root, err := config.AppDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a, root
+}
+
+// saveRoom crea la sala name con un mensaje de chat, un sonido y, si withImage, una imagen.
+func saveRoom(t *testing.T, root, name string, withImage bool) history.Message {
+	t.Helper()
+	store, err := history.New(root, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := history.Message{ID: history.NewID("p1"), Timestamp: time.Now().UTC(), SenderID: "p1", Username: "Pepe", Kind: "text", Text: "hola " + name}
+	if withImage {
+		message.Kind, message.Text = "image", ""
+		message.ImageID, message.ImageExt = history.NewID("img"), ".png"
+		if _, err := store.SaveImage(message.ImageID, message.ImageExt, tinyPNG(t)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Add(message); err != nil {
+		t.Fatal(err)
+	}
+	sound := history.SoundMeta{ID: history.NewID("p1"), Ext: ".pcm", Name: "Bocina"}
+	if _, err := store.SaveSound(sound, make([]byte, 960)); err != nil {
+		t.Fatal(err)
+	}
+	return message
+}
+
+func tinyPNG(t *testing.T) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 4, 4))); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// labelTexts junta los textos de los Label que hay en object.
+func labelTexts(object fyne.CanvasObject) []string {
+	var texts []string
+	walkObjects(object, func(o fyne.CanvasObject) {
+		if label, ok := o.(*widget.Label); ok {
+			texts = append(texts, label.Text)
+		}
+	})
+	return texts
+}
+
+// TestCloseRoomViewLeavesRoom (C31): al colgar, la ventana queda como al abrir la app: sin
+// historial, sin chat ni botonera, "Ver otra sala…" sin elegir y el texto de cómo se entra. La
+// sala sigue guardada.
+func TestCloseRoomViewLeavesRoom(t *testing.T) {
+	setLanguage(t, "es")
+	a, root := newRoomTestApp(t)
+	saveRoom(t, root, "Sala", false)
+
+	a.initHistory("Sala")
+	if a.historyStore.Load() == nil || a.roomSelect.Selected != "Sala" || len(a.chatMessages) != 1 || len(a.sounds) != 1 {
+		t.Fatalf("en la sala: store=%v elegida=%q chat=%d sonidos=%d", a.historyStore.Load() != nil, a.roomSelect.Selected, len(a.chatMessages), len(a.sounds))
+	}
+	if contains(labelTexts(a.chatBox), i18n.T("chat.no_room")) {
+		t.Fatal("en la sala, el chat dice que no estás en ninguna")
+	}
+
+	a.closeRoomView()
+	if a.historyStore.Load() != nil || a.viewStore.Load() != nil || a.viewingRoomName != "" {
+		t.Fatal("después de colgar quedó abierta la carpeta de la sala")
+	}
+	if len(a.chatMessages) != 0 || len(a.sounds) != 0 {
+		t.Fatalf("después de colgar: chat=%d sonidos=%d", len(a.chatMessages), len(a.sounds))
+	}
+	if a.roomSelect.Selected != "" || !contains(a.roomSelect.Options, "Sala") {
+		t.Fatalf("Ver otra sala…: elegida %q, opciones %v", a.roomSelect.Selected, a.roomSelect.Options)
+	}
+	if got := labelTexts(a.chatBox); len(a.chatBox.Objects) != 1 || !contains(got, i18n.T("chat.no_room")) {
+		t.Fatalf("chat fuera de la sala: %v", got)
+	}
+	if got := labelTexts(a.soundGrid); !contains(got, i18n.T("sound.no_room")) {
+		t.Fatalf("botonera fuera de la sala: %v", got)
+	}
+
+	a.viewRoom("Sala") // "Ver otra sala…" sigue mostrando el chat guardado
+	if len(a.chatMessages) != 1 || contains(labelTexts(a.chatBox), i18n.T("chat.no_room")) {
+		t.Fatalf("mirar la sala guardada: chat=%d", len(a.chatMessages))
+	}
+}
+
+// TestViewRoomShowsItsImages: "Ver otra sala…" muestra las imágenes guardadas en esa sala, estando
+// en otra o fuera de una (antes se buscaban en la carpeta de la sala activa).
+func TestViewRoomShowsItsImages(t *testing.T) {
+	a, root := newRoomTestApp(t)
+	saveRoom(t, root, "Sala", false)
+	imageMessage := saveRoom(t, root, "Otra", true)
+	hasThumb := func() bool {
+		found := false
+		walkObjects(a.buildChatMessageObject(imageMessage, false), func(o fyne.CanvasObject) {
+			if _, ok := o.(*tappableImage); ok {
+				found = true
+			}
+		})
+		return found
+	}
+
+	a.initHistory("Sala")
+	a.viewRoom("Otra")
+	if !hasThumb() {
+		t.Fatal("en una sala, mirando otra: sin la miniatura")
+	}
+	a.closeRoomView()
+	a.viewRoom("Otra")
+	if !hasThumb() {
+		t.Fatal("fuera de la sala, mirando una guardada: sin la miniatura")
+	}
+}
+
+// TestLateRoomStateAfterHangup (C31): un RoomState que llega después de colgar (la conexión ya no
+// es la actual) no vuelve a abrir la sala; con la conexión actual, sí.
+func TestLateRoomStateAfterHangup(t *testing.T) {
+	a, root := newRoomTestApp(t)
+	key, err := transport.NewKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	udp, err := transport.Listen("127.0.0.1:0", key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udp.Close()
+	a.participantID = "yo"
+	state := room.State{Name: "De Juan", HostID: "juan", Participants: []room.Participant{{ID: "juan", Username: "Juan", Connected: true}}}
+
+	a.handleRoomState(state, udp)
+	if a.activeRoomName != "" || a.historyStore.Load() != nil {
+		t.Fatalf("estado tardío: abrió la sala %q", a.activeRoomName)
+	}
+	if rooms, _ := history.ListRooms(root); contains(rooms, "De Juan") {
+		t.Fatal("estado tardío: creó la carpeta de la sala")
+	}
+
+	a.transport.Store(udp)
+	defer a.transport.Store(nil)
+	a.handleRoomState(state, udp)
+	if a.activeRoomName != "De Juan" || a.historyStore.Load() == nil {
+		t.Fatalf("con la conexión actual: sala %q", a.activeRoomName)
 	}
 }
 

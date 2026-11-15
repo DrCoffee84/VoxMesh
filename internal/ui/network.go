@@ -472,7 +472,9 @@ func (a *App) handleRoomState(state room.State, udp *transport.UDP) {
 	state.Name = history.ClampRoomName(state.Name)
 	a.roomState = state
 	a.refreshPeersFromRoom()
-	if state.Name != "" && state.Name != a.activeRoomName {
+	// Un estado que llega cuando ya se colgó (la conexión de udp no es la actual) no vuelve a
+	// abrir la sala que closeRoomView cerró.
+	if state.Name != "" && state.Name != a.activeRoomName && a.transport.Load() == udp {
 		a.activeRoomName = state.Name
 		roomName := state.Name
 		a.updateConfig(func(c *config.Config) { c.RoomName = roomName })

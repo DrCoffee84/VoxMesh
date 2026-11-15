@@ -132,7 +132,8 @@ func (a *App) imageSendable(data []byte) bool {
 }
 
 func (a *App) sendChatImageBytes(ext string, data []byte, caption string) {
-	if a.historyStore == nil || !a.connected() {
+	store := a.historyStore.Load()
+	if store == nil || !a.connected() {
 		return
 	}
 	imageID := history.NewID(a.participantID)
@@ -147,7 +148,7 @@ func (a *App) sendChatImageBytes(ext string, data []byte, caption string) {
 	if !a.imageSendable(data) {
 		return
 	}
-	if _, saveErr := a.historyStore.SaveImage(imageID, ext, data); saveErr != nil {
+	if _, saveErr := store.SaveImage(imageID, ext, data); saveErr != nil {
 		logging.Errorf("guardar imagen %q: %s", imageID, logging.FormatError(saveErr))
 		a.setStatus(i18n.M("chat.image_save_failed", saveErr.Error()))
 		return
@@ -350,9 +351,11 @@ func (a *App) buildChatMessageObject(m history.Message, isMatch bool) fyne.Canva
 	var row fyne.CanvasObject = headerRow
 
 	imagePath := ""
-	if m.Kind == "image" && a.historyStore != nil {
+	// La imagen está en la carpeta de la sala que muestra el chat, que puede no ser en la que
+	// estoy ("Ver otra sala…") o no haber ninguna (fuera de la sala).
+	if store := a.viewStore.Load(); m.Kind == "image" && store != nil {
 		// Con un ID o extensión inválidos (mensaje de red) queda la fila sin imagen.
-		imagePath, _ = a.historyStore.ImagePath(m.ImageID, m.ImageExt)
+		imagePath, _ = store.ImagePath(m.ImageID, m.ImageExt)
 	}
 	if imagePath != "" && fileExists(imagePath) {
 		img := newChatThumbnail(imagePath)
@@ -414,12 +417,45 @@ func (a *App) refreshChat() {
 			}
 		}
 
+		// Fuera de una sala y sin mirar otra (al abrir la app y después de colgar, C31): en vez
+		// del chat vacío, cómo se entra.
+		if a.viewingRoomName == "" {
+			objects = []fyne.CanvasObject{noRoomHint()}
+		}
+
 		a.chatBox.Objects = objects
 		a.chatBox.Refresh()
 		if a.chatScroll != nil && searchFilter == "" {
 			a.chatScroll.ScrollToBottom()
 		}
 	})
+}
+
+// noRoomHint es el texto del chat fuera de una sala: dónde están las salas guardadas y cómo se
+// entra a la de otro.
+func noRoomHint() *widget.Label {
+	hint := widget.NewLabel(i18n.T("chat.no_room"))
+	hint.Wrapping = fyne.TextWrapWord
+	hint.Importance = widget.LowImportance
+	return hint
+}
+
+// closeRoomView deja la ventana como al abrir la app (C31): sin sala, sin chat, sin botonera y
+// con "Ver otra sala…" sin elegir. La llama stopConnectionAsync al colgar y deleteSavedRoom
+// antes de borrar la sala que muestra el chat.
+func (a *App) closeRoomView() {
+	a.historyStore.Store(nil)
+	a.viewStore.Store(nil)
+	a.viewingRoomName = ""
+	a.chatMu.Lock()
+	a.chatMessages = nil
+	a.chatMu.Unlock()
+	a.soundMu.Lock()
+	a.sounds = nil
+	a.soundMu.Unlock()
+	a.rebuildSoundboard()
+	a.refreshRoomList("")
+	a.refreshChat()
 }
 
 func (a *App) initHistory(roomName string) {
@@ -431,7 +467,8 @@ func (a *App) initHistory(roomName string) {
 	if err != nil {
 		return
 	}
-	a.historyStore = store
+	a.historyStore.Store(store)
+	a.viewStore.Store(store)
 	a.activeRoomName = roomName
 	a.viewingRoomName = roomName
 	messages, err := store.Load()
@@ -467,9 +504,9 @@ func (a *App) addChatMessage(message history.Message) {
 	if isSystemMessage(message) {
 		return
 	}
-	if a.historyStore != nil {
+	if store := a.historyStore.Load(); store != nil {
 		go func(m history.Message) {
-			_ = a.historyStore.Add(m)
+			_ = store.Add(m)
 		}(message)
 	}
 	if a.viewingRoomName != "" && a.activeRoomName != "" && a.viewingRoomName != a.activeRoomName {
@@ -560,6 +597,7 @@ func (a *App) viewRoom(roomName string) {
 		a.setStatus(i18n.M("chat.history_open_failed", roomName))
 		return
 	}
+	a.viewStore.Store(store)
 	messages, _ := store.Load()
 	chatOnly := make([]history.Message, 0, len(messages))
 	for _, m := range messages {
@@ -602,12 +640,14 @@ func (a *App) refreshRoomList(selected string) {
 		a.roomSelect.Refresh()
 		if selected != "" {
 			a.roomSelect.SetSelected(selected)
+		} else if a.roomSelect.Selected != "" {
+			a.roomSelect.ClearSelected() // su OnChanged("") no abre nada (viewRoom)
 		}
 	})
 }
 
 func (a *App) selectChatImage() {
-	if a.historyStore == nil || !a.connected() {
+	if a.historyStore.Load() == nil || !a.connected() {
 		a.setStatus(i18n.M("chat.connect_first_image"))
 		return
 	}
@@ -632,7 +672,8 @@ func (a *App) selectChatImage() {
 }
 
 func (a *App) sendImageFile(path string) {
-	if a.historyStore == nil || !a.connected() {
+	store := a.historyStore.Load()
+	if store == nil || !a.connected() {
 		return
 	}
 	// El selector permite "Todos los archivos": se rechaza antes de leerlo.
@@ -655,7 +696,7 @@ func (a *App) sendImageFile(path string) {
 	if !a.imageSendable(data) {
 		return
 	}
-	if _, saveErr := a.historyStore.SaveImage(imageID, extension, data); saveErr != nil {
+	if _, saveErr := store.SaveImage(imageID, extension, data); saveErr != nil {
 		logging.Errorf("guardar imagen %q: %s", imageID, logging.FormatError(saveErr))
 		a.setStatus(i18n.M("chat.image_save_failed", saveErr.Error()))
 		return

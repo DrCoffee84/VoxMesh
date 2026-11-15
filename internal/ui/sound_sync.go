@@ -35,7 +35,7 @@ func (a *App) requestSoundSync() {
 // maybeSendSoundSync (cliente) manda el pedido mientras no llegue la respuesta: lo llaman
 // handleRoomState y failoverLoop (cada 2 s), por si UDP pierde el pedido o la respuesta.
 func (a *App) maybeSendSoundSync(udp *transport.UDP) {
-	store := a.historyStore
+	store := a.historyStore.Load()
 	if !a.soundSyncPending.Load() || a.hostMode.Load() || store == nil || a.roomState.HostID == "" {
 		return
 	}
@@ -71,7 +71,7 @@ func (a *App) maybeSendSoundSync(udp *transport.UDP) {
 // él (y lo anota como fuente de su audio), avisa los cambios al resto y le responde la lista
 // completa. Es idempotente: un pedido reenviado no vuelve a anunciar nada.
 func (a *App) handleSoundSyncRequest(udp *transport.UDP, addr *net.UDPAddr, envelope room.Envelope) {
-	store := a.historyStore
+	store := a.historyStore.Load()
 	if store == nil || addr == nil {
 		return
 	}
@@ -128,7 +128,7 @@ func (a *App) handleSoundSyncRequest(udp *transport.UDP, addr *net.UDPAddr, enve
 // handleSoundSyncResponse (cliente): la lista del host pasa a ser la botonera (en su orden). Se
 // conservan al final los sonidos locales que el host todavía no tiene (pedido en vuelo).
 func (a *App) handleSoundSyncResponse(envelope room.Envelope) {
-	store := a.historyStore
+	store := a.historyStore.Load()
 	if store == nil {
 		return
 	}
@@ -223,7 +223,7 @@ func (a *App) dropSounds(ids []string) []room.Sound {
 	}
 	a.rebuildSoundboard()
 
-	if store := a.historyStore; store != nil {
+	if store := a.historyStore.Load(); store != nil {
 		for _, sound := range removed {
 			if err := store.DeleteSound(sound.ID, sound.Ext); err != nil && !os.IsNotExist(err) {
 				logging.Errorf("no se pudo eliminar el archivo del sonido local: %s", logging.FormatError(err))
@@ -237,7 +237,7 @@ func (a *App) dropSounds(ids []string) []room.Sound {
 // pide: handleAssetChunk lo reproduce cuando termina de llegar. Devuelve true si hubo que pedirlo.
 // Ensordecido no hace nada: no suena ni el propio (a los demás el sound_play les llega igual).
 func (a *App) playOrFetchSound(sound room.Sound) bool {
-	store := a.historyStore
+	store := a.historyStore.Load()
 	if store == nil || a.isDeafened.Load() {
 		return false
 	}

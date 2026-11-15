@@ -127,7 +127,8 @@ func (a *App) handleAssetChunk(payload []byte, origin string) {
 		return
 	}
 	data, complete := a.assetAssembler.Ingest(chunk, origin)
-	if !complete || a.historyStore == nil {
+	store := a.historyStore.Load()
+	if !complete || store == nil {
 		return
 	}
 	go func() {
@@ -154,7 +155,7 @@ func (a *App) handleAssetChunk(payload []byte, origin string) {
 			// Un sonido que no está en la botonera (borrado, o el sound_add se perdió) no se guarda:
 			// quedaría en el manifest sin nombre o resucitaría uno borrado. Si estaba pendiente suena igual.
 			if known {
-				if _, saveErr := a.historyStore.SaveSound(history.SoundMeta{ID: chunk.ID, Ext: chunk.Ext, Name: name}, data); saveErr != nil {
+				if _, saveErr := store.SaveSound(history.SoundMeta{ID: chunk.ID, Ext: chunk.Ext, Name: name}, data); saveErr != nil {
 					logging.Errorf("guardar sonido recibido %q: %s", chunk.ID, logging.FormatError(saveErr))
 				}
 			}
@@ -168,7 +169,7 @@ func (a *App) handleAssetChunk(payload []byte, origin string) {
 			a.assetRejects.note(checkErr, origin)
 			return
 		}
-		if _, saveErr := a.historyStore.SaveImage(chunk.ID, chunk.Ext, data); saveErr != nil {
+		if _, saveErr := store.SaveImage(chunk.ID, chunk.Ext, data); saveErr != nil {
 			logging.Errorf("guardar archivo recibido %q: %s", chunk.ID, logging.FormatError(saveErr))
 			return
 		}
@@ -178,16 +179,17 @@ func (a *App) handleAssetChunk(payload []byte, origin string) {
 
 func (a *App) handleAssetMissing(udp *transport.UDP, addr *net.UDPAddr, payload []byte) {
 	request, err := assets.DecodeMissing(payload)
-	if err != nil || a.historyStore == nil || addr == nil || !a.netAssetOK(request.Kind, request.ID, request.Ext, addr.String()) {
+	store := a.historyStore.Load()
+	if err != nil || store == nil || addr == nil || !a.netAssetOK(request.Kind, request.ID, request.Ext, addr.String()) {
 		return
 	}
 	go func() {
 		var data []byte
 		var readErr error
 		if request.Kind == assets.KindSound {
-			data, readErr = a.historyStore.ReadSound(request.ID, request.Ext)
+			data, readErr = store.ReadSound(request.ID, request.Ext)
 		} else {
-			data, readErr = a.historyStore.ReadImage(request.ID, request.Ext)
+			data, readErr = store.ReadImage(request.ID, request.Ext)
 		}
 		if readErr != nil || len(data) == 0 {
 			// Descarga a pedido: el host puede no tener el audio; se lo pide a quien sí.
@@ -276,20 +278,22 @@ func (a *App) sweepAssetLoop(udp *transport.UDP, stop <-chan struct{}) {
 }
 
 func (a *App) sendHistorySync(udp *transport.UDP, address *net.UDPAddr) {
-	if a.historyStore == nil || address == nil {
+	store := a.historyStore.Load()
+	if store == nil || address == nil {
 		return
 	}
-	payload, err := room.Encode(room.Envelope{Kind: room.SyncRequestMessage, KnownIDs: a.historyStore.KnownIDs()})
+	payload, err := room.Encode(room.Envelope{Kind: room.SyncRequestMessage, KnownIDs: store.KnownIDs()})
 	if err == nil {
 		_ = udp.Send(address, transport.Packet{Kind: transport.PacketChatSync, Sequence: a.sequence.Add(1), Payload: payload})
 	}
 }
 
 func (a *App) respondHistorySync(udp *transport.UDP, address *net.UDPAddr, knownIDs []string) {
-	if a.historyStore == nil || address == nil {
+	store := a.historyStore.Load()
+	if store == nil || address == nil {
 		return
 	}
-	missing, err := a.historyStore.MessagesMissingFrom(knownIDs)
+	missing, err := store.MessagesMissingFrom(knownIDs)
 	if err != nil {
 		return
 	}
@@ -351,10 +355,11 @@ func (a *App) handleSyncPacket(udp *transport.UDP, addr *net.UDPAddr, payload []
 	if envelope.Kind == room.SyncResponseMessage {
 		for _, message := range envelope.Messages {
 			a.addChatMessage(message)
-			if message.ImageID == "" || a.historyStore == nil || !a.netAssetOK(assets.KindImage, message.ImageID, message.ImageExt, addr.String()) {
+			store := a.historyStore.Load()
+			if message.ImageID == "" || store == nil || !a.netAssetOK(assets.KindImage, message.ImageID, message.ImageExt, addr.String()) {
 				continue
 			}
-			if _, readErr := a.historyStore.ReadImage(message.ImageID, message.ImageExt); readErr == nil {
+			if _, readErr := store.ReadImage(message.ImageID, message.ImageExt); readErr == nil {
 				continue
 			}
 			request := assets.MissingRequest{Kind: assets.KindImage, ID: message.ImageID, Ext: message.ImageExt}

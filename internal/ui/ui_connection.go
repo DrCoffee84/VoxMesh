@@ -58,6 +58,7 @@ func (a *App) stopConnectionAsync() <-chan struct{} {
 	logging.Infof("stopConnection: cerrando sala/conexión en %s", oldEndpoint)
 	a.setEndpoint("")
 	a.activeRoomName = ""
+	a.closeRoomView() // la ventana queda como al abrir la app: se ve que no estás en ninguna sala
 	a.peerMu.Lock()
 	a.peerNames = nil
 	a.peerMu.Unlock()
@@ -579,8 +580,9 @@ func (a *App) connectClient(raw string) {
 			LastSeenUTC: time.Now().UTC(),
 		}}}
 
-		// Disco + peers (puede tardar)
-		a.initHistory(cfg.RoomName)
+		// El historial (chat, botonera) se abre cuando el host dice cómo se llama su sala
+		// (handleRoomState). Antes se abría acá el de la última sala de esta PC: se veía un rato
+		// el chat de otra sala y volvía a crear la carpeta de una sala recién borrada (C31).
 		a.refreshPeersFromRoom()
 
 		a.setEndpoint(addr.String())

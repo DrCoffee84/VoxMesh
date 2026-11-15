@@ -90,7 +90,8 @@ type App struct {
 	awakeErrLogged  bool          // ya se registró que no se pudo evitar la suspensión (solo audioMonitorLoop)
 	hostMode        atomic.Bool
 	roomStore       *room.Store
-	historyStore    *history.Store
+	historyStore    atomic.Pointer[history.Store] // sala en la que estoy; nil afuera (closeRoomView). Usar el Load guardado en una variable
+	viewStore       atomic.Pointer[history.Store] // sala que muestra el chat ("Ver otra sala…"): de ahí salen sus imágenes
 	roomState       room.State
 	participantID   string
 	chatScroll      *container.Scroll
@@ -314,6 +315,9 @@ func (a *App) Run(onShowRequest func(func())) {
 		onShowRequest(func() { fyne.Do(a.showMainWindow) })
 	}
 	a.refreshRoomList("")
+	// Todavía sin sala: el chat dice cómo se entra y la botonera, de dónde salen sus sonidos.
+	a.refreshChat()
+	a.rebuildSoundboard()
 	if a.conf().InputDevice == phoneMicInput {
 		if _, err := a.ensurePhoneMicServer(); err != nil {
 			logging.Errorf("iniciar micrófono de celular: %s", logging.FormatError(err))

@@ -208,6 +208,13 @@ func (a *App) rebuildSoundboard() {
 	if len(objects) == 0 && filter != "" && len(sounds) > 0 {
 		objects = append(objects, widget.NewLabelWithStyle(i18n.T("sound.no_results"), fyne.TextAlignCenter, fyne.TextStyle{Italic: true}))
 	}
+	if len(sounds) == 0 && a.historyStore.Load() == nil {
+		// Fuera de una sala (C31): que no parezca que al colgar se perdieron los sonidos.
+		hint := widget.NewLabel(i18n.T("sound.no_room"))
+		hint.Wrapping = fyne.TextWrapWord
+		hint.Importance = widget.LowImportance
+		objects = append(objects, hint)
+	}
 	fyne.Do(func() {
 		if a.soundGrid == nil {
 			return
@@ -339,7 +346,7 @@ func (a *App) showEditSoundDialog(sound room.Sound) {
 			})
 		})
 	})
-	if a.historyStore == nil || !a.connected() {
+	if a.historyStore.Load() == nil || !a.connected() {
 		replaceBtn.Disable()
 	}
 
@@ -393,9 +400,9 @@ func (a *App) renameSound(soundID, name string) {
 		return
 	}
 	a.rebuildSoundboard()
-	if a.historyStore != nil {
+	if store := a.historyStore.Load(); store != nil {
 		// Sin el audio en disco (todavía no se tocó) no hay manifest que actualizar.
-		if err := a.historyStore.UpdateSoundMeta(history.SoundMeta{ID: renamed.ID, Ext: renamed.Ext, Name: renamed.Name}); err != nil && !os.IsNotExist(err) {
+		if err := store.UpdateSoundMeta(history.SoundMeta{ID: renamed.ID, Ext: renamed.Ext, Name: renamed.Name}); err != nil && !os.IsNotExist(err) {
 			logging.Errorf("renombrar sonido %q: %s", renamed.ID, logging.FormatError(err))
 		}
 	}
@@ -407,14 +414,15 @@ func (a *App) renameSound(soundID, name string) {
 // replaceSoundAudio guarda el audio nuevo con otro ID (los demás ya tienen cacheado el asset del
 // ID viejo y no lo volverían a pedir), lo pone en el mismo lugar de la lista y le pasa el atajo.
 func (a *App) replaceSoundAudio(old room.Sound, name string, pcm []byte) {
-	if a.historyStore == nil || !a.connected() {
+	store := a.historyStore.Load()
+	if store == nil || !a.connected() {
 		dialog.ShowInformation(i18n.T("sound.replace_audio"), i18n.T("sound.connect_first_replace"), a.window)
 		return
 	}
 	a.setStatus(i18n.M("sound.replacing", name))
 	go func() {
 		sound := room.Sound{ID: history.NewID(a.participantID), Ext: ".pcm", Name: name}
-		if _, saveErr := a.historyStore.SaveSound(history.SoundMeta{ID: sound.ID, Ext: sound.Ext, Name: sound.Name}, pcm); saveErr != nil {
+		if _, saveErr := store.SaveSound(history.SoundMeta{ID: sound.ID, Ext: sound.Ext, Name: sound.Name}, pcm); saveErr != nil {
 			a.showSoundError(i18n.M("sound.save_failed", saveErr.Error()))
 			return
 		}
@@ -443,7 +451,7 @@ func (a *App) replaceSoundAudio(old room.Sound, name string, pcm []byte) {
 		}
 		a.rebuildSoundboard()
 
-		if err := a.historyStore.DeleteSound(old.ID, old.Ext); err != nil && !os.IsNotExist(err) {
+		if err := store.DeleteSound(old.ID, old.Ext); err != nil && !os.IsNotExist(err) {
 			logging.Errorf("borrar audio reemplazado %q: %s", old.ID, logging.FormatError(err))
 		}
 		a.sendSoundEnvelope(room.SoundAddMessage, sound)
@@ -495,11 +503,11 @@ func (a *App) addSound(sound room.Sound) {
 		if existing.ID == sound.ID {
 			a.sounds[index] = sound
 			a.soundMu.Unlock()
-			if existing.Name != sound.Name && a.historyStore != nil {
+			if store := a.historyStore.Load(); existing.Name != sound.Name && store != nil {
 				// Renombrado por otro peer (renameSound). Si el asset todavía no llegó, falla el Stat y
 				// handleAssetChunk lo guarda después con el nombre nuevo de a.sounds.
 				go func() {
-					_ = a.historyStore.UpdateSoundMeta(history.SoundMeta{ID: sound.ID, Ext: sound.Ext, Name: sound.Name})
+					_ = store.UpdateSoundMeta(history.SoundMeta{ID: sound.ID, Ext: sound.Ext, Name: sound.Name})
 				}()
 			}
 			a.rebuildSoundboard()
@@ -524,7 +532,7 @@ func (a *App) removeSound(soundID string) {
 
 // pickAndAddSound corre en el hilo de UI (callback de "Agregar sonido").
 func (a *App) pickAndAddSound() {
-	if a.historyStore == nil || !a.connected() {
+	if a.historyStore.Load() == nil || !a.connected() {
 		dialog.ShowInformation(i18n.T("sound.add"), i18n.T("sound.connect_first_add"), a.window)
 		return
 	}
@@ -984,14 +992,15 @@ func (a *App) showSoundTrimDialog(title, defaultName string, pcm []byte, initial
 }
 
 func (a *App) saveAndBroadcastSound(name string, pcm []byte) {
-	if a.historyStore == nil || !a.connected() {
+	store := a.historyStore.Load()
+	if store == nil || !a.connected() {
 		dialog.ShowInformation(i18n.T("sound.add"), i18n.T("sound.connect_first_add"), a.window)
 		return
 	}
 	a.setStatus(i18n.M("sound.saving", name))
 	go func() {
 		sound := room.Sound{ID: history.NewID(a.participantID), Ext: ".pcm", Name: name}
-		if _, saveErr := a.historyStore.SaveSound(history.SoundMeta{ID: sound.ID, Ext: sound.Ext, Name: sound.Name}, pcm); saveErr != nil {
+		if _, saveErr := store.SaveSound(history.SoundMeta{ID: sound.ID, Ext: sound.Ext, Name: sound.Name}, pcm); saveErr != nil {
 			a.showSoundError(i18n.M("sound.save_failed", saveErr.Error()))
 			return
 		}

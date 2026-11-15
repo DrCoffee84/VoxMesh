@@ -184,7 +184,7 @@ func (a *App) playPhonePreview(frame []byte) bool {
 }
 
 func (a *App) playIncomingSound(sound room.Sound) {
-	if a.conf().SoundboardMuted || a.historyStore == nil {
+	if a.conf().SoundboardMuted || a.historyStore.Load() == nil {
 		return
 	}
 	go a.playOrFetchSound(sound)

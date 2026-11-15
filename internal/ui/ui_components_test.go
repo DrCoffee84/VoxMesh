@@ -65,7 +65,7 @@ func TestDeafenedSoundboardIsSilent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.historyStore = store
+	a.historyStore.Store(store)
 	sound := room.Sound{ID: history.NewID("p1"), Ext: ".pcm", Name: "Bocina"}
 
 	a.toggleDeafen()
