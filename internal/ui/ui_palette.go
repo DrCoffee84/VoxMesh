@@ -4,7 +4,9 @@ package ui
 
 import (
 	"errors"
+	"fmt"
 	"image/color"
+	"math"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -20,7 +22,8 @@ import (
 // Paletas en Ajustes → Interfaz (AGENDA C15): elegir una se aplica al instante (y "Descartar" la
 // revierte, como el resto del borrador); el editor cambia los colores sin aplicarlos hasta
 // "Aplicar", y "Guardar" / "Guardar como…" los dejan en una paleta propia. Las de fábrica no se
-// pisan, no se renombran ni se borran.
+// pisan, no se renombran ni se borran. En el editor, tono e intensidad mueven todos los colores
+// juntos y después se arregla de a uno el que quedó mal (AGENDA C32).
 
 // readPalette devuelve la paleta name (clave de una de fábrica o nombre de una propia). Lee un
 // archivo: fuera del hilo de UI. Si no está o no se lee, Default.
@@ -208,65 +211,158 @@ func (b *paletteBar) deletePalette() {
 }
 
 // paletteDraft es lo que se está editando: los colores no se ven en la app hasta "Aplicar".
+//
+// Tono e intensidad (AGENDA C32) mueven todos los colores juntos. Cada color guarda cómo se veía y
+// con qué tono e intensidad (draftColor), y lo que se ve se calcula de nuevo desde ahí en cada
+// movimiento: ir y volver deja los colores exactos (los redondeos no se acumulan) y uno elegido de
+// a uno gira con los demás desde donde se eligió.
 type paletteDraft struct {
-	name   string // paleta de la que salió (activa al abrir el editor)
-	light  bool
-	colors map[fyne.ThemeColorName]color.Color
+	name       string // paleta de la que salió (activa al abrir el editor)
+	light      bool
+	hue        float64 // grados que gira el tono, −180…180
+	saturation float64 // intensidad: factor de la saturación, 1 = como está
+	moveStatus bool    // tono e intensidad mueven también paletteStatusColors
+	colors     map[fyne.ThemeColorName]draftColor
+}
+
+// draftColor es un color del borrador: c es como se veía con el tono hue y la intensidad saturation.
+type draftColor struct {
+	c               color.NRGBA
+	hue, saturation float64
 }
 
 func newPaletteDraft(p palette) *paletteDraft {
-	draft := &paletteDraft{name: p.name, light: p.light, colors: make(map[fyne.ThemeColorName]color.Color, len(paletteEntries))}
+	draft := &paletteDraft{name: p.name, light: p.light, saturation: 1, colors: make(map[fyne.ThemeColorName]draftColor, len(paletteEntries))}
 	for _, entry := range paletteEntries {
-		draft.colors[entry.name] = p.color(entry.name)
+		draft.colors[entry.name] = draftColor{c: color.NRGBAModel.Convert(p.color(entry.name)).(color.NRGBA), saturation: 1}
 	}
 	return draft
 }
 
+// moves dice si tono e intensidad mueven el color name.
+func (d *paletteDraft) moves(name fyne.ThemeColorName) bool {
+	return d.moveStatus || !paletteStatusColors[name]
+}
+
+// shown es el color name como se ve ahora: en las muestras y en la app al aplicar o guardar.
+func (d *paletteDraft) shown(name fyne.ThemeColorName) color.NRGBA {
+	dc := d.colors[name]
+	if !d.moves(name) || (dc.hue == d.hue && dc.saturation == d.saturation) {
+		return dc.c
+	}
+	factor := 1.0 // elegido con la intensidad en 0 %: conserva la saturación con la que se eligió
+	if dc.saturation > 0 {
+		factor = d.saturation / dc.saturation
+	}
+	return shiftHue(dc.c, d.hue-dc.hue, factor)
+}
+
+// pick pone un color elegido de a uno: se ve tal cual y, si tono e intensidad lo mueven, gira con
+// los demás desde los valores de ahora.
+func (d *paletteDraft) pick(name fyne.ThemeColorName, c color.Color) {
+	dc := draftColor{c: color.NRGBAModel.Convert(c).(color.NRGBA), saturation: 1}
+	if d.moves(name) {
+		dc.hue, dc.saturation = d.hue, d.saturation
+	}
+	d.colors[name] = dc
+}
+
 func (d *paletteDraft) palette(name string) palette {
 	colors := make(map[fyne.ThemeColorName]color.Color, len(d.colors))
-	for k, v := range d.colors {
-		colors[k] = v
+	for k := range d.colors {
+		colors[k] = d.shown(k)
 	}
 	return palette{name: name, light: d.light, colors: colors}
 }
 
+// hueText es el giro del tono con signo ("+40", "0", "-40").
+func hueText(degrees float64) string {
+	if d := int(math.Round(degrees)); d != 0 {
+		return fmt.Sprintf("%+d", d)
+	}
+	return "0"
+}
+
+// paletteEditor es el diálogo "Editar colores…". Solo hilo de UI.
+type paletteEditor struct {
+	original palette // la activa al abrir: vuelve al cerrar si se aplicó sin guardar
+	draft    *paletteDraft
+	applied  bool                // se aplicó el borrador y no se guardó
+	swatches []*canvas.Rectangle // una por paletteEntries, en ese orden
+
+	hue, saturation           *widget.Slider
+	hueLabel, saturationLabel *widget.Label
+	moveStatus                *widget.Check
+	applyButton               *widget.Button
+	closeButton               *widget.Button
+	dialog                    *dialog.CustomDialog
+}
+
 // showPaletteEditor abre el editor de la paleta activa (hilo de UI).
 func (a *App) showPaletteEditor(bar *paletteBar) {
-	original := a.palette
-	draft := newPaletteDraft(original)
-	applied := false // se aplicó el borrador y no se guardó: al cerrar vuelve la paleta activa
+	a.newPaletteEditor(bar).dialog.Show()
+}
+
+// newPaletteEditor arma el editor sin mostrarlo.
+func (a *App) newPaletteEditor(bar *paletteBar) *paletteEditor {
+	e := &paletteEditor{original: a.palette, draft: newPaletteDraft(a.palette)}
 	rows := container.NewVBox()
 	for _, entry := range paletteEntries {
 		entry := entry
-		swatch := canvas.NewRectangle(draft.colors[entry.name])
+		swatch := canvas.NewRectangle(e.draft.shown(entry.name))
 		swatch.CornerRadius = 4
 		swatch.StrokeColor = color.NRGBA{R: 0x80, G: 0x80, B: 0x80, A: 0xff}
 		swatch.StrokeWidth = 1
 		swatch.SetMinSize(fyne.NewSize(56, 22))
+		e.swatches = append(e.swatches, swatch)
 		pick := widget.NewButton("", func() {
 			picker := dialog.NewColorPicker(i18n.T(entry.label), "", func(c color.Color) {
-				draft.colors[entry.name] = c
-				swatch.FillColor = c
-				swatch.Refresh()
+				e.draft.pick(entry.name, c)
+				e.refresh()
 			}, a.window)
 			picker.Advanced = true
-			picker.SetColor(draft.colors[entry.name])
+			picker.SetColor(e.draft.shown(entry.name))
 			picker.Show()
 		})
 		rows.Add(container.NewBorder(nil, nil, nil, container.NewStack(pick, container.NewPadded(swatch)), widget.NewLabel(i18n.T(entry.label))))
 	}
-	lightCheck := widget.NewCheck(i18n.T("palette.light"), func(on bool) { draft.light = on })
-	lightCheck.SetChecked(draft.light)
+	lightCheck := widget.NewCheck(i18n.T("palette.light"), func(on bool) { e.draft.light = on })
+	lightCheck.SetChecked(e.draft.light)
 	help := widget.NewLabel(i18n.T("palette.editor_help"))
 	help.Wrapping = fyne.TextWrapWord
 	help.Importance = widget.LowImportance
-	scroll := container.NewVScroll(rows)
-	scroll.SetMinSize(fyne.NewSize(380, 360))
-	content := container.NewBorder(container.NewVBox(help, lightCheck), nil, nil, nil, scroll)
 
-	var editor *dialog.CustomDialog
+	// Tono e intensidad: arrancan en 0° y 100 % (se guarda el resultado, no los sliders).
+	e.hueLabel = widget.NewLabel("")
+	e.hue = widget.NewSlider(-180, 180)
+	e.hue.Step = 1
+	e.hue.OnChanged = func(v float64) {
+		e.draft.hue = v
+		e.refresh()
+	}
+	e.saturationLabel = widget.NewLabel("")
+	e.saturation = widget.NewSlider(0, 200)
+	e.saturation.Step = 1
+	e.saturation.Value = 100
+	e.saturation.OnChanged = func(v float64) {
+		e.draft.saturation = v / 100
+		e.refresh()
+	}
+	e.moveStatus = widget.NewCheck(i18n.T("palette.move_status"), func(on bool) {
+		e.draft.moveStatus = on
+		e.refresh()
+	})
+	e.refresh()
+
+	scroll := container.NewVScroll(rows)
+	scroll.SetMinSize(fyne.NewSize(380, 200))
+	top := container.NewVBox(help, lightCheck,
+		container.NewGridWithColumns(2, container.NewVBox(e.hueLabel, e.hue), container.NewVBox(e.saturationLabel, e.saturation)),
+		e.moveStatus)
+	content := container.NewBorder(top, nil, nil, nil, scroll)
+
 	write := func(name string) {
-		file := draft.palette(name).file(name)
+		file := e.draft.palette(name).file(name)
 		go func() {
 			err := a.palettes.Save(file, paletteReservedNames())
 			names, _ := a.palettes.List(paletteReservedNames())
@@ -275,12 +371,12 @@ func (a *App) showPaletteEditor(bar *paletteBar) {
 					a.setStatus(i18n.M("palette.save_failed", errorMsg(err)))
 					return
 				}
-				applied = false
+				e.applied = false
 				a.updateConfig(func(c *config.Config) { setActivePalette(c, name) })
 				a.applyPalette(paletteFromFile(file))
 				bar.setOptions(names, name)
 				a.setStatus(i18n.M("palette.saved", name))
-				editor.Hide()
+				e.dialog.Hide()
 			})
 		}()
 	}
@@ -299,26 +395,38 @@ func (a *App) showPaletteEditor(bar *paletteBar) {
 			write(name)
 		})
 	}
-	applyButton := widget.NewButton(i18n.T("palette.apply"), func() {
-		applied = true
-		a.applyPalette(draft.palette(original.name))
+	e.applyButton = widget.NewButton(i18n.T("palette.apply"), func() {
+		e.applied = true
+		a.applyPalette(e.draft.palette(e.original.name))
 	})
 	saveButton := widget.NewButton(i18n.T("common.save"), func() {
-		if isBuiltinPalette(original.name) {
+		if isBuiltinPalette(e.original.name) {
 			saveAs() // las de fábrica no se pisan
 			return
 		}
-		write(original.name)
+		write(e.original.name)
 	})
 	saveButton.Importance = widget.HighImportance
-	closeButton := widget.NewButton(i18n.T("common.close"), func() {
-		if applied {
-			a.applyPalette(original) // lo aplicado sin guardar no queda
+	e.closeButton = widget.NewButton(i18n.T("common.close"), func() {
+		if e.applied {
+			a.applyPalette(e.original) // lo aplicado sin guardar no queda
 		}
-		editor.Hide()
+		e.dialog.Hide()
 	})
-	editor = dialog.NewCustomWithoutButtons(i18n.T("palette.editor_title", paletteLabel(original.name)), content, a.window)
-	editor.SetButtons([]fyne.CanvasObject{closeButton, applyButton, widget.NewButton(i18n.T("profile.save_as"), saveAs), saveButton})
-	editor.Resize(fyne.NewSize(460, 560))
-	editor.Show()
+	e.dialog = dialog.NewCustomWithoutButtons(i18n.T("palette.editor_title", paletteLabel(e.original.name)), content, a.window)
+	e.dialog.SetButtons([]fyne.CanvasObject{e.closeButton, e.applyButton, widget.NewButton(i18n.T("profile.save_as"), saveAs), saveButton})
+	e.dialog.Resize(fyne.NewSize(460, 720)) // Fyne lo achica a la ventana si no entra
+	return e
+}
+
+// refresh repinta las muestras y los textos de los sliders con el borrador (solo lo que cambió).
+func (e *paletteEditor) refresh() {
+	e.hueLabel.SetText(i18n.T("palette.hue", hueText(e.draft.hue)))
+	e.saturationLabel.SetText(i18n.T("palette.saturation", int(math.Round(e.draft.saturation*100))))
+	for i, entry := range paletteEntries {
+		if c := e.draft.shown(entry.name); e.swatches[i].FillColor != color.Color(c) {
+			e.swatches[i].FillColor = c
+			e.swatches[i].Refresh()
+		}
+	}
 }

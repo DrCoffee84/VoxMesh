@@ -306,6 +306,88 @@ func luminance(c color.NRGBA) float64 {
 	return 0.2126*channel(c.R) + 0.7152*channel(c.G) + 0.0722*channel(c.B)
 }
 
+// paletteStatusColors son los colores que significan algo: éxito, advertencia, error, hablando
+// (y la inicial del avatar mientras habla), grito y el semáforo del medidor. Los sliders de tono e
+// intensidad del editor los mueven solo con "Mover también los colores de estado" (AGENDA C32). El
+// verde del lag es el de "hablando".
+var paletteStatusColors = map[fyne.ThemeColorName]bool{
+	theme.ColorNameSuccess:      true,
+	theme.ColorNameWarning:      true,
+	theme.ColorNameError:        true,
+	colorNameSpeaking:           true,
+	colorNameAvatarTextSpeaking: true,
+	colorNameShout:              true,
+	colorNameMeterFill:          true,
+	colorNameMeterHeld:          true,
+}
+
+// shiftHue gira el tono (HSL) de c degrees grados y multiplica su saturación por saturation (1 =
+// igual; tope 100 %), sin tocar la luz ni el alfa (AGENDA C32). Un gris no cambia; con 0° y 1
+// devuelve c tal cual, sin pasar por HSL.
+func shiftHue(c color.Color, degrees, saturation float64) color.NRGBA {
+	n := color.NRGBAModel.Convert(c).(color.NRGBA)
+	if degrees == 0 && saturation == 1 {
+		return n
+	}
+	h, s, l := rgbToHSL(n)
+	h = math.Mod(h+degrees, 360)
+	if h < 0 {
+		h += 360
+	}
+	s = math.Max(0, math.Min(1, s*saturation))
+	r, g, b := hslToRGB(h, s, l)
+	return color.NRGBA{R: r, G: g, B: b, A: n.A}
+}
+
+// rgbToHSL pasa c a tono (0–360), saturación y luz (0–1).
+func rgbToHSL(c color.NRGBA) (h, s, l float64) {
+	r, g, b := float64(c.R)/255, float64(c.G)/255, float64(c.B)/255
+	high, low := math.Max(r, math.Max(g, b)), math.Min(r, math.Min(g, b))
+	l = (high + low) / 2
+	d := high - low
+	if d == 0 {
+		return 0, 0, l
+	}
+	s = d / (1 - math.Abs(2*l-1))
+	switch high {
+	case r:
+		h = math.Mod((g-b)/d, 6)
+	case g:
+		h = (b-r)/d + 2
+	default:
+		h = (r-g)/d + 4
+	}
+	h *= 60
+	if h < 0 {
+		h += 360
+	}
+	return h, s, l
+}
+
+// hslToRGB es la vuelta de rgbToHSL (h en 0–360).
+func hslToRGB(h, s, l float64) (r, g, b uint8) {
+	chroma := (1 - math.Abs(2*l-1)) * s
+	x := chroma * (1 - math.Abs(math.Mod(h/60, 2)-1))
+	var r1, g1, b1 float64
+	switch {
+	case h < 60:
+		r1, g1 = chroma, x
+	case h < 120:
+		r1, g1 = x, chroma
+	case h < 180:
+		g1, b1 = chroma, x
+	case h < 240:
+		g1, b1 = x, chroma
+	case h < 300:
+		r1, b1 = x, chroma
+	default:
+		r1, b1 = chroma, x
+	}
+	m := l - chroma/2
+	channel := func(v float64) uint8 { return uint8(math.Round(math.Max(0, math.Min(1, v+m)) * 255)) }
+	return channel(r1), channel(g1), channel(b1)
+}
+
 // file pasa la paleta a su archivo con todos los colores de paletteEntries (los efectivos).
 func (p palette) file(name string) config.PaletteFile {
 	file := config.PaletteFile{Name: name, Light: p.light, Colors: make(map[string]string, len(paletteEntries))}
