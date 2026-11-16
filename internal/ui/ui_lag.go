@@ -127,15 +127,25 @@ func (a *App) toggleLagGraph() {
 		if chip.strip == nil {
 			continue
 		}
+		chip.setStripShown(shown)
 		if shown {
-			chip.strip.Show()
 			chip.strip.redraw()
-		} else {
-			chip.strip.Hide()
 		}
 	}
 	if a.peerHBox != nil {
 		a.peerHBox.Refresh() // el chip cambia de alto
+	}
+}
+
+// setStripShown muestra u oculta la tira del chip junto con su HBox: el HBox vacío pero visible le
+// sumaba al chip el relleno del VBox (C36: con los sliders ocultos el chip no se achicaba del todo).
+func (c *peerChip) setStripShown(shown bool) {
+	if shown {
+		c.stripRow.Show()
+		c.strip.Show()
+	} else {
+		c.strip.Hide()
+		c.stripRow.Hide()
 	}
 }
 

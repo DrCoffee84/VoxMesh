@@ -16,6 +16,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"voxmesh/internal/config"
 	"voxmesh/internal/i18n"
 	"voxmesh/internal/imagefile"
 	"voxmesh/internal/logging"
@@ -188,7 +189,7 @@ func (a *App) content() fyne.CanvasObject {
 	a.refreshPeerAvatars()
 	peerScroll := container.NewHScroll(a.peerHBox)
 	peerScroll.SetMinSize(fyne.NewSize(120, 38))
-	statusCard := uiCard(container.NewBorder(nil, nil, cardTitle(i18n.T("main.in_room")), a.newLagToggle(), peerScroll))
+	statusCard := uiCard(container.NewBorder(nil, nil, cardTitle(i18n.T("main.in_room")), container.NewHBox(a.newSlidersToggle(), a.newLagToggle()), peerScroll))
 
 	a.chatSearch = widget.NewEntry()
 	a.chatSearch.SetPlaceHolder(i18n.T("chat.search_placeholder"))
@@ -684,8 +685,12 @@ type peerChip struct {
 	lagLine     *fyne.Container // el renglón: lagTxt + hostTag
 	volumeTxt   *canvas.Text    // nil para el propio (no hay volumen de uno mismo)
 	strip       *lagStrip       // tira de lag (C18); nil para el propio
+	stripRow    *fyne.Container // el HBox de la tira: se oculta con ella (oculto, no suma relleno al chip)
 	gate        *selfGate       // "desde qué volumen me toma la voz" (C22); solo el propio
-	object      fyne.CanvasObject
+	// sliders es el slider del chip: el volumen de cada uno o el propio (gate.object). El ícono de
+	// la barra los oculta (C36).
+	sliders fyne.CanvasObject
+	object  fyne.CanvasObject
 }
 
 func (a *App) refreshPeerAvatars() {
@@ -756,6 +761,7 @@ func (a *App) refreshPeerAvatars() {
 // newPeerChip arma el chip de un participante: avatar con inicial y badge de mute, nombre, lag
 // y, para los demás, el slider de volumen individual (0–300 %).
 func (a *App) newPeerChip(peer peerView) *peerChip {
+	cfg := a.conf()
 	chip := &peerChip{id: peer.id, name: peer.name, isSelf: peer.isSelf}
 	initial := "U"
 	if trimmed := strings.TrimSpace(peer.name); len(trimmed) > 0 {
@@ -787,14 +793,18 @@ func (a *App) newPeerChip(peer peerView) *peerChip {
 		chip.viewBtn.Hide()
 		// La tira de lag, del ancho del slider (el HBox no la estira); oculta salvo que se pidió.
 		chip.strip = a.newLagStrip(peer.name)
-		if !a.conf().ShowLagGraph {
-			chip.strip.Hide()
-		}
-		content = container.NewVBox(content, container.NewHBox(chip.strip), a.newPeerVolumeSlider(chip), chip.viewBtn)
+		chip.stripRow = container.NewHBox(chip.strip)
+		chip.setStripShown(cfg.ShowLagGraph)
+		chip.sliders = a.newPeerVolumeSlider(chip)
+		content = container.NewVBox(content, chip.stripRow, chip.sliders, chip.viewBtn)
 	} else {
 		// El propio: desde qué volumen te toma la voz (C22), donde los demás tienen el volumen.
 		chip.gate = a.newSelfGate()
-		content = container.NewVBox(content, chip.gate.object)
+		chip.sliders = chip.gate.object
+		content = container.NewVBox(content, chip.sliders)
+	}
+	if cfg.HidePeerSliders {
+		chip.sliders.Hide()
 	}
 
 	pillBg := newThemedRect(colorNameChip, 8)
@@ -850,6 +860,62 @@ func (a *App) newPeerVolumeSlider(chip *peerChip) fyne.CanvasObject {
 
 func formatPeerVolume(volume float64) string {
 	return fmt.Sprintf("%d%%", int(volume*100+0.5))
+}
+
+// Ícono de los sliders de la barra de participantes (Material "tune"): en el color de acento
+// mientras se ven, como el del lag.
+var (
+	tuneResource = fyne.NewStaticResource("tune.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/></svg>`))
+	tuneIcon     = theme.NewThemedResource(tuneResource)
+	tuneOnIcon   = theme.NewPrimaryThemedResource(tuneResource)
+)
+
+// newSlidersToggle es el ícono de la barra de participantes, al lado del de lag, que oculta y
+// muestra los sliders de todos los chips (C36).
+func (a *App) newSlidersToggle() *hintButton {
+	a.slidersToggle = a.newHintButton(tuneIcon, "", a.togglePeerSliders)
+	a.setSlidersToggleLook(!a.conf().HidePeerSliders)
+	return a.slidersToggle
+}
+
+// setSlidersToggleLook pone el ícono y la leyenda según si los sliders se ven (sin Refresh).
+func (a *App) setSlidersToggleLook(shown bool) {
+	if shown {
+		a.slidersToggle.Icon, a.slidersToggle.hint = tuneOnIcon, i18n.T("main.sliders_hide")
+	} else {
+		a.slidersToggle.Icon, a.slidersToggle.hint = tuneIcon, i18n.T("main.sliders_show")
+	}
+}
+
+// togglePeerSliders (hilo de UI, el ícono) oculta o muestra los sliders de todos los chips y lo
+// guarda. Ocultos, Fyne no los dibuja y el nivel propio se suelta del medidor (setSelfGateWidgets):
+// no se pinta nada. Al mostrarlos, el slider propio toma lo que haya cambiado en Ajustes.
+func (a *App) togglePeerSliders() {
+	hidden := !a.conf().HidePeerSliders
+	a.updateConfig(func(c *config.Config) { c.HidePeerSliders = hidden })
+	a.saveConfig()
+	if a.slidersToggle != nil {
+		a.setSlidersToggleLook(!hidden)
+		a.slidersToggle.Refresh()
+	}
+	var gate *selfGate
+	for _, chip := range a.peerChips {
+		if hidden {
+			chip.sliders.Hide()
+		} else {
+			chip.sliders.Show()
+		}
+		if chip.gate != nil {
+			gate = chip.gate
+		}
+	}
+	if gate != nil && !hidden {
+		gate.refresh(a.conf())
+	}
+	a.setSelfGateWidgets(gate)
+	if a.peerHBox != nil {
+		a.peerHBox.Refresh() // el chip cambia de alto
+	}
 }
 
 // update refleja peer en los widgets del chip (solo lo que cambió, para no refrescar de más).

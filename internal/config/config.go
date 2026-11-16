@@ -60,6 +60,10 @@ type Config struct {
 	// ShowLagGraph muestra la tira de lag debajo de cada participante (AGENDA C18; oculta por
 	// defecto). La escribe el ícono de la barra de participantes; Ajustes no la toca.
 	ShowLagGraph bool `json:"show_lag_graph,omitempty"`
+	// HidePeerSliders oculta los sliders de la barra de participantes (AGENDA C36): el volumen de
+	// cada uno y el propio con su nivel en vivo. Apagado (de fábrica) se ven. La escribe el ícono de
+	// la barra de participantes; Ajustes no la toca.
+	HidePeerSliders bool `json:"hide_peer_sliders,omitempty"`
 	// TrayHintOff es el "No volver a mostrar" del aviso que sale cuando la X oculta la app en el
 	// área de notificaciones (AGENDA C21). Lo escribe ese aviso; Ajustes no lo toca.
 	TrayHintOff bool `json:"tray_hint_off,omitempty"`

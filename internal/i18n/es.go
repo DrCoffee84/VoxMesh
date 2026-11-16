@@ -197,6 +197,8 @@ var es = map[string]string{
 	"chat.image_open_failed":    "No se pudo abrir la imagen.",
 	"main.peer_local":           "Local",
 	"main.peer_host":            "Host",
+	"main.sliders_hide":         "Ocultar volúmenes",
+	"main.sliders_show":         "Mostrar volúmenes",
 	"main.self_gate_hint":       "Desde qué volumen te toma la voz. Más a la derecha = tenés que hablar más fuerte.",
 	"main.self_gate_off":        "La puerta de ruido está apagada: moverlo la prende.",
 	"main.self_gate_filter_off": "Con \"Aplicar filtro de voz\" apagado se manda todo, sin volumen mínimo (Ajustes → Entrada y salida).",

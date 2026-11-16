@@ -182,8 +182,12 @@ func (a *App) onSelfGateMeter(m inputMeter) {
 }
 
 // setSelfGateWidgets engancha (o suelta, con nil) el slider propio y el oyente del medidor. Hilo
-// de UI: lo llama refreshPeerAvatars al rearmar los chips.
+// de UI: lo llaman refreshPeerAvatars al rearmar los chips y el ícono que oculta los sliders. Con
+// los sliders ocultos (C36) lo suelta: el medidor ni llama al oyente, cero fyne.Do.
 func (a *App) setSelfGateWidgets(g *selfGate) {
+	if a.conf().HidePeerSliders {
+		g = nil
+	}
 	a.selfGate = g
 	if g == nil {
 		a.selfGateMeter.Store(nil)

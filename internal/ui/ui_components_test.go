@@ -17,6 +17,76 @@ import (
 	"voxmesh/internal/transport"
 )
 
+// TestPeerSlidersToggle (C36): el ícono oculta los sliders de todos los chips (el volumen de cada uno
+// y el propio), suelta el medidor del propio (no se pinta nada) y lo guarda; los chips se achican y un
+// chip que entra después respeta el estado; la tira de lag queda bajo el nombre. Al mostrarlos vuelve
+// el oyente y el slider propio toma lo que se cambió en Ajustes mientras tanto.
+func TestPeerSlidersToggle(t *testing.T) {
+	test.NewTempApp(t).Settings().SetTheme(voxTheme{})
+	a := newAppWithOwnConfig(t)
+	setLanguage(t, "es")
+	window := test.NewTempWindow(t, a.content())
+	window.Resize(fyne.NewSize(960, 700))
+	a.peerNames = []peerView{{id: lagSelfID, name: "Yo", isSelf: true}, {id: lagPepeID, name: "Pepe"}}
+	a.refreshPeerAvatars()
+	wantSliders := func(when string, shown bool) {
+		t.Helper()
+		for _, chip := range a.peerChips {
+			if chip.sliders.Visible() != shown {
+				t.Fatalf("%s: el slider de %s visible=%v, quería %v", when, chip.name, chip.sliders.Visible(), shown)
+			}
+		}
+	}
+	wantSliders("al arrancar", true)
+	if a.slidersToggle.hint != "Ocultar volúmenes" || a.selfGate != a.peerChips[0].gate || a.selfGateMeter.Load() == nil {
+		t.Fatalf("al arrancar: leyenda %q, slider propio enganchado %v", a.slidersToggle.hint, a.selfGateMeter.Load() != nil)
+	}
+	tall := a.peerChips[1].object.MinSize().Height
+
+	test.Tap(a.slidersToggle)
+	wantSliders("ocultos", false)
+	if !a.conf().HidePeerSliders || a.slidersToggle.hint != "Mostrar volúmenes" {
+		t.Fatalf("ocultos: config %v, leyenda %q", a.conf().HidePeerSliders, a.slidersToggle.hint)
+	}
+	if a.selfGate != nil || a.selfGateMeter.Load() != nil {
+		t.Fatal("ocultos: el nivel propio sigue enganchado al medidor")
+	}
+	self, pepe := a.peerChips[0].object.MinSize().Height, a.peerChips[1].object.MinSize().Height
+	if pepe >= tall || pepe != self {
+		t.Fatalf("ocultos: el chip de Pepe mide %v de alto (antes %v, el propio %v): quería más chico e igual al propio", pepe, tall, self)
+	}
+
+	// Uno que entra después sale sin slider, y el propio rearmado sigue suelto.
+	a.peerNames = append(a.peerNames, peerView{id: lagHostID, name: "Coffee"})
+	a.refreshPeerAvatars()
+	wantSliders("con uno nuevo", false)
+	if a.selfGateMeter.Load() != nil {
+		t.Fatal("al rearmar los chips se volvió a enganchar el nivel propio")
+	}
+
+	// Con la tira de lag: queda debajo del nombre.
+	test.Tap(a.lagToggle)
+	if chip := a.peerChips[1]; !chip.stripRow.Visible() || !chip.strip.Visible() || chip.sliders.Visible() {
+		t.Fatal("con la tira y los sliders ocultos: quería la tira sola debajo del nombre")
+	}
+	test.Tap(a.lagToggle)
+
+	// Mientras estaban ocultos se cambió el umbral en Ajustes.
+	a.updateConfig(func(c *config.Config) { c.ThresholdDB = -30 })
+	test.Tap(a.slidersToggle)
+	wantSliders("de nuevo a la vista", true)
+	if a.selfGate != a.peerChips[0].gate || a.selfGateMeter.Load() == nil || a.selfGate.slider.Value != -30 {
+		t.Fatalf("a la vista: enganchado %v, slider en %v (quería -30)", a.selfGateMeter.Load() != nil, a.peerChips[0].gate.slider.Value)
+	}
+
+	// Queda guardado para la próxima vez.
+	test.Tap(a.slidersToggle)
+	waitConfigSaved(a)
+	if saved, err := config.Load(a.cfgPath); err != nil || !saved.HidePeerSliders {
+		t.Fatalf("en disco: %v, oculto=%v", err, saved.HidePeerSliders)
+	}
+}
+
 // TestPeerChipShowsHost (C35): "Host" sale solo en el chip del host, delante del lag; si el host es
 // esta PC, en el propio y detrás: "Local · Host". Cuando cambia el host la etiqueta pasa al nuevo,
 // también sin rearmar los chips (mismos participantes en el mismo orden).

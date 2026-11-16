@@ -177,7 +177,8 @@ type App struct {
 	lagHistory          *lagHistory
 	lagView             *lagView // nil = ninguno abierto
 	lagToggle           *hintButton
-	peerLagRejectLogged time.Time // último PacketPeerLag descartado en el log; solo receiveLoop
+	slidersToggle       *hintButton // el que oculta los sliders de los chips (C36), al lado del de lag
+	peerLagRejectLogged time.Time   // último PacketPeerLag descartado en el log; solo receiveLoop
 
 	// Problemas en el registro de actividad (C14, problem_log.go): el tope por tipo (con su mutex) y
 	// las marcas que cada aviso deja para la línea de "volvió". echoFailed lo prende la goroutine de
