@@ -196,6 +196,15 @@ type App struct {
 	hiddenToTray bool        // la X ocultó la ventana (su estado ya se guardó al ocultarla)
 	trayHintOpen bool        // el aviso de la primera vez está abierto
 	quitting     atomic.Bool // quit ya empezó: corre una sola vez y nada vuelve a mostrar la ventana
+
+	// "En tu red" (F9): el servicio de presencia (lan_presence.go, con su mutex) y la tarjeta de la
+	// columna izquierda (ui_lan.go, solo el hilo de UI).
+	lan       lanPresence
+	lanPanel  *fyne.Container
+	lanHint   *widget.Label
+	lanList   *fyne.Container
+	lanScroll *container.Scroll
+	lanColumn *fyne.Container // "En tu red" + el registro de actividad (lanColumnLayout)
 }
 
 // appTitle es el título de la ventana principal (un nombre: no se traduce). Mientras comparto
@@ -332,6 +341,7 @@ func (a *App) Run(onShowRequest func(func())) {
 	a.startHotkeyListener()
 	a.startUIWatchdog()
 	go a.audioMonitorLoop()
+	go a.lanPresenceLoop()
 	// Tope blando de memoria en vez del debug.FreeOSMemory() cada 30 s: ese GC completo forzado
 	// frenaba las goroutines que asignan (también la de envío de audio) y competía con el hilo de
 	// UI. El runtime devuelve sola la memoria libre al sistema, de a poco.
@@ -400,6 +410,7 @@ func (a *App) quit(cleanup <-chan struct{}, after func()) {
 			case <-time.After(3 * time.Second):
 			}
 		}
+		a.stopLANPresence() // "me voy": sale de la lista de los demás ya
 		a.flushConfig()
 		if after != nil {
 			after()

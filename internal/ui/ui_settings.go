@@ -599,6 +599,7 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 	showStatusBarCheck := otherControls.control("show_status_bar")
 	closeToTrayCheck := otherControls.control("close_to_tray")
 	showLANInvitesCheck := otherControls.control("show_lan_invites")
+	lanPresenceCheck := otherControls.control("lan_presence_enabled")
 	// Entrada y Salida comparten pestaña: su título dice cuál es cuál. Las demás pestañas tienen
 	// una sola tarjeta, sin título (ya lo dice la pestaña).
 	inputCard := uiCard(container.NewVBox(
@@ -646,6 +647,7 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 		allowHostCheck,
 		upnpLeaseControl,
 		showLANInvitesCheck,
+		lanPresenceCheck,
 	))
 	openDataDirButton := widget.NewButtonWithIcon(i18n.T("settings.open_data"), theme.FolderOpenIcon(), func() {
 		if err := openDataDirectory(); err != nil {

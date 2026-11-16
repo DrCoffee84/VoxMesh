@@ -111,6 +111,8 @@ var en = map[string]string{
 	"param.close_to_tray.help":             "The X hides VoxMesh in the notification area and you stay in the room. To quit completely: click its icon → Quit.",
 	"param.show_lan_invites.label":         "Show LAN/VPN addresses when inviting",
 	"param.show_lan_invites.help":          "To invite over the same network or Radmin, Tailscale or ZeroTier. Not needed over the internet: if you don't use them, you can hide them.",
+	"param.lan_presence_enabled.label":     "Show up on my network (LAN/VPN)",
+	"param.lan_presence_enabled.help":      "Whoever has VoxMesh open on your network or on Radmin sees you under \"On your network\" and can call you, and you them. They only see your name and whether you're in a room. It may not work with Tailscale: keep using the invite there.",
 	"param.event_sounds_enabled.label":     "Event sounds (join, leave, chat)",
 	"param.allow_host_migration.label":     "Allow being backup host if the host disconnects",
 	"param.upnp_lease_hours.label":         "How long the port stays open (UPnP)",
@@ -312,6 +314,14 @@ var en = map[string]string{
 	"invite.copied":               "Invite copied (%s). Anyone with the invite can join.",
 	"invite.copied_port_closed":   "Invite copied (%s). UDP port %d didn't open by itself: unless you forwarded it on your router, nobody will be able to join.",
 	"invite.copied_double_nat":    "Invite copied (%s). Your router is behind another one: unless you also forwarded UDP port %d on the modem, nobody will be able to join.",
+
+	// "On your network" (F9): who has VoxMesh open on the LAN or VPN.
+	"lan.title":       "On your network",
+	"lan.available":   "Available",
+	"lan.in_room":     "In a room",
+	"lan.empty":       "Nobody on your network has VoxMesh open.",
+	"lan.off":         "Turned off in Settings → Network.",
+	"lan.unavailable": "Another program is using UDP port %d.",
 
 	// Audio de la sala y celular (audio_bridge.go).
 	"phone.ready_buffer":    "Phone mic ready with a %d ms buffer. Scan the QR from the same Wi-Fi.",

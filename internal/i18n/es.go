@@ -111,6 +111,8 @@ var es = map[string]string{
 	"param.close_to_tray.help":             "La X oculta VoxMesh en el área de notificaciones y seguís en la sala. Para salir del todo: clic en su ícono → Salir.",
 	"param.show_lan_invites.label":         "Mostrar direcciones LAN/VPN al invitar",
 	"param.show_lan_invites.help":          "Para invitar por la misma red o por Radmin, Tailscale o ZeroTier. Por internet no hace falta: si no las usás, podés ocultarlas.",
+	"param.lan_presence_enabled.label":     "Aparecer en mi red (LAN/VPN)",
+	"param.lan_presence_enabled.help":      "Los que tengan VoxMesh abierto en tu misma red o en Radmin te ven en \"En tu red\" y te pueden llamar, y vos a ellos. Solo ven tu nombre y si estás en una sala. Con Tailscale puede no funcionar: ahí seguí usando la invitación.",
 	"param.event_sounds_enabled.label":     "Sonidos de eventos (conexión, desconexión, chat)",
 	"param.allow_host_migration.label":     "Permitir ser Host de respaldo si el Host se desconecta",
 	"param.upnp_lease_hours.label":         "Tiempo que queda abierto el puerto (UPnP)",
@@ -312,6 +314,14 @@ var es = map[string]string{
 	"invite.copied":               "Invitación copiada (%s). Quien tenga la invitación puede entrar.",
 	"invite.copied_port_closed":   "Invitación copiada (%s). El puerto UDP %d no se abrió solo: si no lo abriste a mano en el router, no van a poder entrar.",
 	"invite.copied_double_nat":    "Invitación copiada (%s). Tu router está detrás de otro: si no abriste también el puerto UDP %d en el módem, no van a poder entrar.",
+
+	// "En tu red" (F9): quién tiene VoxMesh abierto en la LAN o VPN.
+	"lan.title":       "En tu red",
+	"lan.available":   "Disponible",
+	"lan.in_room":     "En una sala",
+	"lan.empty":       "Nadie de tu red tiene VoxMesh abierto.",
+	"lan.off":         "Apagado en Ajustes → Red.",
+	"lan.unavailable": "Otro programa ocupa el puerto UDP %d.",
 
 	// Audio de la sala y celular (audio_bridge.go).
 	"phone.ready_buffer":    "Micrófono de celular listo con %d ms de buffer. Escaneá el QR desde la misma Wi-Fi.",

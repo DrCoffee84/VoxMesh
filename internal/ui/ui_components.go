@@ -171,7 +171,9 @@ func (a *App) content() fyne.CanvasObject {
 
 	a.activityBox = container.NewVBox()
 	a.activityScroll = container.NewVScroll(a.activityBox)
-	a.activityScroll.SetMinSize(fyne.NewSize(180, 120))
+	// Alto mínimo bajo: con "En tu red" arriba (F9) la columna tiene que entrar en la ventana de
+	// fábrica. Con la ventana normal el registro tiene bastante más (lanColumnLayout).
+	a.activityScroll.SetMinSize(fyne.NewSize(180, 40))
 	clearLogsBtn := widget.NewButtonWithIcon("", theme.DeleteIcon(), func() {
 		fyne.Do(func() {
 			if a.activityBox != nil {
@@ -183,7 +185,8 @@ func (a *App) content() fyne.CanvasObject {
 	clearLogsBtn.Importance = widget.LowImportance
 	activityCard := uiCard(container.NewBorder(cardHeader(i18n.T("main.activity"), clearLogsBtn), nil, nil, nil, a.activityScroll))
 
-	a.connectionPanel = container.New(fixedWidthLayout{connectionPanelWidth}, container.NewBorder(topControls, nil, nil, nil, activityCard))
+	a.lanColumn = container.New(lanColumnLayout{app: a}, a.newLANCard(), activityCard)
+	a.connectionPanel = container.New(fixedWidthLayout{connectionPanelWidth}, container.NewBorder(topControls, nil, nil, nil, a.lanColumn))
 
 	a.peerHBox = container.NewHBox()
 	a.refreshPeerAvatars()
@@ -453,6 +456,9 @@ func (a *App) hideConnectionPanels() {
 	if a.clientPanel != nil {
 		a.clientPanel.Hide()
 	}
+	if a.lanPanel != nil {
+		a.lanPanel.Hide()
+	}
 	if a.connectionPanel != nil {
 		a.connectionPanel.Hide()
 	}
@@ -464,6 +470,9 @@ func (a *App) showConnectionPanels() {
 	}
 	if a.clientPanel != nil {
 		a.clientPanel.Show()
+	}
+	if a.lanPanel != nil {
+		a.lanPanel.Show()
 	}
 	if a.connectionPanel != nil {
 		a.connectionPanel.Show()

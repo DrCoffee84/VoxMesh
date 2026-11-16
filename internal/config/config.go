@@ -179,8 +179,9 @@ type LiveSettings struct {
 	// Fuera de los perfiles.
 	LiveMonitoring     bool `json:"live_monitoring"`
 	ShowStatusBar      bool `json:"show_status_bar"`
-	CloseToTray        bool `json:"close_to_tray"`    // la X oculta la ventana: sigue junto al reloj (AGENDA C21)
-	ShowLANInvites     bool `json:"show_lan_invites"` // "Invitar" del host: también las direcciones LAN/VPN
+	CloseToTray        bool `json:"close_to_tray"`        // la X oculta la ventana: sigue junto al reloj (AGENDA C21)
+	ShowLANInvites     bool `json:"show_lan_invites"`     // "Invitar" del host: también las direcciones LAN/VPN
+	LANPresence        bool `json:"lan_presence_enabled"` // "Aparecer en mi red" (F9): avisar, ver y llamar; apagado no abre ni el socket
 	EventSoundsEnabled bool `json:"event_sounds_enabled"`
 	AllowHostMigration bool `json:"allow_host_migration"`
 	UPnPLeaseHours     int  `json:"upnp_lease_hours"` // cuánto dura el puerto que abre UPnP al iniciar la sala

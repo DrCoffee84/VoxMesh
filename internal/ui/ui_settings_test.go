@@ -60,6 +60,7 @@ func testSettingsTabs(t *testing.T, lang string) {
 		{"QR del celular", 1, buttonWithText(i18n.T("settings.phone_show_qr"))},
 		{"puerto de la sala", 2, entryWithText("47830")},
 		{"LAN/VPN al invitar", 2, checkWithText(paramLabel(config.ParamByKey("show_lan_invites")))},
+		{"aparecer en mi red", 2, checkWithText(paramLabel(config.ParamByKey("lan_presence_enabled")))},
 		{"nombre", 3, entryWithText("Pepe")},
 		{"idioma", 3, labelWithText(languageLabel)},
 		{"X a la bandeja", 3, checkWithText(paramLabel(config.ParamByKey("close_to_tray")))},

@@ -139,6 +139,9 @@ func TestNetworkParamDefaults(t *testing.T) {
 	if !cfg.ShowLANInvites {
 		t.Error("show_lan_invites tiene que venir prendido")
 	}
+	if !cfg.LANPresence || ParamByKey("lan_presence_enabled").Profile != "" {
+		t.Error("lan_presence_enabled tiene que venir prendido y fuera de los perfiles (F9)")
+	}
 	if cfg.UPnPLeaseHours != 8 {
 		t.Errorf("upnp_lease_hours por defecto = %d, quería 8", cfg.UPnPLeaseHours)
 	}

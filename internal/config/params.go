@@ -123,6 +123,7 @@ var Params = []Param{
 	{Key: "show_status_bar", Default: 1},
 	{Key: "close_to_tray", Default: 1},
 	{Key: "show_lan_invites", Default: 1},
+	{Key: "lan_presence_enabled", Default: 1},
 	{Key: "event_sounds_enabled", Default: 1},
 	{Key: "allow_host_migration", Default: 1},
 	// Lease de la regla UPnP. Sin 0 ("para siempre"): algunos routers lo toman como regla fija y, si
