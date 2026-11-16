@@ -680,9 +680,11 @@ type peerChip struct {
 	viewBtn     *widget.Button
 	nameTxt     *canvas.Text
 	lagTxt      *canvas.Text
-	volumeTxt   *canvas.Text // nil para el propio (no hay volumen de uno mismo)
-	strip       *lagStrip    // tira de lag (C18); nil para el propio
-	gate        *selfGate    // "desde qué volumen me toma la voz" (C22); solo el propio
+	hostTag     *fyne.Container // "Host" en el renglón del lag (C35), visible solo en el chip del host
+	lagLine     *fyne.Container // el renglón: lagTxt + hostTag
+	volumeTxt   *canvas.Text    // nil para el propio (no hay volumen de uno mismo)
+	strip       *lagStrip       // tira de lag (C18); nil para el propio
+	gate        *selfGate       // "desde qué volumen me toma la voz" (C22); solo el propio
 	object      fyne.CanvasObject
 }
 
@@ -775,8 +777,9 @@ func (a *App) newPeerChip(peer peerView) *peerChip {
 	chip.nameTxt.TextStyle = fyne.TextStyle{Bold: true}
 	chip.lagTxt = canvas.NewText("", mutedTextColor())
 	chip.lagTxt.TextSize = 10
+	chip.lagLine = newPeerLagLine(chip, peer.isSelf)
 
-	var content fyne.CanvasObject = container.NewHBox(avatarBox, container.NewVBox(chip.nameTxt, chip.lagTxt))
+	var content fyne.CanvasObject = container.NewHBox(avatarBox, container.NewVBox(chip.nameTxt, chip.lagLine))
 	if !peer.isSelf {
 		// "Ver pantalla" solo mientras comparte (update lo muestra u oculta).
 		chip.viewBtn = widget.NewButtonWithIcon(i18n.T("screen.view"), theme.ComputerIcon(), func() { a.watchScreen(chip.id, chip.name) })
@@ -797,6 +800,28 @@ func (a *App) newPeerChip(peer peerView) *peerChip {
 	pillBg := newThemedRect(colorNameChip, 8)
 	chip.object = container.NewStack(pillBg, container.NewPadded(content))
 	return chip
+}
+
+// newPeerLagLine arma el renglón chico debajo del nombre: el lag (o "Local") y, en el chip del host,
+// "Host" en el color de resaltado (C35): "Host · ● 35 ms" en los demás, "Local · Host" en el propio.
+// Va en textos aparte porque el lag lleva el color del semáforo; update muestra u oculta hostTag.
+func newPeerLagLine(chip *peerChip, isSelf bool) *fyne.Container {
+	host := canvas.NewText(i18n.T("main.peer_host"), theme.Color(theme.ColorNamePrimary))
+	host.TextSize = 10
+	host.TextStyle = fyne.TextStyle{Bold: true}
+	sep := canvas.NewText(" · ", mutedTextColor())
+	sep.TextSize = 10
+	line := layout.NewCustomPaddedHBoxLayout(0)
+	if isSelf {
+		chip.hostTag = container.New(line, sep, host)
+	} else {
+		chip.hostTag = container.New(line, host, sep)
+	}
+	chip.hostTag.Hide()
+	if isSelf {
+		return container.New(line, chip.lagTxt, chip.hostTag)
+	}
+	return container.New(line, chip.hostTag, chip.lagTxt)
 }
 
 // newPeerVolumeSlider es el control de volumen individual debajo del avatar, con curva en dB
@@ -881,6 +906,14 @@ func (c *peerChip) update(peer peerView, now time.Time) {
 		c.lagTxt.Text = lagText
 		c.lagTxt.Color = lagColor
 		c.lagTxt.Refresh()
+	}
+	if peer.isHost != c.hostTag.Visible() {
+		if peer.isHost {
+			c.hostTag.Show()
+		} else {
+			c.hostTag.Hide()
+		}
+		c.lagLine.Refresh() // Show de un Container no repinta (Fyne 2.6.3); el renglón cambia de ancho
 	}
 
 	displayName := peer.name

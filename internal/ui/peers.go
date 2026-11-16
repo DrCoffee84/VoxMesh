@@ -61,6 +61,7 @@ func (a *App) refreshPeersFromRoom() {
 			id:         a.participantID,
 			name:       selfName,
 			address:    "127.0.0.1",
+			isHost:     a.participantID == a.roomState.HostID, // "Local · Host" (C35)
 			isSelf:     true,
 			muted:      a.isMuted.Load(),
 			sharing:    a.screenShare.Load() != nil,

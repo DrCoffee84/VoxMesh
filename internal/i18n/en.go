@@ -196,6 +196,7 @@ var en = map[string]string{
 	"chat.image_loading":        "Loading image…",
 	"chat.image_open_failed":    "Couldn't open the image.",
 	"main.peer_local":           "Local",
+	"main.peer_host":            "Host",
 	"main.self_gate_hint":       "The volume from which your voice is picked up. Further right = you need to speak louder.",
 	"main.self_gate_off":        "The noise gate is off: moving this turns it on.",
 	"main.self_gate_filter_off": "With \"Apply voice filter\" off everything is sent, with no minimum volume (Settings → Input and output).",

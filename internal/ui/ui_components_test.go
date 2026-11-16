@@ -7,11 +7,93 @@ import (
 	"testing"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/test"
+	"fyne.io/fyne/v2/theme"
 
+	"voxmesh/internal/config"
 	"voxmesh/internal/history"
 	"voxmesh/internal/room"
+	"voxmesh/internal/transport"
 )
+
+// TestPeerChipShowsHost (C35): "Host" sale solo en el chip del host, delante del lag; si el host es
+// esta PC, en el propio y detrás: "Local · Host". Cuando cambia el host la etiqueta pasa al nuevo,
+// también sin rearmar los chips (mismos participantes en el mismo orden).
+func TestPeerChipShowsHost(t *testing.T) {
+	test.NewTempApp(t).Settings().SetTheme(voxTheme{})
+	a := New(filepath.Join(t.TempDir(), "voxmesh.exe"))
+	setLanguage(t, "es")
+	test.NewTempWindow(t, a.content())
+	key, err := transport.NewKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	udp, err := transport.Listen("127.0.0.1:0", key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udp.Close()
+	a.transport.Store(udp) // conectado: hay chip propio
+	defer a.transport.Store(nil)
+	a.updateConfig(func(c *config.Config) { c.Username = "Yo" }) // el chip propio lleva el de la config
+	a.participantID = lagSelfID
+	a.roomState = room.State{Name: "sala", Epoch: 1, HostID: lagHostID, Participants: []room.Participant{
+		{ID: lagHostID, Username: "Coffee", Address: "9.9.9.9:47830", Order: 0, Connected: true},
+		{ID: lagSelfID, Username: "Yo", Address: "[::]:47830", Order: 1, Connected: true},
+		{ID: lagPepeID, Username: "Pepe", Address: "8.8.8.8:47830", Order: 2, Connected: true},
+	}}
+	a.refreshPeersFromRoom()
+
+	chipOf := func(name string) *peerChip {
+		t.Helper()
+		for _, chip := range a.peerChips {
+			if chip.name == name {
+				return chip
+			}
+		}
+		t.Fatalf("no hay chip de %s", name)
+		return nil
+	}
+	wantHost := func(when, host string) {
+		t.Helper()
+		for _, chip := range a.peerChips {
+			if chip.hostTag.Visible() != (chip.name == host) {
+				t.Fatalf("%s: el chip de %s muestra Host=%v, quería solo en %s", when, chip.name, chip.hostTag.Visible(), host)
+			}
+		}
+	}
+	wantHost("al entrar", "Coffee")
+	coffee := chipOf("Coffee")
+	if coffee.lagLine.Objects[0] != coffee.hostTag || coffee.lagLine.Objects[1] != coffee.lagTxt {
+		t.Fatal("en los demás, Host va delante del lag")
+	}
+	if text := coffee.hostTag.Objects[0].(*canvas.Text); text.Text != "Host" || !text.TextStyle.Bold || text.Color != theme.Color(theme.ColorNamePrimary) {
+		t.Fatalf("la etiqueta dice %q (negrita %v, color %v), quería Host en negrita con el resaltado", text.Text, text.TextStyle.Bold, text.Color)
+	}
+
+	// Otro host, los mismos participantes: se actualizan los chips que ya estaban.
+	before := chipOf("Pepe")
+	a.roomState.HostID = lagPepeID
+	a.refreshPeersFromRoom()
+	if chipOf("Pepe") != before {
+		t.Fatal("se rearmaron los chips: quería actualizarlos")
+	}
+	wantHost("con Pepe de host", "Pepe")
+
+	// Esta PC queda de host (takeOverHost): el host viejo se desconecta.
+	a.roomState.HostID = lagSelfID
+	a.roomState.Participants[2].Connected = false
+	a.refreshPeersFromRoom()
+	wantHost("de host esta PC", "Yo")
+	self := chipOf("Yo")
+	if self.lagTxt.Text != "Local" || self.lagLine.Objects[0] != self.lagTxt || self.lagLine.Objects[1] != self.hostTag {
+		t.Fatalf("el propio dice %q: quería «Local · Host»", self.lagTxt.Text)
+	}
+	if sep := self.hostTag.Objects[0].(*canvas.Text); sep.Text != " · " {
+		t.Fatalf("separador %q", sep.Text)
+	}
+}
 
 // TestDeafenRestoresMute: ensordecer también mutea y al volver deja el mute de antes, con y sin
 // mute previo; tocar el micrófono estando ensordecido vuelve a escuchar y a hablar (como Discord).
