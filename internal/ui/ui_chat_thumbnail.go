@@ -100,12 +100,17 @@ func newChatThumbnail(path string) *canvas.Image {
 
 // releaseChatImages suelta los píxeles de las miniaturas de filas que salen del chat (C38): Fyne
 // guarda un rato el renderer de cada widget que se sacó, y con él la imagen, así que la memoria no
-// bajaba hasta su limpieza. Hilo de UI.
+// bajaba hasta su limpieza. De paso cierra la leyenda de una hora que tenía el mouse encima (C39):
+// sacada, no le llega el MouseOut. Hilo de UI.
 func releaseChatImages(rows []fyne.CanvasObject) {
 	for _, row := range rows {
 		switch o := row.(type) {
 		case *tappableImage:
 			o.image.Image = nil
+		case *chatStamp:
+			if o.hovered {
+				o.MouseOut()
+			}
 		case *fyne.Container:
 			releaseChatImages(o.Objects)
 		}

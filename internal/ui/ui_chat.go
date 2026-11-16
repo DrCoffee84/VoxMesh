@@ -241,7 +241,7 @@ func (a *App) addActivity(text string) {
 }
 
 func buildChatSegments(m history.Message, userColor fyne.ThemeColorName) []widget.RichTextSegment {
-	stamp := m.Timestamp.Local().Format("15:04")
+	stamp := m.Timestamp.Local().Format(chatStampFormat)
 	prefix := m.Username
 
 	stampStyle := widget.RichTextStyleInline
@@ -347,7 +347,9 @@ func (a *App) buildChatMessageObject(m history.Message, isMatch bool) fyne.Canva
 	})
 	copyWrap := container.NewGridWrap(fyne.NewSize(28, 24), copyBtn)
 
-	headerRow := container.NewBorder(nil, nil, nil, copyWrap, rt)
+	// La hora con su leyenda (C39), encima de la que dibuja rt.
+	text := container.New(stampLayout{}, rt, a.newChatStamp(m.Timestamp))
+	headerRow := container.NewBorder(nil, nil, nil, copyWrap, text)
 	var row fyne.CanvasObject = headerRow
 
 	if imagePath := a.chatImagePath(m); imagePath != "" && fileExists(imagePath) {

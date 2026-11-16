@@ -296,7 +296,13 @@ func newTooltip() *tooltip {
 
 // show muestra text debajo de anchor (arriba si abajo no entra), alineada a su borde derecho y
 // sin salirse de la ventana.
-func (t *tooltip) show(anchor fyne.CanvasObject, text string) {
+func (t *tooltip) show(anchor fyne.CanvasObject, text string) { t.place(anchor, text, false) }
+
+// showLeading es show alineada al borde izquierdo de anchor (la hora de un mensaje, C39: a la
+// izquierda del chat, alineada a la derecha tapaba la columna de al lado).
+func (t *tooltip) showLeading(anchor fyne.CanvasObject, text string) { t.place(anchor, text, true) }
+
+func (t *tooltip) place(anchor fyne.CanvasObject, text string, leading bool) {
 	driver := fyne.CurrentApp().Driver()
 	t.text.SetText(text)
 	size := t.box.MinSize()
@@ -304,6 +310,9 @@ func (t *tooltip) show(anchor fyne.CanvasObject, text string) {
 	at := driver.AbsolutePositionForObject(anchor).Subtract(driver.AbsolutePositionForObject(t.layer))
 	area := t.layer.Size()
 	x := at.X + anchor.Size().Width - size.Width
+	if leading {
+		x = at.X
+	}
 	y := at.Y + anchor.Size().Height + theme.Padding()
 	if y+size.Height > area.Height {
 		y = at.Y - size.Height - theme.Padding()
