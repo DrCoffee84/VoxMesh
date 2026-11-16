@@ -138,7 +138,7 @@ func TestChatBuildsLastRows(t *testing.T) {
 
 	// El buscador busca en todo: cuenta y arma hasta la coincidencia vieja, sin esconder el resto.
 	a.chatSearch.SetText("VIEJO")
-	if got := a.chatSearchCount.Text; got != "(1)" {
+	if got := a.chatSearchCount.Text; got != "1/1" { // "actual/total" desde C40
 		t.Fatalf("contador: %q", got)
 	}
 	if a.chatShown[0].ID != messages[3].ID || len(a.chatShown) != 63 {

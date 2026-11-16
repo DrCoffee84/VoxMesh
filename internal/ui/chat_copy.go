@@ -29,6 +29,7 @@ type rowHighlight struct {
 	rect    *canvas.Rectangle
 	hovered bool
 	anim    *fyne.Animation
+	flashes int // cuántas veces destelló (el driver de test corre la animación entera de una)
 }
 
 func newRowHighlight() *rowHighlight {
@@ -66,6 +67,7 @@ func (h *rowHighlight) hover(on bool) {
 
 // flash destella y vuelve a la opacidad de reposo en rowFlashTime.
 func (h *rowHighlight) flash() {
+	h.flashes++
 	if h.anim != nil {
 		h.anim.Stop()
 	}

@@ -200,12 +200,14 @@ func (a *App) content() fyne.CanvasObject {
 
 	a.chatSearch = widget.NewEntry()
 	a.chatSearch.SetPlaceHolder(i18n.T("chat.search_placeholder"))
-	a.chatSearch.OnChanged = func(string) { a.refreshChat() }
+	a.chatSearch.OnChanged = func(string) { a.chatSearchChanged() }
+	a.chatSearch.OnSubmitted = func(string) { a.moveChatMatch(matchPrev) } // Enter: hacia los más viejos (C40)
 	clearSearch := widget.NewButtonWithIcon("", theme.CancelIcon(), func() { a.chatSearch.SetText("") })
 	clearSearch.Importance = widget.LowImportance
 	a.chatSearch.ActionItem = clearSearch // como el buscador de la botonera
 	a.chatSearchCount = widget.NewLabel("")
-	searchBar := container.NewBorder(nil, nil, nil, a.chatSearchCount, a.chatSearch)
+	rangeButton, navRow := a.newChatSearchTools()
+	searchBar := container.NewVBox(container.NewBorder(nil, nil, nil, rangeButton, a.chatSearch), navRow)
 	chatTop := container.NewBorder(nil, nil, cardTitle(i18n.T("chat.title")), nil, a.roomSelect)
 	chatHeader := container.NewVBox(chatTop, searchBar)
 

@@ -112,6 +112,18 @@ type App struct {
 	chatShown []history.Message
 	chatLimit int
 	chatMore  *widget.Button
+	// Buscador del chat (C40), solo el hilo de UI: chatMarks va con chatShown (fila por fila);
+	// chatCurrentID es la coincidencia actual y chatRangeFrom / chatRangeTo los días del rango (nil =
+	// abierto). No van a la config: reloadChat los limpia.
+	chatMarks      []chatRowMarks
+	chatCurrentID  string
+	chatNav        *fyne.Container
+	chatRangeBtn   *hintButton
+	chatRangeFrom  *time.Time
+	chatRangeTo    *time.Time
+	chatRangePopup *widget.PopUp
+	chatFromEntry  *widget.DateEntry
+	chatToEntry    *widget.DateEntry
 	// Ensordecido (toggleDeafen): no suenan las voces ni la botonera. Solo en memoria, como el mute.
 	isDeafened      atomic.Bool
 	preDeafenMuted  bool // el mute de antes de ensordecer, para dejarlo al volver; solo el hilo de UI

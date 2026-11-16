@@ -4,7 +4,6 @@ package ui
 
 import (
 	"errors"
-	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -322,6 +321,13 @@ func shortLink(link string) string {
 }
 
 func (a *App) buildChatMessageObject(m history.Message, isMatch bool) fyne.CanvasObject {
+	row, _ := a.buildChatRow(m, isMatch, false)
+	return row
+}
+
+// buildChatRow arma la fila de m: resaltada si coincide con lo buscado y, si es la coincidencia
+// actual (C40), con el borde. Devuelve también las partes que cambian con el buscador.
+func (a *App) buildChatRow(m history.Message, isMatch, isCurrent bool) (fyne.CanvasObject, chatRowMarks) {
 	var userColor fyne.ThemeColorName
 	if m.SenderID == a.participantID || (m.Username != "" && m.Username == a.conf().Username) {
 		userColor = theme.ColorNameSuccess
@@ -361,11 +367,13 @@ func (a *App) buildChatMessageObject(m history.Message, isMatch bool) fyne.Canva
 		row = container.NewVBox(headerRow, container.NewHBox(clickableThumb))
 	}
 
+	marks := chatRowMarks{highlight: highlight}
 	if isMatch {
-		highlightBg := newThemedRect(colorNameChatMatch, 4)
-		return container.NewStack(highlightBg, highlight.rect, container.NewPadded(row))
+		marks.match = newThemedRect(colorNameChatMatch, 4)
+		marks.setCurrent(isCurrent)
+		return container.NewStack(marks.match, highlight.rect, container.NewPadded(row)), marks
 	}
-	return container.NewStack(highlight.rect, row)
+	return container.NewStack(highlight.rect, row), marks
 }
 
 // chatImagePath es dónde está la imagen de m ("" si no es una imagen o no hay sala). Está en la
@@ -407,85 +415,62 @@ func (a *App) chatSearchText() string {
 	return strings.ToLower(strings.TrimSpace(a.chatSearch.Text))
 }
 
-// chatMatches dice si m tiene lo buscado (search en minúsculas) en el texto o en el nombre.
-func chatMatches(m history.Message, search string) bool {
-	return search != "" && (strings.Contains(strings.ToLower(m.Text), search) || strings.Contains(strings.ToLower(m.Username), search))
-}
-
-// chatFirstRow es desde qué mensaje de visible se arman las filas: los últimos limit y, con algo
-// buscado, por lo menos hasta la coincidencia más nueva (C38: el buscador busca en todo).
-func chatFirstRow(visible []history.Message, limit int, search string) int {
-	from := max(0, len(visible)-limit)
-	if search == "" {
-		return from
-	}
-	for i := len(visible) - 1; i >= 0; i-- {
-		if chatMatches(visible[i], search) {
-			return min(from, i)
-		}
-	}
-	return from
-}
-
 func (a *App) refreshChat() {
 	fyne.Do(a.renderChat)
 }
 
 // reloadChat vuelve a los últimos maxChatRows y suelta las miniaturas: al cambiar de sala y al
-// colgar (C38).
+// colgar (C38). También saca el rango de fechas y la coincidencia actual del buscador (C40).
 func (a *App) reloadChat() {
 	fyne.Do(func() {
 		a.chatLimit = maxChatRows
 		thumbCache.clear()
+		a.clearChatSearchState()
 		a.renderChat()
 	})
 }
 
-// renderChat rearma las filas del chat (hilo de UI): las últimas chatLimit, con las coincidencias
-// del buscador resaltadas (sin esconder el resto) y su total en el contador.
+// renderChat rearma las filas del chat (hilo de UI): las últimas chatLimit y, con algo buscado, por
+// lo menos hasta la coincidencia actual (C38: el buscador busca en todo). Las coincidencias van
+// resaltadas, sin esconder el resto, y la actual con un borde; el contador dice "actual/total".
 func (a *App) renderChat() {
 	if a.chatBox == nil {
 		return
 	}
 	a.chatLimit = max(a.chatLimit, maxChatRows)
 	visible := a.chatVisibleMessages()
-	search := a.chatSearchText()
+	filter := a.chatFilter()
+	indexes := chatMatchIndexes(visible, filter)
+	current := a.chatCurrentPos(visible, indexes)
 
-	matchCount := 0
-	for _, m := range visible {
-		if chatMatches(m, search) {
-			matchCount++
-		}
+	from := max(0, len(visible)-a.chatLimit)
+	if current >= 0 {
+		from = min(from, indexes[current])
 	}
-	from := chatFirstRow(visible, a.chatLimit, search)
 	shown := visible[from:]
 	objects := make([]fyne.CanvasObject, 0, len(shown))
+	marks := make([]chatRowMarks, 0, len(shown))
 	for _, m := range shown {
-		objects = append(objects, a.buildChatMessageObject(m, chatMatches(m, search)))
+		row, rowMarks := a.buildChatRow(m, filter.matches(m), m.ID == a.chatCurrentID)
+		objects = append(objects, row)
+		marks = append(marks, rowMarks)
 	}
-
-	if a.chatSearchCount != nil {
-		if search == "" {
-			a.chatSearchCount.SetText("")
-		} else {
-			a.chatSearchCount.SetText(fmt.Sprintf("(%d)", matchCount))
-		}
-	}
+	a.setChatCounter(filter.active(), current, len(indexes))
 
 	// Fuera de una sala y sin mirar otra (al abrir la app y después de colgar, C31): en vez
 	// del chat vacío, cómo se entra.
 	if a.viewingRoomName == "" {
 		objects = []fyne.CanvasObject{noRoomHint()}
-		shown, from = nil, 0
+		shown, marks, from = nil, nil, 0
 	}
 
 	releaseChatImages(a.chatBox.Objects)
-	a.chatShown = shown
+	a.chatShown, a.chatMarks = shown, marks
 	a.keepChatThumbs()
 	a.setChatMore(from)
 	a.chatBox.Objects = objects
 	a.chatBox.Refresh()
-	if a.chatScroll != nil && search == "" {
+	if a.chatScroll != nil && !filter.active() {
 		a.chatScroll.ScrollToBottom()
 	}
 }
@@ -507,7 +492,7 @@ func (a *App) appendChatRows() {
 			}
 		}
 	}
-	if last < 0 || a.chatSearchText() != "" || a.viewingRoomName == "" {
+	if last < 0 || a.chatFilter().active() || a.viewingRoomName == "" {
 		a.renderChat()
 		return
 	}
@@ -517,16 +502,20 @@ func (a *App) appendChatRows() {
 	}
 	objects := append([]fyne.CanvasObject(nil), a.chatBox.Objects...)
 	shown := append(append([]history.Message(nil), a.chatShown...), added...)
+	marks := append([]chatRowMarks(nil), a.chatMarks...)
 	for _, m := range added {
-		objects = append(objects, a.buildChatMessageObject(m, false))
+		row, rowMarks := a.buildChatRow(m, false, false)
+		objects = append(objects, row)
+		marks = append(marks, rowMarks)
 	}
 	if over := len(shown) - a.chatLimit; over > 0 {
 		releaseChatImages(objects[:over])
 		// Copias nuevas: con objects[over:] el arreglo de atrás seguiría apuntando a las filas viejas.
 		objects = append([]fyne.CanvasObject(nil), objects[over:]...)
 		shown = append([]history.Message(nil), shown[over:]...)
+		marks = append([]chatRowMarks(nil), marks[over:]...)
 	}
-	a.chatShown = shown
+	a.chatShown, a.chatMarks = shown, marks
 	a.keepChatThumbs()
 	a.setChatMore(len(visible) - len(shown))
 	a.chatBox.Objects = objects
