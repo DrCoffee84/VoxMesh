@@ -61,7 +61,7 @@ func (n *testNode) setTargets(targets ...netip.AddrPort) {
 
 func (n *testNode) setInRoom(inRoom bool) {
 	n.mu.Lock()
-	n.status.InRoom = inRoom
+	n.status.InRoom, n.status.Room = inRoom, "Mi sala"
 	n.mu.Unlock()
 }
 
@@ -128,8 +128,14 @@ func TestServiceAnnouncesStatusChangeAtOnce(t *testing.T) {
 	}
 	b.setInRoom(true)
 	waitFor(t, "A ve que B entró a una sala", func() bool { return mustPeer(t, a, "Juan").InRoom })
+	if room := mustPeer(t, a, "Juan").Room; room != "Mi sala" {
+		t.Errorf("el aviso dice la sala (F10): %q", room)
+	}
 	b.setInRoom(false)
 	waitFor(t, "A ve que B salió", func() bool { return !mustPeer(t, a, "Juan").InRoom })
+	if room := mustPeer(t, a, "Juan").Room; room != "" {
+		t.Errorf("libre, sin sala: %q", room)
+	}
 }
 
 func mustPeer(t *testing.T, n *testNode, name string) Peer {

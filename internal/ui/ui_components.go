@@ -263,7 +263,10 @@ func (a *App) content() fyne.CanvasObject {
 	rightTop := container.NewHBox(inviteBtn, shareBtn, a.muteButton, a.deafenButton, a.topHangupBtn, widget.NewSeparator(), resetAudioBtn, settingsBtn)
 	// El banner de "Estás compartiendo tu pantalla" va debajo, a todo el ancho (oculto si no).
 	topBar := container.NewVBox(container.NewBorder(nil, nil, leftTop, rightTop, a.selfNameLabel), shareBanner)
-	centerPanel := container.NewBorder(statusCard, nil, nil, nil, chatCard)
+	// Los pedidos para entrar a la sala que esperan (F10) van arriba del chat: la columna del centro
+	// tiene alto de sobra (la que manda es la botonera) y el chat se achica.
+	a.knockBox = container.NewVBox()
+	centerPanel := container.NewBorder(container.NewVBox(statusCard, a.knockBox), nil, nil, nil, chatCard)
 	main := container.NewBorder(nil, nil, a.connectionPanel, a.soundPanel, centerPanel)
 	a.bottomBar = container.NewBorder(nil, nil, nil, container.NewHBox(buildVersion, openLogs), a.status)
 	if !a.conf().ShowStatusBar {
@@ -473,6 +476,7 @@ func (a *App) hideConnectionPanels() {
 	}
 	if a.lanPanel != nil {
 		a.lanPanel.Hide()
+		a.showLANPeers(a.lanSnapshot()) // en una sala, sin Entrar
 	}
 	if a.connectionPanel != nil {
 		a.connectionPanel.Hide()
@@ -488,6 +492,7 @@ func (a *App) showConnectionPanels() {
 	}
 	if a.lanPanel != nil {
 		a.lanPanel.Show()
+		a.showLANPeers(a.lanSnapshot()) // fuera de una sala, con Entrar
 	}
 	if a.connectionPanel != nil {
 		a.connectionPanel.Show()

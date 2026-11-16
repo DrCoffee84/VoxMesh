@@ -1,20 +1,24 @@
-// Package presence es "En tu red" (AGENDA F9): cada VoxMesh abierto avisa a su LAN o VPN quién es
-// y si está libre o en una sala, y se puede llamar a otro con un clic. No usa la clave de ninguna
-// sala: el aviso solo lleva un ID al azar de la sesión, el nombre y el estado, así que un
-// desconocido de la misma red (una red pública de Radmin, el Wi-Fi de un bar) solo ve nombres. La
-// invitación a la sala viaja recién cuando el llamado atiende, y solo a él.
+// Package presence es "En tu red" (AGENDA F9 y F10): cada VoxMesh abierto avisa a su LAN o VPN
+// quién es y si está libre o en qué sala, se puede llamar a otro con un clic y pedir entrar a la
+// sala de otro. No usa la clave de ninguna sala: el aviso solo lleva un ID al azar de la sesión, el
+// nombre, el estado y el nombre de la sala, así que un desconocido de la misma red (una red pública
+// de Radmin, el Wi-Fi de un bar) solo ve nombres. La invitación a la sala viaja recién cuando el
+// llamado atiende o el de la sala deja entrar, y solo a ese.
 //
-// Sin cgo y sin UI: el paquete (este archivo), la lista de quién está (roster.go) y los sockets
-// (service.go).
+// Sin cgo y sin UI: el paquete (este archivo), la lista de quién está (roster.go), los sockets
+// (service.go), la llamada (calls.go) y el pedido para entrar (joins.go).
 package presence
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"voxmesh/internal/identity"
 )
 
 // Port es el puerto UDP fijo donde todos escuchan los avisos. No se puede cambiar en Ajustes como
@@ -22,7 +26,8 @@ import (
 const Port = 47832
 
 // MaxPacket es el tamaño máximo de un paquete: el más grande (una llamada con el nombre y la sala
-// al tope) ocupa 406 bytes. Lo más grande se descarta sin leerlo.
+// al tope) ocupa 406 bytes; un aviso con el nombre y la sala al tope, 399. Lo más grande se
+// descarta sin leerlo.
 const MaxPacket = 512
 
 // Topes de los textos: los mismos que los de la sala (room.MaxUsernameRunes,
@@ -49,7 +54,12 @@ const (
 	KindAccept   Kind = 4 // "atiendo", directo al que llama
 	KindDecline  Kind = 5 // "rechazo" / "estoy con otra llamada" / "estoy en una sala" (Reason)
 	KindHangup   Kind = 6 // el que llama cortó (o se venció): el cartel del llamado se cierra
-	KindInvite   Kind = 7 // la invitación a la sala (VM1-…), solo después de "atiendo"
+	KindInvite   Kind = 7 // la invitación a la sala (VM1-…), solo después de "atiendo" o de dejar entrar
+	// Pedir entrar a la sala de otro (F10, joins.go): "quiero entrar" + mi llave → un número al
+	// azar → ese número firmado con mi privada. Lo demás reusa Decline, Hangup e Invite.
+	KindJoin      Kind = 8  // "quiero entrar" (Call = ID del pedido, Name, Key), directo al de la sala
+	KindChallenge Kind = 9  // el desafío: Nonce, de vuelta al que pide
+	KindProof     Kind = 10 // la respuesta: Sig = firma del desafío (joinProofMessage)
 )
 
 // Reason es por qué no se atendió (KindDecline).
@@ -59,6 +69,8 @@ const (
 	ReasonRejected Reason = 1 // tocó Rechazar
 	ReasonBusy     Reason = 2 // ya tiene otra llamada en pantalla
 	ReasonInRoom   Reason = 3 // está en una sala
+	ReasonNoRoom   Reason = 4 // (pedido para entrar) ya no está en una sala
+	ReasonNoAnswer Reason = 5 // (pedido para entrar) nadie contestó a tiempo (JoinTimeout)
 )
 
 // ID identifica una sesión de la app (el que avisa) o una llamada. Al azar: un ID nuevo cada vez
@@ -79,13 +91,16 @@ func (id ID) IsZero() bool { return id == ID{} }
 
 // Message es un paquete leído o por armar. Cada tipo usa solo algunos campos:
 //
-//	KindPresence: From, Name, InRoom
-//	KindBye:      From
-//	KindCall:     From, Call, Name (el que llama), Room (puede ir vacía)
-//	KindAccept:   From, Call
-//	KindDecline:  From, Call, Reason
-//	KindHangup:   From, Call
-//	KindInvite:   From, Call, Invite
+//	KindPresence:  From, Name, InRoom, Room (vacía fuera de una sala)
+//	KindBye:       From
+//	KindCall:      From, Call, Name (el que llama), Room (puede ir vacía)
+//	KindAccept:    From, Call
+//	KindDecline:   From, Call, Reason
+//	KindHangup:    From, Call
+//	KindInvite:    From, Call, Invite
+//	KindJoin:      From, Call (el pedido), Name (el que pide), Key (su llave pública)
+//	KindChallenge: From, Call, Nonce
+//	KindProof:     From, Call, Sig
 type Message struct {
 	Kind   Kind
 	From   ID
@@ -95,6 +110,9 @@ type Message struct {
 	InRoom bool
 	Reason Reason
 	Invite string
+	Key    identity.Key
+	Nonce  [32]byte
+	Sig    [ed25519.SignatureSize]byte
 }
 
 // Errores de Decode (para el log de lo descartado).
@@ -125,6 +143,11 @@ func Encode(m Message) ([]byte, error) {
 		}
 		out = append(out, status)
 		out = appendText(out, name)
+		room := ""
+		if m.InRoom {
+			room = cleanText(m.Room, MaxRoomRunes, maxRoomBytes)
+		}
+		out = appendText(out, room)
 	case KindBye:
 	case KindCall:
 		name := cleanText(m.Name, MaxNameRunes, maxNameBytes)
@@ -148,6 +171,20 @@ func Encode(m Message) ([]byte, error) {
 		}
 		out = append(out, m.Call[:]...)
 		out = appendText(out, m.Invite)
+	case KindJoin:
+		name := cleanText(m.Name, MaxNameRunes, maxNameBytes)
+		if name == "" || m.Key.IsZero() {
+			return nil, ErrText
+		}
+		out = append(out, m.Call[:]...)
+		out = appendText(out, name)
+		out = append(out, m.Key[:]...)
+	case KindChallenge:
+		out = append(out, m.Call[:]...)
+		out = append(out, m.Nonce[:]...)
+	case KindProof:
+		out = append(out, m.Call[:]...)
+		out = append(out, m.Sig[:]...)
 	default:
 		return nil, ErrKind
 	}
@@ -177,6 +214,10 @@ func Decode(b []byte) (Message, error) {
 			return Message{}, ErrMalformed
 		}
 		m.Name = r.text(maxNameBytes)
+		m.Room = r.text(maxRoomBytes)
+		if !m.InRoom && m.Room != "" {
+			return Message{}, ErrMalformed
+		}
 	case KindBye:
 	case KindCall:
 		r.id(&m.Call)
@@ -193,6 +234,19 @@ func Decode(b []byte) (Message, error) {
 	case KindInvite:
 		r.id(&m.Call)
 		m.Invite = r.text(MaxInviteBytes)
+	case KindJoin:
+		r.id(&m.Call)
+		m.Name = r.text(maxNameBytes)
+		r.bytes(m.Key[:])
+		if !r.bad && m.Key.IsZero() {
+			return Message{}, ErrMalformed
+		}
+	case KindChallenge:
+		r.id(&m.Call)
+		r.bytes(m.Nonce[:])
+	case KindProof:
+		r.id(&m.Call)
+		r.bytes(m.Sig[:])
 	default:
 		return Message{}, ErrKind
 	}
@@ -203,7 +257,7 @@ func Decode(b []byte) (Message, error) {
 		return Message{}, ErrText
 	}
 	switch m.Kind {
-	case KindPresence, KindCall:
+	case KindPresence, KindCall, KindJoin:
 		m.Name = cleanText(m.Name, MaxNameRunes, maxNameBytes)
 		m.Room = cleanText(m.Room, MaxRoomRunes, maxRoomBytes)
 		if m.Name == "" {
@@ -218,7 +272,7 @@ func Decode(b []byte) (Message, error) {
 }
 
 func validReason(r Reason) bool {
-	return r == ReasonRejected || r == ReasonBusy || r == ReasonInRoom
+	return r >= ReasonRejected && r <= ReasonNoAnswer
 }
 
 // validInvite: la invitación es ASCII imprimible (VM1-<base64url>), sin espacios. Qué dice la
@@ -290,6 +344,16 @@ func (r *reader) id(dst *ID) {
 		return
 	}
 	copy(dst[:], r.b)
+	r.b = r.b[len(dst):]
+}
+
+// bytes copia len(dst) bytes fijos (una llave, un número, una firma).
+func (r *reader) bytes(dst []byte) {
+	if r.bad || len(r.b) < len(dst) {
+		r.bad = true
+		return
+	}
+	copy(dst, r.b)
 	r.b = r.b[len(dst):]
 }
 

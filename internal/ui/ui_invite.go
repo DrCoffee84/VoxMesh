@@ -103,7 +103,7 @@ func (a *App) showInvitePopup(button *widget.Button, options []inviteOption, key
 			rows = append(rows, lanPeerRow(peer, func() {
 				pop.Hide()
 				a.callPeer(peer)
-			}))
+			}, nil)) // dentro de la sala no hay Entrar
 		}
 	}
 	pop = widget.NewPopUp(container.NewVBox(rows...), target)

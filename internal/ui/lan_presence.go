@@ -113,6 +113,8 @@ func (a *App) syncLANPresence(now time.Time) bool {
 			Status:   a.lanStatus,
 			OnChange: a.refreshLANCard,
 			OnCall:   a.onCallEvent,
+			OnJoin:   a.onJoinEvent,
+			Identity: a.ident(),
 		}
 		if l.testConfig != nil {
 			l.testConfig(&config)
@@ -156,14 +158,19 @@ func (a *App) stopLANPresence() {
 	}
 }
 
-// lanStatus es lo que dice el aviso propio: el nombre (como en la sala) y si estoy en una sala (o
-// entrando a una). Lo lee el servicio cada 250 ms, desde su goroutine.
+// lanStatus es lo que dice el aviso propio: el nombre (como en la sala), si estoy en una sala (o
+// entrando a una) y cuál (F10: la del historial abierto, vacía mientras un cliente todavía no sabe
+// cómo se llama). Lo lee el servicio cada 250 ms, desde su goroutine.
 func (a *App) lanStatus() presence.Status {
 	name := room.ClampUsername(a.conf().Username)
 	if name == "" {
 		name = i18n.T("default.username")
 	}
-	return presence.Status{Name: name, InRoom: a.connected()}
+	status := presence.Status{Name: name, InRoom: a.connected()}
+	if store := a.historyStore.Load(); status.InRoom && store != nil {
+		status.Room = store.RoomName()
+	}
+	return status
 }
 
 // lanSnapshot es el estado del servicio y quién está en la red ahora.

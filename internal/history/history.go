@@ -56,6 +56,9 @@ func New(root, roomName string) (*Store, error) {
 	return store, nil
 }
 
+// RoomName es el nombre de la sala del store (como se pidió en New).
+func (s *Store) RoomName() string { return s.roomName }
+
 func (s *Store) Add(message Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -22,6 +22,7 @@ type Peer struct {
 	ID     ID
 	Name   string
 	InRoom bool
+	Room   string         // en qué sala está (F10; vacía si está libre)
 	Addr   netip.AddrPort // de dónde llegó su aviso: su socket directo, adonde van las llamadas
 }
 
@@ -46,10 +47,10 @@ func NewRoster(self ID, ttl time.Duration) *Roster {
 }
 
 // Seen anota un aviso de id que llegó desde from. Devuelve si cambió lo que se muestra (alguien
-// nuevo, otro nombre u otro estado). Un ID vivo no cambia de dirección: si no, cualquiera de la red
+// nuevo, otro nombre, otro estado u otra sala). Un ID vivo no cambia de dirección: si no, cualquiera de la red
 // que copiara el ID de un aviso se quedaría con las llamadas a esa persona. Con otra dirección
 // recién entra cuando el registro viejo se venció.
-func (r *Roster) Seen(id ID, name string, inRoom bool, from netip.AddrPort, now time.Time) bool {
+func (r *Roster) Seen(id ID, name string, inRoom bool, room string, from netip.AddrPort, now time.Time) bool {
 	if id == r.self || id.IsZero() {
 		return false
 	}
@@ -63,15 +64,15 @@ func (r *Roster) Seen(id ID, name string, inRoom bool, from netip.AddrPort, now 
 			delete(r.peers, id) // vencido: ya no es de nadie
 		} else {
 			entry.seen = now
-			changed := entry.Name != name || entry.InRoom != inRoom
-			entry.Name, entry.InRoom = name, inRoom
+			changed := entry.Name != name || entry.InRoom != inRoom || entry.Room != room
+			entry.Name, entry.InRoom, entry.Room = name, inRoom, room
 			return changed
 		}
 	}
 	if len(r.peers) >= MaxPeers || r.countIP(from.Addr()) >= MaxPeersPerIP {
 		return false
 	}
-	r.peers[id] = &rosterEntry{Peer: Peer{ID: id, Name: name, InRoom: inRoom, Addr: from}, seen: now}
+	r.peers[id] = &rosterEntry{Peer: Peer{ID: id, Name: name, InRoom: inRoom, Room: room, Addr: from}, seen: now}
 	return true
 }
 

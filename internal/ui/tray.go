@@ -13,7 +13,8 @@ type trayState struct {
 	canHangUp bool // el botón de colgar de arriba está habilitado (en una sala o entrando a una)
 	muted     bool
 	deafened  bool
-	hotkeysOn bool // atajos de la botonera prendidos (C20)
+	hotkeysOn bool     // atajos de la botonera prendidos (C20)
+	knocks    []string // los que piden entrar a la sala, pendientes (F10): un submenú Aceptar / Rechazar por cada uno
 }
 
 // trayAction es lo que hace un renglón del menú.
@@ -27,12 +28,15 @@ const (
 	trayHotkeys
 	traySeparator
 	trayQuit
+	trayKnock // "Juan quiere entrar" ▸ Aceptar / Rechazar (index = cuál de trayState.knocks)
 )
 
-// trayEntry es un renglón del menú: la clave de su texto, tilde y deshabilitado.
+// trayEntry es un renglón del menú: la clave de su texto (con arg, si lleva), tilde y deshabilitado.
 type trayEntry struct {
 	action   trayAction
 	key      string
+	arg      string
+	index    int
 	checked  bool
 	disabled bool
 }
@@ -40,16 +44,25 @@ type trayEntry struct {
 // trayMenuEntries arma el menú del ícono. "Abrir VoxMesh" va primero: en Windows el clic
 // izquierdo abre este mismo menú, no la ventana (Fyne 2.6.3). "Salir" va último: si no, Fyne
 // agrega su propio "Quit", que cierra sin mandar el Leave ni borrar la regla UPnP.
+//
+// Los pedidos para entrar que esperan (F10) van debajo de "Abrir VoxMesh", cada uno con su
+// submenú: así se contestan sin abrir la ventana ni sacar el juego.
 func trayMenuEntries(s trayState) []trayEntry {
-	return []trayEntry{
-		{action: trayOpen, key: "tray.open"},
+	entries := []trayEntry{{action: trayOpen, key: "tray.open"}}
+	for i, name := range s.knocks {
+		entries = append(entries, trayEntry{action: trayKnock, key: "lan.knock", arg: name, index: i})
+	}
+	if len(s.knocks) > 0 {
+		entries = append(entries, trayEntry{action: traySeparator})
+	}
+	return append(entries, []trayEntry{
 		{action: trayHangUp, key: "tray.hang_up", disabled: !s.canHangUp},
 		{action: trayMute, key: "tray.mute", checked: s.muted},
 		{action: trayDeafen, key: "tray.deafen", checked: s.deafened},
 		{action: trayHotkeys, key: "tray.hotkeys", checked: s.hotkeysOn},
 		{action: traySeparator},
 		{action: trayQuit, key: "tray.quit"},
-	}
+	}...)
 }
 
 // closeAction es lo que hace la X de la ventana principal.

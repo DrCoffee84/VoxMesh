@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"voxmesh/internal/identity"
 	"voxmesh/internal/logging"
 	"voxmesh/internal/netinfo"
 )
@@ -19,10 +20,11 @@ const (
 	rejectLogEvery   = 10 * time.Second // lo descartado va al log a lo sumo una línea por este tiempo
 )
 
-// Status es lo que dice el aviso propio: el nombre y si estoy en una sala.
+// Status es lo que dice el aviso propio: el nombre, si estoy en una sala y cuál (F10).
 type Status struct {
 	Name   string
 	InRoom bool
+	Room   string // solo cuenta con InRoom
 }
 
 // Config es cómo arranca el servicio. La app usa Port, todas las interfaces y LANTargets; los
@@ -34,6 +36,8 @@ type Config struct {
 	Status   func() Status           // se lee cada 250 ms: un cambio sale en el momento
 	OnChange func()                  // cambió la lista; otra goroutine, nunca con un lock tomado
 	OnCall   func(CallEvent)         // algo pasó con una llamada (calls.go); otra goroutine
+	OnJoin   func(JoinEvent)         // algo pasó con un pedido para entrar (joins.go); otra goroutine
+	Identity *identity.Identity      // firma la respuesta al desafío al pedir entrar (nil = no se puede pedir)
 	Interval time.Duration           // 0 = AnnounceInterval
 	TTL      time.Duration           // 0 = PeerTTL
 }
@@ -60,6 +64,9 @@ type Service struct {
 	in          *inCall                  // la que me hacen (una a la vez)
 	callFrom    map[netip.Addr]time.Time // última llamada por IP (CallCooldown)
 	heardRadmin bool                     // llegó un aviso por Radmin (HeardFromRadmin)
+	joinOut     *outJoin                 // el pedido para entrar que hago (uno a la vez)
+	joinsIn     map[ID]*inJoin           // los que me piden entrar, por ID del pedido (≤ MaxJoins)
+	joinFrom    map[netip.Addr]time.Time // último pedido nuevo por IP (JoinCooldown)
 
 	rejectMu     sync.Mutex
 	rejected     uint64 // en total (los tests lo miran)
@@ -98,6 +105,8 @@ func Start(cfg Config) (*Service, error) {
 		stop:   make(chan struct{}),
 
 		callFrom: map[netip.Addr]time.Time{},
+		joinsIn:  map[ID]*inJoin{},
+		joinFrom: map[netip.Addr]time.Time{},
 	}
 	s.receive.Add(2)
 	go s.receiveLoop(listen)
@@ -114,6 +123,8 @@ func (s *Service) Stop() {
 	s.stopOnce.Do(func() {
 		close(s.stop)
 		s.CancelCall()
+		s.CancelJoin()
+		s.dropJoins(ReasonNoRoom)
 		s.announce.Wait() // el "me voy" sale de announceLoop
 		_ = s.listen.Close()
 		_ = s.direct.Close()
@@ -135,7 +146,7 @@ func (s *Service) announceLoop() {
 	defer s.announce.Done()
 	targets := s.cfg.Targets()
 	last := s.cfg.Status()
-	s.sendAll(Message{Kind: KindPresence, From: s.self, Name: last.Name, InRoom: last.InRoom}, targets)
+	s.sendAll(presenceMessage(s.self, last), targets)
 	lastSent := time.Now()
 	ticker := time.NewTicker(statusPoll)
 	defer ticker.Stop()
@@ -150,16 +161,29 @@ func (s *Service) announceLoop() {
 			if periodic {
 				targets = s.cfg.Targets() // una interfaz nueva (Radmin se conectó) entra acá
 			}
+			if last.InRoom && !status.InRoom {
+				s.dropJoins(ReasonNoRoom) // salí de la sala: los que pedían entrar ya no pueden
+			}
 			if periodic || status != last {
-				s.sendAll(Message{Kind: KindPresence, From: s.self, Name: status.Name, InRoom: status.InRoom}, targets)
+				s.sendAll(presenceMessage(s.self, status), targets)
 				last, lastSent = status, now
 			}
 			if s.roster.Expire(now) {
 				s.changed()
 			}
 			s.checkCalls(now)
+			s.checkJoins(now)
 		}
 	}
+}
+
+// presenceMessage es el aviso de status: la sala solo si estoy en una.
+func presenceMessage(self ID, status Status) Message {
+	m := Message{Kind: KindPresence, From: self, Name: status.Name, InRoom: status.InRoom}
+	if status.InRoom {
+		m.Room = status.Room
+	}
+	return m
 }
 
 // sendAll manda m a cada destino desde el socket directo (así las respuestas vuelven a él).
@@ -218,7 +242,7 @@ func (s *Service) handle(data []byte, from netip.AddrPort, now time.Time) {
 	switch m.Kind {
 	case KindPresence:
 		s.markHeard(from.Addr())
-		if s.roster.Seen(m.From, m.Name, m.InRoom, from, now) {
+		if s.roster.Seen(m.From, m.Name, m.InRoom, m.Room, from, now) {
 			s.changed()
 		}
 	case KindBye:
@@ -226,7 +250,9 @@ func (s *Service) handle(data []byte, from netip.AddrPort, now time.Time) {
 			s.changed()
 		}
 	default:
-		s.handleCall(m, from, now)
+		if !s.handleJoin(m, from, now) {
+			s.handleCall(m, from, now)
+		}
 	}
 }
 

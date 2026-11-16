@@ -14,7 +14,18 @@ var (
 	// Timbre de una llamada de "En tu red" (F9): dos repiques, se repite cada 2 s mientras el
 	// cartel está abierto.
 	SFXRing = append(generateTwoTone(880.00, 1108.73, 0.12, 0.12, 0.55), generateTwoTone(880.00, 1108.73, 0.12, 0.18, 0.55)...) // A5 -> C#6, dos veces
+	// "Toc toc": alguien de "En tu red" pide entrar a la sala (F10). Corto, grave y una sola vez,
+	// distinto del timbre: no tiene que sacar a nadie del juego.
+	SFXKnock = knock()
 )
+
+// knock son dos golpes cortos y graves (G4, ~392 Hz) separados por un silencio.
+func knock() []byte {
+	tap := generateBlip(392.00, 0.07, 0.7)
+	gap := make([]byte, int(0.09*float64(SampleRate))*2)
+	out := append(append([]byte(nil), tap...), gap...)
+	return append(out, tap...)
+}
 
 func generateTwoTone(freq1, freq2 float64, dur1, dur2 float64, gain float64) []byte {
 	samples1 := int(dur1 * float64(SampleRate))

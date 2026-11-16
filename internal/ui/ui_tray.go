@@ -61,11 +61,24 @@ func (a *App) trayMenuItems() []*fyne.MenuItem {
 		deafened:  a.isDeafened.Load(),
 		hotkeysOn: !a.conf().SoundHotkeysOff,
 	}
+	for _, k := range a.knocks {
+		state.knocks = append(state.knocks, k.name)
+	}
 	entries := trayMenuEntries(state)
 	items := make([]*fyne.MenuItem, 0, len(entries))
 	for _, entry := range entries {
 		if entry.action == traySeparator {
 			items = append(items, fyne.NewMenuItemSeparator())
+			continue
+		}
+		if entry.action == trayKnock {
+			join := a.knocks[entry.index].join
+			item := fyne.NewMenuItem(i18n.T(entry.key, entry.arg), nil)
+			item.ChildMenu = fyne.NewMenu("",
+				fyne.NewMenuItem(i18n.T("lan.accept"), func() { a.answerKnock(join, true, false) }),
+				fyne.NewMenuItem(i18n.T("lan.reject"), func() { a.answerKnock(join, false, false) }),
+			)
+			items = append(items, item)
 			continue
 		}
 		item := fyne.NewMenuItem(i18n.T(entry.key), a.trayActionFunc(entry.action))

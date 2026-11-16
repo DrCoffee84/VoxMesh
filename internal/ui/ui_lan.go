@@ -6,6 +6,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -66,15 +67,18 @@ func (l lanColumnLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 }
 
 // lanPreferredHeight es el alto de la tarjeta con hasta lanRowsVisible renglones a la vista: su
-// mínimo (un renglón) más los que faltan. Hilo de UI.
+// mínimo (el primer renglón) más los que faltan, cada uno con su alto (el de alguien en una sala
+// ocupa dos líneas, F10). Hilo de UI.
 func (a *App) lanPreferredHeight() float32 {
 	height := a.lanPanel.MinSize().Height
 	rows := a.lanList.Objects
-	if !a.lanScroll.Visible() || len(rows) < 2 {
+	if !a.lanScroll.Visible() {
 		return height
 	}
-	extra := min(len(rows), lanRowsVisible) - 1
-	return height + float32(extra)*(rows[0].MinSize().Height+theme.Padding())
+	for _, row := range rows[1:min(len(rows), lanRowsVisible)] {
+		height += row.MinSize().Height + theme.Padding()
+	}
+	return height
 }
 
 // refreshLANCard vuelve a dibujar la tarjeta con el estado de ahora. Desde cualquier goroutine (el
@@ -105,9 +109,14 @@ func (a *App) showLANPeers(state lanState, peers []presence.Peer) {
 	} else {
 		a.lanHint.Hide()
 	}
+	free := !a.connected() // Entrar solo si no estoy en una sala (F10)
 	rows := make([]fyne.CanvasObject, 0, len(peers))
 	for _, peer := range peers {
-		rows = append(rows, lanPeerRow(peer, func() { a.callPeer(peer) }))
+		var onJoin func()
+		if free {
+			onJoin = func() { a.joinPeer(peer) }
+		}
+		rows = append(rows, lanPeerRow(peer, func() { a.callPeer(peer) }, onJoin))
 	}
 	a.lanList.Objects = rows
 	a.lanList.Refresh()
@@ -127,25 +136,40 @@ func (a *App) showLANPeers(state lanState, peers []presence.Peer) {
 var callIcon = theme.NewThemedResource(fyne.NewStaticResource("call.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path d="M20.01 15.38c-1.23 0-2.42-.2-3.53-.56-.35-.12-.74-.03-1.01.24l-1.57 1.97c-2.83-1.35-5.48-3.9-6.89-6.83l1.95-1.66c.27-.28.35-.67.24-1.02-.37-1.11-.56-2.3-.56-3.53 0-.54-.45-.99-.99-.99H4.19C3.65 3 3 3.24 3 3.99 3 13.28 10.73 21 20.01 21c.71 0 .99-.63.99-1.18v-3.45c0-.54-.45-.99-.99-.99z"/></svg>`)))
 
 // lanPeerRow es el renglón de una persona: el punto verde (disponible) o naranja (en una sala), el
-// nombre (cortado con "…" si no entra: nunca ensancha la columna) y a la derecha Llamar (onCall) o,
-// si está en una sala, "En una sala": por ahora no se llama a alguien que está en otra llamada.
-func lanPeerRow(peer presence.Peer, onCall func()) fyne.CanvasObject {
-	dotColor := theme.ColorNameSuccess
-	var right fyne.CanvasObject
-	if peer.InRoom {
-		dotColor = theme.ColorNameWarning
-		state := widget.NewLabel(i18n.T("lan.in_room"))
-		state.Importance = widget.WarningImportance
-		right = state
-	} else {
-		call := widget.NewButtonWithIcon(i18n.T("lan.call"), callIcon, onCall)
-		call.Importance = widget.LowImportance
-		right = call
-	}
-	dot := container.NewCenter(container.NewGridWrap(fyne.NewSize(10, 10), newThemedCircle(dotColor)))
+// nombre (cortado con "…" si no entra: nunca ensancha la columna) y a la derecha Llamar (onCall).
+// Si está en una sala (F10) va en dos líneas, porque entero no entra con el botón: el nombre arriba
+// y "en «Mi sala»" abajo, más chico y en naranja (los dos cortados con "…"), con Entrar (onJoin;
+// nil = sin botón: estoy en una sala). Por ahora no se llama a alguien que está en otra llamada.
+func lanPeerRow(peer presence.Peer, onCall, onJoin func()) fyne.CanvasObject {
 	name := widget.NewLabel(peer.Name)
 	name.Truncation = fyne.TextTruncateEllipsis
-	return container.NewBorder(nil, nil, dot, right, name)
+	if !peer.InRoom {
+		call := widget.NewButtonWithIcon(i18n.T("lan.call"), callIcon, onCall)
+		call.Importance = widget.LowImportance
+		return container.NewBorder(nil, nil, lanDot(theme.ColorNameSuccess), call, name)
+	}
+	roomText := i18n.T("lan.in_room")
+	if peer.Room != "" {
+		roomText = i18n.T("lan.in_room_named", peer.Room)
+	}
+	roomLabel := widget.NewLabel(roomText)
+	roomLabel.Truncation = fyne.TextTruncateEllipsis
+	roomLabel.Importance = widget.WarningImportance
+	roomLabel.SizeName = theme.SizeNameCaptionText
+	// Los dos labels se pisan el relleno: juntos, como dos líneas de un mismo renglón.
+	lines := container.New(layout.NewCustomPaddedVBoxLayout(-2*theme.InnerPadding()), name, roomLabel)
+	var right fyne.CanvasObject
+	if onJoin != nil {
+		join := widget.NewButtonWithIcon(i18n.T("lan.join"), theme.LoginIcon(), onJoin)
+		join.Importance = widget.LowImportance
+		right = join
+	}
+	return container.NewBorder(nil, nil, lanDot(theme.ColorNameWarning), right, lines)
+}
+
+// lanDot es el punto de color del renglón.
+func lanDot(color fyne.ThemeColorName) fyne.CanvasObject {
+	return container.NewCenter(container.NewGridWrap(fyne.NewSize(10, 10), newThemedCircle(color)))
 }
 
 // callUI es el cartel de una llamada: "Llamando a Juan… [Cortar]" para el que llama, "Coffee te
@@ -155,15 +179,16 @@ type callUI struct {
 	text    *widget.Label
 	buttons *fyne.Container
 	name    string // el otro
-	seq     uint64 // del que llama: a.callSeq de esta llamada
+	seq     uint64 // del que llama o pide entrar: a.callSeq de esta llamada
+	joining bool   // es un pedido para entrar a la sala del otro (F10), no una llamada
 }
 
-// openCallUI abre el cartel con text y buttons.
-func (a *App) openCallUI(name, text string, buttons ...fyne.CanvasObject) *callUI {
+// openCallUI abre el cartel title con text y buttons.
+func (a *App) openCallUI(title, name, text string, buttons ...fyne.CanvasObject) *callUI {
 	ui := &callUI{text: widget.NewLabel(text), buttons: container.NewGridWithColumns(max(1, len(buttons)), buttons...), name: name}
 	ui.text.Wrapping = fyne.TextWrapWord
 	ui.text.Alignment = fyne.TextAlignCenter
-	ui.dialog = dialog.NewCustomWithoutButtons(i18n.T("lan.call_title"), container.NewVBox(ui.text, ui.buttons), a.window)
+	ui.dialog = dialog.NewCustomWithoutButtons(title, container.NewVBox(ui.text, ui.buttons), a.window)
 	ui.dialog.Resize(fyne.NewSize(360, 0))
 	ui.dialog.Show()
 	a.callUI = ui
@@ -172,7 +197,7 @@ func (a *App) openCallUI(name, text string, buttons ...fyne.CanvasObject) *callU
 
 // showOutgoingCall: "Llamando a Juan…" con Cortar.
 func (a *App) showOutgoingCall(name string) {
-	ui := a.openCallUI(name, i18n.T("lan.calling", name), widget.NewButtonWithIcon(i18n.T("lan.hang_up"), theme.CancelIcon(), a.hangUpCall))
+	ui := a.openCallUI(i18n.T("lan.call_title"), name, i18n.T("lan.calling", name), widget.NewButtonWithIcon(i18n.T("lan.hang_up"), theme.CancelIcon(), a.hangUpCall))
 	ui.seq = a.callSeq.Load()
 }
 
@@ -224,7 +249,7 @@ func (a *App) showCallEvent(event presence.CallEvent) {
 		reject.Importance = widget.DangerImportance
 		answer := widget.NewButtonWithIcon(i18n.T("lan.answer"), callIcon, func() { a.answerCall(true) })
 		answer.Importance = widget.SuccessImportance
-		a.openCallUI(event.Name, text, reject, answer)
+		a.openCallUI(i18n.T("lan.call_title"), event.Name, text, reject, answer)
 		a.ring()
 		logging.Infof("Red local: llamada de %q (%s)", event.Name, event.Peer)
 	case presence.CallIncomingEnded:
@@ -242,12 +267,12 @@ func (a *App) showCallEvent(event presence.CallEvent) {
 			a.callUI.buttons.Refresh()
 		}
 	case presence.CallAccepted:
-		if a.callUI != nil {
+		if a.callUI != nil && !a.callUI.joining {
 			a.setStatus(i18n.M("lan.accepted", a.callUI.name))
 			a.closeCallUI()
 		}
 	case presence.CallDeclined, presence.CallNoAnswer:
-		if a.callUI == nil {
+		if a.callUI == nil || a.callUI.joining {
 			return
 		}
 		key := "lan.no_answer"

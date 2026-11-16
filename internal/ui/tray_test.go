@@ -47,6 +47,20 @@ func TestTrayMenuEntries(t *testing.T) {
 			t.Fatalf("%+v: el último no es Salir (Fyne agregaría su Quit)", s)
 		}
 	}
+
+	// Los pedidos para entrar (F10): debajo de Abrir, uno por persona, y un separador.
+	entries := trayMenuEntries(trayState{knocks: []string{"Juan", "Ana"}})
+	if len(entries) != len(order)+3 || entries[0].action != trayOpen || entries[3].action != traySeparator {
+		t.Fatalf("con pedidos: %+v", entries)
+	}
+	for i, name := range []string{"Juan", "Ana"} {
+		if e := entries[i+1]; e.action != trayKnock || e.arg != name || e.index != i || e.key != "lan.knock" {
+			t.Errorf("pedido %d: %+v", i, e)
+		}
+	}
+	if last := entries[len(entries)-1]; last.action != trayQuit {
+		t.Error("con pedidos Salir sigue último")
+	}
 }
 
 // TestCloseActionFor (C21): la X oculta solo con la opción prendida y el ícono funcionando; si

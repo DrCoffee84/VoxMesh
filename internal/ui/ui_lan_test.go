@@ -14,6 +14,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/test"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"voxmesh/internal/config"
@@ -99,36 +100,55 @@ func testLANCard(t *testing.T, lang string) {
 	saveShot(t, window, "lan_card_empty_"+lang)
 
 	long := strings.Repeat("Nombre larguísimo ", 3)
-	a.showLANPeers(lanOn, []presence.Peer{
+	longRoom := strings.Repeat("Sala larguísima ", 4)
+	peers := []presence.Peer{
 		{ID: presence.ID{1}, Name: "Juan"},
-		{ID: presence.ID{2}, Name: "Pedro", InRoom: true},
+		{ID: presence.ID{2}, Name: "Pedro", InRoom: true, Room: "Mi sala"},
 		{ID: presence.ID{3}, Name: long},
-	})
-	if a.lanHint.Visible() || !a.lanScroll.Visible() || len(a.lanList.Objects) != 3 {
-		t.Fatalf("con 3: hint visible=%v, %d renglones", a.lanHint.Visible(), len(a.lanList.Objects))
+		{ID: presence.ID{4}, Name: long, InRoom: true, Room: longRoom},
+		{ID: presence.ID{5}, Name: "Ana", InRoom: true}, // un cliente que todavía no sabe la sala
 	}
-	for i, want := range []struct {
-		name, status string // status "" = el botón Llamar
-	}{
-		{"Juan", ""},
-		{"Pedro", i18n.T("lan.in_room")},
-		{long, ""},
-	} {
-		row := a.lanList.Objects[i]
-		labels := labelsIn(row)
-		if len(labels) == 0 || labels[0].Text != want.name || labels[0].Truncation != fyne.TextTruncateEllipsis {
-			t.Errorf("renglón %d: %+v", i, labels)
-			continue
-		}
-		call := findInTree(row, buttonWithText(i18n.T("lan.call")))
-		if want.status == "" {
-			if call == nil || len(labels) != 1 {
-				t.Errorf("renglón %d: disponible, con Llamar y sin estado", i)
+	a.showLANPeers(lanOn, peers)
+	if a.lanHint.Visible() || !a.lanScroll.Visible() || len(a.lanList.Objects) != len(peers) {
+		t.Fatalf("con %d: hint visible=%v, %d renglones", len(peers), a.lanHint.Visible(), len(a.lanList.Objects))
+	}
+	checkRows := func(free bool) {
+		t.Helper()
+		for i, want := range []struct {
+			name, room string // room "" = disponible, con Llamar
+		}{
+			{"Juan", ""},
+			{"Pedro", i18n.T("lan.in_room_named", "Mi sala")},
+			{long, ""},
+			{long, i18n.T("lan.in_room_named", longRoom)},
+			{"Ana", i18n.T("lan.in_room")},
+		} {
+			row := a.lanList.Objects[i]
+			labels := labelsIn(row)
+			if len(labels) == 0 || labels[0].Text != want.name || labels[0].Truncation != fyne.TextTruncateEllipsis {
+				t.Errorf("renglón %d: %+v", i, labels)
+				continue
 			}
-		} else if call != nil || len(labels) != 2 || labels[1].Text != want.status || labels[1].Importance != widget.WarningImportance {
-			t.Errorf("renglón %d: en una sala, sin Llamar: %+v", i, labels)
+			call := findInTree(row, buttonWithText(i18n.T("lan.call")))
+			join := findInTree(row, buttonWithText(i18n.T("lan.join")))
+			if want.room == "" {
+				if call == nil || join != nil || len(labels) != 1 {
+					t.Errorf("renglón %d: disponible, con Llamar y sin estado", i)
+				}
+				continue
+			}
+			// En una sala (F10): dos líneas, la sala más chica y en naranja, cortada con "…"; Entrar
+			// solo si estoy libre.
+			if call != nil || len(labels) != 2 || labels[1].Text != want.room || labels[1].Importance != widget.WarningImportance ||
+				labels[1].SizeName != theme.SizeNameCaptionText || labels[1].Truncation != fyne.TextTruncateEllipsis {
+				t.Errorf("renglón %d: en una sala, sin Llamar: %+v", i, labels)
+			}
+			if (join != nil) != free {
+				t.Errorf("renglón %d: Entrar=%v, libre=%v", i, join != nil, free)
+			}
 		}
 	}
+	checkRows(true)
 	if width := a.connectionPanel.MinSize().Width; width != connectionPanelWidth {
 		t.Errorf("la columna mide %v, quería %v", width, connectionPanelWidth)
 	}
@@ -143,10 +163,34 @@ func testLANCard(t *testing.T, lang string) {
 	}
 	saveShot(t, window, "lan_card_"+lang)
 
-	// Con la ventana alta, los tres enteros; el registro de actividad se queda con el resto.
+	// Dentro de una sala, los renglones naranjas no tienen Entrar.
+	key, err := transport.NewKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inRoom, err := transport.Listen("127.0.0.1:0", key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.transport.Store(inRoom)
+	a.hideConnectionPanels()
+	a.showLANPeers(lanOn, peers)
+	checkRows(false)
+	a.transport.Store(nil)
+	_ = inRoom.Close()
+	a.showConnectionPanels()
+	a.showLANPeers(lanOn, peers)
+	checkRows(true)
+
+	// Con la ventana alta, los tres primeros enteros (el de dos líneas es más alto); el registro de
+	// actividad se queda con el resto.
 	window.Resize(fyne.NewSize(config.DefaultWindowWidth, 900))
-	if a.lanScroll.Size().Height < a.lanList.MinSize().Height {
-		t.Errorf("con la ventana alta no entran los 3: %v < %v", a.lanScroll.Size().Height, a.lanList.MinSize().Height)
+	firstThree := 2 * theme.Padding()
+	for _, row := range a.lanList.Objects[:3] {
+		firstThree += row.MinSize().Height
+	}
+	if got := a.lanScroll.Size().Height; got < firstThree || got >= a.lanList.MinSize().Height {
+		t.Errorf("con la ventana alta se ven enteros los 3 primeros y el resto con scroll: %v (3 = %v, todos = %v)", got, firstThree, a.lanList.MinSize().Height)
 	}
 	saveShot(t, window, "lan_card_tall_"+lang)
 

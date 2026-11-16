@@ -226,6 +226,8 @@ type App struct {
 	callUI    *callUI         // el cartel de la llamada en curso (nil = ninguna); solo el hilo de UI
 	callSeq   atomic.Uint64   // cambia al cortar: una llamada que todavía abría la sala no sale
 	ringGen   atomic.Uint64   // cambia al parar el timbre
+	knocks    []knock         // los que piden entrar a mi sala y esperan (F10, lan_join.go); solo el hilo de UI
+	knockBox  *fyne.Container // sus carteles, debajo de la barra de arriba
 
 	// El ID de esta instalación (F10, room_trust.go: loadIdentity en Run, ident) y la lista de
 	// confianza de la sala en la que estoy (trustBook, con su mutex).
