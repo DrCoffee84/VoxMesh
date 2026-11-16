@@ -186,3 +186,42 @@ func TestIsInternet(t *testing.T) {
 		t.Error("una IP vacía no es de internet")
 	}
 }
+
+func TestBroadcast(t *testing.T) {
+	cases := []struct {
+		ip, mask string // mask "" = nil
+		want     string // "" = sin broadcast
+	}{
+		{"192.168.1.39", "255.255.255.0", "192.168.1.255"},
+		{"26.77.45.242", "255.0.0.0", "26.255.255.255"},   // Radmin
+		{"10.147.17.5", "255.255.255.0", "10.147.17.255"}, // ZeroTier
+		{"172.16.5.4", "255.255.0.0", "172.16.255.255"},
+		{"192.168.0.10", "255.255.255.252", "192.168.0.11"}, // /30: la última que tiene
+		{"100.101.2.3", "255.255.255.255", ""},              // Tailscale en Windows: /32
+		{"192.168.0.10", "255.255.255.254", ""},             // /31
+		{"192.168.1.39", "255.0.255.0", ""},                 // no contigua
+		{"192.168.1.39", "", ""},
+		{"2001:db8::1", "255.255.255.0", ""},
+	}
+	for _, c := range cases {
+		var mask net.IPMask
+		if c.mask != "" {
+			mask = net.IPMask(net.ParseIP(c.mask).To4())
+		}
+		got, ok := Broadcast(net.ParseIP(c.ip), mask)
+		if c.want == "" {
+			if ok {
+				t.Errorf("Broadcast(%s/%s) = %s, quería ninguno", c.ip, c.mask, got)
+			}
+			continue
+		}
+		if !ok || got != netip.MustParseAddr(c.want) {
+			t.Errorf("Broadcast(%s/%s) = %s %v, quería %s", c.ip, c.mask, got, ok, c.want)
+		}
+	}
+	// Go puede dar la máscara de una IPv4 en 16 bytes: LocalIPv4s la deja en 4.
+	sixteen := append(make(net.IPMask, 12), 255, 255, 255, 0)
+	if got, ok := Broadcast(net.ParseIP("192.168.1.39"), ipv4Mask(sixteen)); !ok || got != netip.MustParseAddr("192.168.1.255") {
+		t.Errorf("con la máscara en 16 bytes: %s %v", got, ok)
+	}
+}

@@ -252,10 +252,31 @@ func LocalIPv4() (net.IP, error) {
 }
 
 // InterfaceIP es una IPv4 de una interfaz de red de esta PC (Ethernet, Wi-Fi, Tailscale, ZeroTier,
-// Radmin…), para invitar por LAN/VPN.
+// Radmin…), para invitar por LAN/VPN. Mask es la de su red (para el broadcast, ver Broadcast).
 type InterfaceIP struct {
 	Name string
 	IP   net.IP
+	Mask net.IPMask
+}
+
+// Broadcast es la dirección de broadcast de la red de ip con mask (192.168.1.255 para
+// 192.168.1.39/24, 26.255.255.255 para la de Radmin, /8). Sin broadcast (false): una IP que no es
+// IPv4, una máscara que no es de IPv4 o no es contigua, y las redes /31 y /32, que no tienen
+// (Tailscale en Windows usa /32: por eso ahí no llegan los avisos a toda la red).
+func Broadcast(ip net.IP, mask net.IPMask) (netip.Addr, bool) {
+	ip4 := ip.To4()
+	if ip4 == nil || len(mask) != net.IPv4len {
+		return netip.Addr{}, false
+	}
+	ones, bits := mask.Size()
+	if bits != 32 || ones > 30 {
+		return netip.Addr{}, false
+	}
+	var out [4]byte
+	for i := range out {
+		out[i] = ip4[i] | ^mask[i]
+	}
+	return netip.AddrFrom4(out), true
 }
 
 // LocalIPv4s lista las IPv4 de las interfaces activas, sin loopback ni link-local (169.254.x.x),
@@ -280,9 +301,17 @@ func LocalIPv4s() ([]InterfaceIP, error) {
 				continue
 			}
 			if ip := ipNet.IP.To4(); ip != nil && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() {
-				result = append(result, InterfaceIP{Name: iface.Name, IP: ip})
+				result = append(result, InterfaceIP{Name: iface.Name, IP: ip, Mask: ipv4Mask(ipNet.Mask)})
 			}
 		}
 	}
 	return result, nil
+}
+
+// ipv4Mask deja la máscara de una IPv4 en 4 bytes: Go puede darla en 16 (con el prefijo de IPv6).
+func ipv4Mask(mask net.IPMask) net.IPMask {
+	if len(mask) == net.IPv6len {
+		return mask[12:]
+	}
+	return mask
 }
