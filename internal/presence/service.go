@@ -55,11 +55,11 @@ type Service struct {
 	announce sync.WaitGroup
 	receive  sync.WaitGroup
 
-	callMu   sync.Mutex
-	out      *outCall                 // la llamada que hago (una a la vez)
-	in       *inCall                  // la que me hacen (una a la vez)
-	callFrom map[netip.Addr]time.Time // última llamada por IP (CallCooldown)
-	heard    map[netip.Prefix]bool    // se escuchó a alguien desde esa red (HeardFrom)
+	callMu      sync.Mutex
+	out         *outCall                 // la llamada que hago (una a la vez)
+	in          *inCall                  // la que me hacen (una a la vez)
+	callFrom    map[netip.Addr]time.Time // última llamada por IP (CallCooldown)
+	heardRadmin bool                     // llegó un aviso por Radmin (HeardFromRadmin)
 
 	rejectMu     sync.Mutex
 	rejected     uint64 // en total (los tests lo miran)
@@ -98,7 +98,6 @@ func Start(cfg Config) (*Service, error) {
 		stop:   make(chan struct{}),
 
 		callFrom: map[netip.Addr]time.Time{},
-		heard:    map[netip.Prefix]bool{},
 	}
 	s.receive.Add(2)
 	go s.receiveLoop(listen)
@@ -231,15 +230,12 @@ func (s *Service) handle(data []byte, from netip.AddrPort, now time.Time) {
 	}
 }
 
-// radmin es la red de Radmin VPN (HeardFrom).
-var radmin = netip.MustParsePrefix("26.0.0.0/8")
-
 func (s *Service) markHeard(ip netip.Addr) {
-	if !radmin.Contains(ip) {
+	if !netinfo.IsRadmin(ip) {
 		return
 	}
 	s.callMu.Lock()
-	s.heard[radmin] = true
+	s.heardRadmin = true
 	s.callMu.Unlock()
 }
 
@@ -249,7 +245,7 @@ func (s *Service) markHeard(ip netip.Addr) {
 func (s *Service) HeardFromRadmin() bool {
 	s.callMu.Lock()
 	defer s.callMu.Unlock()
-	return s.heard[radmin]
+	return s.heardRadmin
 }
 
 var errInternetSource = errors.New("viene de una IP de internet")

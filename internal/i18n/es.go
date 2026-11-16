@@ -339,6 +339,8 @@ var es = map[string]string{
 	"lan.joining":        "Entrando a la sala…",
 	"lan.invite_missing": "No llegó la invitación. Pedile que te llame de nuevo.",
 	"lan.call_ended":     "%s cortó la llamada.",
+	"lan.firewall_hint":  "En tu red no aparece nadie de Radmin. Si alguien de ahí tiene VoxMesh abierto, puede ser el Firewall de Windows: Radmin suele quedar como red «Pública». En Firewall de Windows → Permitir una aplicación, marcá VoxMesh también en «Pública».",
+	"invite.copy_client": "Copiar invitación (%s)",
 
 	// Audio de la sala y celular (audio_bridge.go).
 	"phone.ready_buffer":    "Micrófono de celular listo con %d ms de buffer. Escaneá el QR desde la misma Wi-Fi.",

@@ -92,6 +92,11 @@ var (
 	radminPrefix = netip.MustParsePrefix("26.0.0.0/8")
 )
 
+// IsRadmin dice si ip es de la red de Radmin VPN (26.0.0.0/8).
+func IsRadmin(ip netip.Addr) bool {
+	return radminPrefix.Contains(ip.Unmap())
+}
+
 // IsCGNAT dice si ip es de 100.64.0.0/10 (CGNAT del proveedor o Tailscale).
 func IsCGNAT(ip netip.Addr) bool {
 	return cgnatPrefix.Contains(ip.Unmap())

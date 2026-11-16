@@ -18,6 +18,7 @@ import (
 	"voxmesh/internal/invite"
 	"voxmesh/internal/logging"
 	"voxmesh/internal/netinfo"
+	"voxmesh/internal/presence"
 	"voxmesh/internal/transport"
 )
 
@@ -32,8 +33,14 @@ func (a *App) showInviteMenu(button *widget.Button) {
 		return
 	}
 	key := udp.Key()
+	_, peers := a.lanSnapshot() // "En tu red" (F9): debajo de las direcciones, con Llamar
 	if !a.hostMode.Load() {
-		a.copyInvite(endpoint, key, i18n.M("invite.copied", endpoint))
+		if len(peers) == 0 {
+			a.copyInvite(endpoint, key, i18n.M("invite.copied", endpoint))
+			return
+		}
+		copyOption := inviteOption{label: i18n.T("invite.copy_client", endpoint), address: endpoint, copied: i18n.M("invite.copied", endpoint)}
+		a.showInvitePopup(button, []inviteOption{copyOption}, key, peers)
 		return
 	}
 	var network hostNetwork // nil (recién quedó de host): buscando
@@ -52,11 +59,11 @@ func (a *App) showInviteMenu(button *widget.Button) {
 		}
 		options := inviteOptions(network, interfaces, port, showLAN)
 		fyne.Do(func() {
-			if copiesDirectly(options) {
+			if copiesDirectly(options) && len(peers) == 0 {
 				a.copyInvite(options[0].address, key, options[0].copied)
 				return
 			}
-			a.showInvitePopup(button, options, key)
+			a.showInvitePopup(button, options, key, peers)
 		})
 	}()
 }
@@ -64,8 +71,9 @@ func (a *App) showInviteMenu(button *widget.Button) {
 // showInvitePopup (hilo de UI) muestra las opciones debajo del botón. Es un popup propio y no un
 // fyne.Menu: el menú de Fyne pinta todos los renglones con el color del tema (y en gris los
 // deshabilitados, ícono incluido), y acá el estado de la red va en naranja o rojo. Tocar un
-// renglón con dirección la copia; uno rojo muestra el registro de actividad.
-func (a *App) showInvitePopup(button *widget.Button, options []inviteOption, key transport.Key) {
+// renglón con dirección la copia; uno rojo muestra el registro de actividad. Debajo, los de "En tu
+// red" (peers, F9) con su botón Llamar: dentro de la sala la columna de la tarjeta está oculta.
+func (a *App) showInvitePopup(button *widget.Button, options []inviteOption, key transport.Key, peers []presence.Peer) {
 	target := fyne.CurrentApp().Driver().CanvasForObject(button)
 	if target == nil {
 		return
@@ -88,6 +96,15 @@ func (a *App) showInvitePopup(button *widget.Button, options []inviteOption, key
 			}
 		}
 		rows = append(rows, newInviteRow(option.label, inviteToneColor(option.tone), onTap))
+	}
+	if len(peers) > 0 {
+		rows = append(rows, widget.NewSeparator(), cardTitle(i18n.T("lan.title")))
+		for _, peer := range peers {
+			rows = append(rows, lanPeerRow(peer, func() {
+				pop.Hide()
+				a.callPeer(peer)
+			}))
+		}
 	}
 	pop = widget.NewPopUp(container.NewVBox(rows...), target)
 	pop.ShowAtRelativePosition(fyne.NewPos(0, button.Size().Height), button)

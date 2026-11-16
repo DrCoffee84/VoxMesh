@@ -16,6 +16,7 @@ import (
 	"voxmesh/internal/i18n"
 	"voxmesh/internal/invite"
 	"voxmesh/internal/logging"
+	"voxmesh/internal/netinfo"
 	"voxmesh/internal/presence"
 	"voxmesh/internal/room"
 )
@@ -37,6 +38,9 @@ const (
 	lanPoll    = 500 * time.Millisecond // cada cuánto se mira el check
 	lanRetry   = 10 * time.Second
 	lanLogFail = time.Minute // la falla al abrir va al log a lo sumo una vez por minuto
+	// lanFirewallAfter: con una interfaz de Radmin y nada escuchado por ella en este tiempo, el
+	// registro de actividad sugiere el firewall (una vez por sesión).
+	lanFirewallAfter = time.Minute
 )
 
 // lanPresence es el estado del servicio, con su mutex. Nunca se llama a Service.Stop con el mutex
@@ -50,6 +54,8 @@ type lanPresence struct {
 	failedAt   time.Time
 	failLogged time.Time
 	testConfig func(*presence.Config) // solo los tests: escuchar en 127.0.0.1 y avisar adonde digan
+	startedAt  time.Time              // cuándo arrancó el servicio (lanFirewallAfter)
+	firewall   bool                   // ya se miró si hacía falta el aviso del firewall (una vez por sesión)
 }
 
 // lanPresenceLoop prende y apaga el servicio según el check, hasta que la app se cierra. Va en su
@@ -58,7 +64,35 @@ func (a *App) lanPresenceLoop() {
 	ticker := time.NewTicker(lanPoll)
 	defer ticker.Stop()
 	for a.syncLANPresence(time.Now()) {
+		a.checkLANFirewall(time.Now())
 		<-ticker.C
+	}
+}
+
+// checkLANFirewall: Windows suele marcar la red de Radmin como "Pública" y, si al permitir VoxMesh
+// solo se marcó "Privada", los avisos de los demás no entran. No se puede saber seguro (puede que
+// nadie de Radmin tenga la app abierta): si hay una interfaz de Radmin y en lanFirewallAfter no
+// llegó nada por ella, una línea en el registro de actividad dice qué revisar. Una vez por sesión.
+func (a *App) checkLANFirewall(now time.Time) {
+	l := &a.lan
+	l.mu.Lock()
+	service := l.service
+	due := service != nil && !l.firewall && now.Sub(l.startedAt) >= lanFirewallAfter
+	if due {
+		l.firewall = true
+	}
+	l.mu.Unlock()
+	if !due || service.HeardFromRadmin() {
+		return
+	}
+	interfaces, _ := netinfo.LocalIPv4s()
+	for _, iface := range interfaces {
+		if ip, ok := netip.AddrFromSlice(iface.IP.To4()); ok && netinfo.IsRadmin(ip) {
+			msg := i18n.M("lan.firewall_hint")
+			logging.Infof("Registro de actividad: %s", msg.In(i18n.ES))
+			a.addActivity(msg.String())
+			return
+		}
 	}
 }
 
@@ -91,7 +125,7 @@ func (a *App) syncLANPresence(now time.Time) bool {
 				logging.Errorf("Red local: no se pudo abrir el puerto UDP %d: %s", presence.Port, logging.FormatError(err))
 			}
 		} else {
-			l.service, l.state = service, lanOn
+			l.service, l.state, l.startedAt = service, lanOn, now
 		}
 		l.mu.Unlock()
 	case !want && l.state != lanOff:
