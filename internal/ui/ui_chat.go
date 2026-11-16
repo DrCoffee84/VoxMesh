@@ -350,14 +350,7 @@ func (a *App) buildChatMessageObject(m history.Message, isMatch bool) fyne.Canva
 	headerRow := container.NewBorder(nil, nil, nil, copyWrap, rt)
 	var row fyne.CanvasObject = headerRow
 
-	imagePath := ""
-	// La imagen está en la carpeta de la sala que muestra el chat, que puede no ser en la que
-	// estoy ("Ver otra sala…") o no haber ninguna (fuera de la sala).
-	if store := a.viewStore.Load(); m.Kind == "image" && store != nil {
-		// Con un ID o extensión inválidos (mensaje de red) queda la fila sin imagen.
-		imagePath, _ = store.ImagePath(m.ImageID, m.ImageExt)
-	}
-	if imagePath != "" && fileExists(imagePath) {
+	if imagePath := a.chatImagePath(m); imagePath != "" && fileExists(imagePath) {
 		img := newChatThumbnail(imagePath)
 		p := imagePath
 		clickableThumb := newTappableImage(img, func() {
@@ -373,62 +366,222 @@ func (a *App) buildChatMessageObject(m history.Message, isMatch bool) fyne.Canva
 	return container.NewStack(highlight.rect, row)
 }
 
+// chatImagePath es dónde está la imagen de m ("" si no es una imagen o no hay sala). Está en la
+// carpeta de la sala que muestra el chat, que puede no ser en la que estoy ("Ver otra sala…") o no
+// haber ninguna (fuera de la sala). Con un ID o extensión inválidos (mensaje de red) da "".
+func (a *App) chatImagePath(m history.Message) string {
+	store := a.viewStore.Load()
+	if m.Kind != "image" || store == nil {
+		return ""
+	}
+	path, _ := store.ImagePath(m.ImageID, m.ImageExt)
+	return path
+}
+
+// maxChatRows es cuántos mensajes arma el chat (C38): Fyne recorre todas las filas en cada
+// repintado aunque estén fuera de la vista, y cada imagen es una miniatura de ~0,6 MB en memoria.
+// Los anteriores se arman de a maxChatRows con "Ver anteriores". Entre 10 y 20 no cambia nada: lo
+// que pesa son las imágenes.
+const maxChatRows = 20
+
+// chatVisibleMessages es una copia de los mensajes del chat sin los avisos de la sala.
+func (a *App) chatVisibleMessages() []history.Message {
+	a.chatMu.RLock()
+	defer a.chatMu.RUnlock()
+	visible := make([]history.Message, 0, len(a.chatMessages))
+	for _, m := range a.chatMessages {
+		if !isSystemMessage(m) {
+			visible = append(visible, m)
+		}
+	}
+	return visible
+}
+
+// chatSearchText es lo buscado, en minúsculas ("" sin buscador o vacío). Hilo de UI.
+func (a *App) chatSearchText() string {
+	if a.chatSearch == nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(a.chatSearch.Text))
+}
+
+// chatMatches dice si m tiene lo buscado (search en minúsculas) en el texto o en el nombre.
+func chatMatches(m history.Message, search string) bool {
+	return search != "" && (strings.Contains(strings.ToLower(m.Text), search) || strings.Contains(strings.ToLower(m.Username), search))
+}
+
+// chatFirstRow es desde qué mensaje de visible se arman las filas: los últimos limit y, con algo
+// buscado, por lo menos hasta la coincidencia más nueva (C38: el buscador busca en todo).
+func chatFirstRow(visible []history.Message, limit int, search string) int {
+	from := max(0, len(visible)-limit)
+	if search == "" {
+		return from
+	}
+	for i := len(visible) - 1; i >= 0; i-- {
+		if chatMatches(visible[i], search) {
+			return min(from, i)
+		}
+	}
+	return from
+}
+
 func (a *App) refreshChat() {
+	fyne.Do(a.renderChat)
+}
+
+// reloadChat vuelve a los últimos maxChatRows y suelta las miniaturas: al cambiar de sala y al
+// colgar (C38).
+func (a *App) reloadChat() {
 	fyne.Do(func() {
-		if a.chatBox == nil {
-			return
-		}
-		a.chatMu.RLock()
-		msgs := append([]history.Message(nil), a.chatMessages...)
-		a.chatMu.RUnlock()
-
-		var searchFilter string
-		if a.chatSearch != nil {
-			searchFilter = strings.ToLower(strings.TrimSpace(a.chatSearch.Text))
-		}
-
-		matchCount := 0
-		objects := make([]fyne.CanvasObject, 0, len(msgs))
-		for _, msg := range msgs {
-			m := msg
-			if isSystemMessage(m) {
-				continue
-			}
-			isMatch := false
-			if searchFilter != "" {
-				lowerText := strings.ToLower(m.Text)
-				lowerUser := strings.ToLower(m.Username)
-				if strings.Contains(lowerText, searchFilter) || strings.Contains(lowerUser, searchFilter) {
-					isMatch = true
-					matchCount++
-				}
-			}
-
-			objects = append(objects, a.buildChatMessageObject(m, isMatch))
-		}
-
-		if a.chatSearchCount != nil {
-			if searchFilter == "" {
-				a.chatSearchCount.SetText("")
-			} else if matchCount == 0 {
-				a.chatSearchCount.SetText("(0)")
-			} else {
-				a.chatSearchCount.SetText(fmt.Sprintf("(%d)", matchCount))
-			}
-		}
-
-		// Fuera de una sala y sin mirar otra (al abrir la app y después de colgar, C31): en vez
-		// del chat vacío, cómo se entra.
-		if a.viewingRoomName == "" {
-			objects = []fyne.CanvasObject{noRoomHint()}
-		}
-
-		a.chatBox.Objects = objects
-		a.chatBox.Refresh()
-		if a.chatScroll != nil && searchFilter == "" {
-			a.chatScroll.ScrollToBottom()
-		}
+		a.chatLimit = maxChatRows
+		thumbCache.clear()
+		a.renderChat()
 	})
+}
+
+// renderChat rearma las filas del chat (hilo de UI): las últimas chatLimit, con las coincidencias
+// del buscador resaltadas (sin esconder el resto) y su total en el contador.
+func (a *App) renderChat() {
+	if a.chatBox == nil {
+		return
+	}
+	a.chatLimit = max(a.chatLimit, maxChatRows)
+	visible := a.chatVisibleMessages()
+	search := a.chatSearchText()
+
+	matchCount := 0
+	for _, m := range visible {
+		if chatMatches(m, search) {
+			matchCount++
+		}
+	}
+	from := chatFirstRow(visible, a.chatLimit, search)
+	shown := visible[from:]
+	objects := make([]fyne.CanvasObject, 0, len(shown))
+	for _, m := range shown {
+		objects = append(objects, a.buildChatMessageObject(m, chatMatches(m, search)))
+	}
+
+	if a.chatSearchCount != nil {
+		if search == "" {
+			a.chatSearchCount.SetText("")
+		} else {
+			a.chatSearchCount.SetText(fmt.Sprintf("(%d)", matchCount))
+		}
+	}
+
+	// Fuera de una sala y sin mirar otra (al abrir la app y después de colgar, C31): en vez
+	// del chat vacío, cómo se entra.
+	if a.viewingRoomName == "" {
+		objects = []fyne.CanvasObject{noRoomHint()}
+		shown, from = nil, 0
+	}
+
+	releaseChatImages(a.chatBox.Objects)
+	a.chatShown = shown
+	a.keepChatThumbs()
+	a.setChatMore(from)
+	a.chatBox.Objects = objects
+	a.chatBox.Refresh()
+	if a.chatScroll != nil && search == "" {
+		a.chatScroll.ScrollToBottom()
+	}
+}
+
+// appendChatRows suma al final las filas de los mensajes que llegaron después de la última armada y
+// saca del principio las que pasan de chatLimit (hilo de UI). Sin buscar: con algo buscado, o si
+// las filas no son las del final del chat, renderChat.
+func (a *App) appendChatRows() {
+	if a.chatBox == nil {
+		return
+	}
+	visible := a.chatVisibleMessages()
+	last := -1
+	if n := len(a.chatShown); n > 0 {
+		for i := len(visible) - 1; i >= 0; i-- {
+			if visible[i].ID == a.chatShown[n-1].ID {
+				last = i
+				break
+			}
+		}
+	}
+	if last < 0 || a.chatSearchText() != "" || a.viewingRoomName == "" {
+		a.renderChat()
+		return
+	}
+	added := visible[last+1:]
+	if len(added) == 0 {
+		return
+	}
+	objects := append([]fyne.CanvasObject(nil), a.chatBox.Objects...)
+	shown := append(append([]history.Message(nil), a.chatShown...), added...)
+	for _, m := range added {
+		objects = append(objects, a.buildChatMessageObject(m, false))
+	}
+	if over := len(shown) - a.chatLimit; over > 0 {
+		releaseChatImages(objects[:over])
+		// Copias nuevas: con objects[over:] el arreglo de atrás seguiría apuntando a las filas viejas.
+		objects = append([]fyne.CanvasObject(nil), objects[over:]...)
+		shown = append([]history.Message(nil), shown[over:]...)
+	}
+	a.chatShown = shown
+	a.keepChatThumbs()
+	a.setChatMore(len(visible) - len(shown))
+	a.chatBox.Objects = objects
+	a.chatBox.Refresh()
+	if a.chatScroll != nil {
+		a.chatScroll.ScrollToBottom()
+	}
+}
+
+// keepChatThumbs deja en thumbCache solo las miniaturas de las filas armadas.
+func (a *App) keepChatThumbs() {
+	paths := map[string]bool{}
+	for _, m := range a.chatShown {
+		if path := a.chatImagePath(m); path != "" {
+			paths[path] = true
+		}
+	}
+	thumbCache.keep(paths)
+}
+
+// setChatMore muestra "Ver anteriores (N)" arriba del chat si quedaron N mensajes sin armar.
+func (a *App) setChatMore(hidden int) {
+	if a.chatMore == nil {
+		return
+	}
+	if hidden <= 0 {
+		a.chatMore.Hide()
+		return
+	}
+	a.chatMore.SetText(i18n.T("chat.show_older", hidden))
+	a.chatMore.Show()
+}
+
+// showOlderChat ("Ver anteriores") arma maxChatRows mensajes más y deja a la vista lo mismo que
+// antes: las filas nuevas quedan arriba, para subir a verlas.
+func (a *App) showOlderChat() {
+	content := a.chatScroll.Content
+	before, offset := content.MinSize().Height, a.chatScroll.Offset.Y
+	a.chatLimit += maxChatRows
+	a.renderChat()
+	a.scrollChatTo(offset + content.MinSize().Height - before)
+}
+
+// scrollChatTo deja el scroll del chat en y. Lo acomoda primero: el contenido recién rearmado
+// todavía tiene el tamaño viejo y ScrollToOffset lo usa para el tope.
+func (a *App) scrollChatTo(y float32) {
+	a.chatScroll.Refresh()
+	a.chatScroll.ScrollToOffset(fyne.NewPos(0, y))
+}
+
+// trimChatForTray vuelve a las últimas maxChatRows filas al mandar la app a la bandeja (C38), así
+// se suelta lo que se había armado con "Ver anteriores" o el buscador. Hilo de UI.
+func (a *App) trimChatForTray() {
+	a.chatLimit = maxChatRows
+	if len(a.chatShown) > maxChatRows {
+		a.renderChat()
+	}
 }
 
 // noRoomHint es el texto del chat fuera de una sala: dónde están las salas guardadas y cómo se
@@ -455,7 +608,7 @@ func (a *App) closeRoomView() {
 	a.soundMu.Unlock()
 	a.rebuildSoundboard()
 	a.refreshRoomList("")
-	a.refreshChat()
+	a.reloadChat()
 }
 
 func (a *App) initHistory(roomName string) {
@@ -495,7 +648,7 @@ func (a *App) initHistory(roomName string) {
 	a.soundMu.Unlock()
 	a.rebuildSoundboard()
 	a.refreshRoomList(roomName)
-	a.refreshChat()
+	a.reloadChat()
 }
 
 func (a *App) addChatMessage(message history.Message) {
@@ -522,21 +675,8 @@ func (a *App) addChatMessage(message history.Message) {
 	a.chatMessages = append(a.chatMessages, message)
 	a.chatMu.Unlock()
 
-	row := a.buildChatMessageObject(message, false)
-	fyne.Do(func() {
-		if a.chatBox == nil {
-			return
-		}
-		// El texto del buscador es estado del widget: se lee acá, en el hilo de UI.
-		if a.chatSearch != nil && strings.TrimSpace(a.chatSearch.Text) != "" {
-			a.refreshChat()
-			return
-		}
-		a.chatBox.Add(row)
-		if a.chatScroll != nil {
-			a.chatScroll.ScrollToBottom()
-		}
-	})
+	// La fila se arma en el hilo de UI, junto con el recorte de las viejas (C38).
+	fyne.Do(a.appendChatRows)
 }
 
 // addSystemMessage anota un aviso de la sala (key: "chat.sys.*") en el registro de actividad y,
@@ -609,7 +749,7 @@ func (a *App) viewRoom(roomName string) {
 	a.chatMu.Lock()
 	a.chatMessages = chatOnly
 	a.chatMu.Unlock()
-	a.refreshChat()
+	a.reloadChat()
 }
 
 func (a *App) refreshRoomList(selected string) {

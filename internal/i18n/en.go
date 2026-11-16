@@ -217,6 +217,7 @@ var en = map[string]string{
 	"chat.image_save_failed":     "Couldn't save the image: %s",
 	"chat.image_shared":          "Shared an image",
 	"chat.copy_image":            "Image: %s",
+	"chat.show_older":            "Show earlier (%d)",
 	"chat.copied":                "Message copied to the clipboard.",
 	"chat.history_open_failed":   "Couldn't open the history of %s",
 	"chat.connect_first_image":   "Join a room before sending an image.",

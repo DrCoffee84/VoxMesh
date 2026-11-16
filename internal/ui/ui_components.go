@@ -161,7 +161,11 @@ func (a *App) content() fyne.CanvasObject {
 	chatComposer := container.NewVBox(a.stagedBar, container.NewBorder(nil, nil, attachImage, sendChat, chatInput))
 
 	a.chatBox = container.NewVBox()
-	a.chatScroll = container.NewVScroll(a.chatBox)
+	// "Ver anteriores (N)" arriba de las filas, oculto si están todas (C38).
+	a.chatMore = widget.NewButtonWithIcon("", theme.MoveUpIcon(), a.showOlderChat)
+	a.chatMore.Importance = widget.LowImportance
+	a.chatMore.Hide()
+	a.chatScroll = container.NewVScroll(container.NewVBox(a.chatMore, a.chatBox))
 	a.roomSelect = widget.NewSelect(nil, func(selected string) { a.viewRoom(selected) })
 	a.roomSelect.PlaceHolder = i18n.T("chat.view_other_room")
 

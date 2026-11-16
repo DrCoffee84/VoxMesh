@@ -107,6 +107,11 @@ type App struct {
 	voiceActive     atomic.Bool
 	isMuted         atomic.Bool // mute del micrófono: lo lee el callback de captura por frame (sendOutgoingPCM)
 	muteButton      *widget.Button
+	// Filas armadas del chat (C38), solo el hilo de UI: chatShown son sus mensajes, en orden;
+	// chatLimit cuántas se arman (maxChatRows y de a maxChatRows más con chatMore, "Ver anteriores").
+	chatShown []history.Message
+	chatLimit int
+	chatMore  *widget.Button
 	// Ensordecido (toggleDeafen): no suenan las voces ni la botonera. Solo en memoria, como el mute.
 	isDeafened      atomic.Bool
 	preDeafenMuted  bool // el mute de antes de ensordecer, para dejarlo al volver; solo el hilo de UI

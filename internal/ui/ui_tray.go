@@ -3,6 +3,8 @@
 package ui
 
 import (
+	"runtime/debug"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
@@ -137,6 +139,10 @@ func (a *App) hideToTray() {
 	a.window.Canvas().Unfocus()
 	a.window.Hide()
 	a.hiddenToTray = true
+	// Menos RAM mientras se juega (C38): el chat vuelve a sus últimas filas y un GC forzado le
+	// devuelve a Windows lo que quedó libre (unos ms, una vez; fuera del hilo de UI).
+	a.trimChatForTray()
+	go debug.FreeOSMemory()
 	logging.Infof("Ventana oculta: VoxMesh sigue en el área de notificaciones")
 }
 
