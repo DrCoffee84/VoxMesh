@@ -10,6 +10,7 @@ import (
 	"fyne.io/fyne/v2/test"
 
 	"voxmesh/internal/config"
+	"voxmesh/internal/identity"
 	"voxmesh/internal/room"
 	"voxmesh/internal/transport"
 )
@@ -43,15 +44,57 @@ func helloHost(t *testing.T, participants []room.Participant) (*App, *transport.
 	return host, clientUDP, fo
 }
 
-// sendHello simula el RoomHello del cliente (id, name) desde su socket.
+// sendHello simula el RoomHello del cliente (id, name) desde su socket, firmado con una llave
+// nueva (F10).
 func sendHello(t *testing.T, host *App, client *transport.UDP, fo *room.Failover, id, name string) {
 	t.Helper()
-	payload, err := room.Encode(room.Envelope{Kind: room.HelloMessage, Participant: &room.Participant{ID: id, Username: name, Connected: true}})
+	sendSignedHello(t, host, client, fo, &room.Participant{ID: id, Username: name, Connected: true}, identity.New(), nil)
+}
+
+// sendSignedHello manda el Hello de p con la llave de signer (p.Key = la de signer si viene
+// vacía); sig != nil reemplaza la firma.
+func sendSignedHello(t *testing.T, host *App, client *transport.UDP, fo *room.Failover, p *room.Participant, signer *identity.Identity, sig []byte) {
+	t.Helper()
+	if p.Key == "" {
+		p.Key = signer.Public().String()
+	}
+	envelope := room.Envelope{Kind: room.HelloMessage, Participant: p, Signature: room.SignHello(signer, [32]byte(host.transport.Load().Key()), p.ID)}
+	if sig != nil {
+		envelope.Signature = sig
+	}
+	payload, err := room.Encode(envelope)
 	if err != nil {
 		t.Fatal(err)
 	}
 	addr := client.Address()
 	host.handleRoomHello(host.transport.Load(), fo, payload, addr, addr.String(), time.Now())
+}
+
+// TestRoomHelloNeedsItsKeySignature (F10): el Hello lleva la llave de la instalación y su firma
+// sobre la sesión; con la llave de otro, sin firma o firmado para otra sala no entra. Con la firma
+// buena la llave queda en el estado.
+func TestRoomHelloNeedsItsKeySignature(t *testing.T) {
+	host, client, fo := helloHost(t, []room.Participant{{ID: "host", Username: "Coffee", Address: "127.0.0.1:1", Connected: true}})
+	juan, other := identity.New(), identity.New()
+
+	// La llave de Juan, firmado por otro (no tiene la privada de Juan).
+	sendSignedHello(t, host, client, fo, &room.Participant{ID: "juan", Username: "Juan", Key: juan.Public().String()}, other, nil)
+	// Sin firma.
+	sendSignedHello(t, host, client, fo, &room.Participant{ID: "juan", Username: "Juan"}, juan, []byte{})
+	// Firmado para otra sala (otra clave).
+	sendSignedHello(t, host, client, fo, &room.Participant{ID: "juan", Username: "Juan"}, juan, room.SignHello(juan, [32]byte{7}, "juan"))
+	// Sin llave.
+	payload, _ := room.Encode(room.Envelope{Kind: room.HelloMessage, Participant: &room.Participant{ID: "juan", Username: "Juan"}})
+	host.handleRoomHello(host.transport.Load(), fo, payload, client.Address(), client.Address().String(), time.Now())
+	if _, ok := participantByID(host.roomState, "juan"); ok {
+		t.Fatal("entró un Hello sin la firma de su llave")
+	}
+
+	sendSignedHello(t, host, client, fo, &room.Participant{ID: "juan", Username: "Juan", Connected: true}, juan, nil)
+	got, ok := participantByID(host.roomState, "juan")
+	if !ok || got.Key != juan.Public().String() {
+		t.Fatalf("con la firma buena entra con su llave: %+v", got)
+	}
 }
 
 func participantByID(state room.State, id string) (room.Participant, bool) {

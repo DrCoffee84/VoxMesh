@@ -412,3 +412,27 @@ func TestDeleteRoom(t *testing.T) {
 		t.Fatalf("salas después de los nombres raros: %v", rooms)
 	}
 }
+
+// confianza.json: no está → nil; se escribe y se lee; se pisa entero.
+func TestStoreTrustFile(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "app")
+	store, err := New(root, "Mi sala")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := store.ReadTrust(); data != nil || err != nil {
+		t.Fatalf("sin archivo: %q %v", data, err)
+	}
+	for _, content := range []string{`{"version":1}`, `{"version":1,"trusted":[]}`} {
+		if err := store.WriteTrust([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+		data, err := store.ReadTrust()
+		if err != nil || string(data) != content {
+			t.Fatalf("leído %q %v", data, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "salas", "Mi sala", TrustFileName)); err != nil {
+		t.Errorf("no quedó en la carpeta de la sala: %v", err)
+	}
+}

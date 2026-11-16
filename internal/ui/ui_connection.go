@@ -60,6 +60,7 @@ func (a *App) stopConnectionAsync() <-chan struct{} {
 	a.setEndpoint("")
 	a.activeRoomName = ""
 	a.closeRoomView() // la ventana queda como al abrir la app: se ve que no estás en ninguna sala
+	a.trust.close()
 	a.peerMu.Lock()
 	a.peerNames = nil
 	a.peerMu.Unlock()
@@ -325,12 +326,15 @@ func (a *App) openHost(roomName, username string) {
 		if len(state.Participants) > 0 {
 			state.Participants[0].CanBeHost = cfg.AllowHostMigration
 			state.Participants[0].Muted = a.isMuted.Load()
+			state.Participants[0].Key = a.ident().Public().String()
 		}
 		a.roomState = state
 		a.roomStore = room.NewStore(state)
 
 		// Operaciones de disco
 		a.initHistory(roomName)
+		a.roomState.Trusted = a.trust.snapshot() // la lista de confianza guardada de la sala (F10)
+		a.roomStore.Replace(a.roomState)
 		a.refreshPeersFromRoom()
 
 		connStop := a.connLife.start()
@@ -640,6 +644,7 @@ func (a *App) connectClient(raw string) {
 			CanBeHost:   cfg.AllowHostMigration,
 			Muted:       a.isMuted.Load(),
 			LastSeenUTC: time.Now().UTC(),
+			Key:         a.ident().Public().String(),
 		}}}
 
 		// El historial (chat, botonera) se abre cuando el host dice cómo se llama su sala
@@ -658,7 +663,9 @@ func (a *App) connectClient(raw string) {
 			Muted:       a.isMuted.Load(),
 			LastSeenUTC: time.Now().UTC(),
 		}
-		payload, _ := room.Encode(room.Envelope{Kind: room.HelloMessage, Room: &a.roomState, Participant: &participant})
+		hello := a.helloEnvelope(udp, &participant)
+		hello.Room = &a.roomState
+		payload, _ := room.Encode(hello)
 		logging.Infof("Enviando PacketRoomHello a %s: usuario=%q, id=%s", addr.String(), participant.Username, participant.ID)
 		_ = udp.Send(addr, transport.Packet{Kind: transport.PacketRoomHello, Sequence: a.sequence.Add(1), Payload: payload})
 

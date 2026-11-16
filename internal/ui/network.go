@@ -137,6 +137,8 @@ func (a *App) handleHostPacket(udp *transport.UDP, fo *room.Failover, packet tra
 		a.handleAssetMissing(udp, addr, packet.Payload)
 	case transport.PacketRoomMute:
 		a.handleMutePacket(udp, addr, packet.Payload)
+	case transport.PacketRoomTrust:
+		a.handleTrustPacket(udp, addr, packet.Payload)
 	case transport.PacketScreenShare:
 		a.handleSharePacket(udp, addr, packet.Payload)
 	case transport.PacketScreenWatch:
@@ -188,7 +190,7 @@ func (a *App) handleClientPacket(udp *transport.UDP, fo *room.Failover, packet t
 		fo.HostState(*envelope.Room, now)
 	case transport.PacketRoomHello:
 		// Alguien que también perdió al host me pide entrar: si me toca, soy el host nuevo.
-		if envelope, err := room.Decode(packet.Payload); err == nil && envelope.Participant != nil {
+		if envelope, err := room.Decode(packet.Payload); err == nil && envelope.Participant != nil && a.helloSigned(udp, envelope, addrStr, now) {
 			fo.HelloFrom(envelope.Participant.ID, now)
 		}
 	case transport.PacketRoomLeave:
@@ -235,7 +237,7 @@ func (a *App) handleClientPacket(udp *transport.UDP, fo *room.Failover, packet t
 // solo recibe el estado de nuevo: sin aviso, sonido ni difusión.
 func (a *App) handleRoomHello(udp *transport.UDP, fo *room.Failover, payload []byte, addr *net.UDPAddr, addrStr string, now time.Time) {
 	envelope, err := room.Decode(payload)
-	if err != nil || envelope.Participant == nil {
+	if err != nil || envelope.Participant == nil || !a.helloSigned(udp, envelope, addrStr, now) {
 		return
 	}
 	joining := envelope.Participant
@@ -480,6 +482,9 @@ func (a *App) handleRoomState(state room.State, udp *transport.UDP) {
 		a.updateConfig(func(c *config.Config) { c.RoomName = roomName })
 		a.initHistory(state.Name)
 	}
+	if a.transport.Load() == udp {
+		a.syncTrustFromHost(state, udp) // la lista de confianza de la sala (F10): cada uno la guarda
+	}
 	if state.HostID == a.participantID || a.hostMode.Load() {
 		return
 	}
@@ -508,7 +513,7 @@ func (a *App) sendHelloOnly(udp *transport.UDP, address *net.UDPAddr) {
 		Watching:    a.watchTarget(),
 		LastSeenUTC: time.Now().UTC(),
 	}
-	payload, _ := room.Encode(room.Envelope{Kind: room.HelloMessage, Participant: &participant})
+	payload, _ := room.Encode(a.helloEnvelope(udp, &participant))
 	_ = udp.Send(address, transport.Packet{Kind: transport.PacketRoomHello, Sequence: a.sequence.Add(1), Payload: payload})
 }
 

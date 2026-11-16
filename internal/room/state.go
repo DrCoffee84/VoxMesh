@@ -26,6 +26,9 @@ type Participant struct {
 	Sharing     bool      `json:"sharing,omitempty"`
 	Watching    string    `json:"watching,omitempty"`
 	LastSeenUTC time.Time `json:"last_seen_utc"`
+	// Key: la llave pública de su instalación (identity.Key.String, AGENDA F10). El host la acepta
+	// solo con la firma del Hello (VerifyHello), así nadie se anota con la llave de otro.
+	Key string `json:"key,omitempty"`
 }
 
 type State struct {
@@ -33,6 +36,9 @@ type State struct {
 	Epoch        uint64        `json:"epoch"`
 	HostID       string        `json:"host_id"`
 	Participants []Participant `json:"participants"`
+	// Trusted es la lista de confianza de la sala ("Dejar entrar siempre", F10): viaja en el estado
+	// y cada miembro la guarda (confianza.json), así cualquiera de adentro deja pasar al marcado.
+	Trusted []Trusted `json:"trusted,omitempty"`
 }
 
 func New(name, username string, address *net.UDPAddr) State {

@@ -130,6 +130,8 @@ func (a *App) takeOverHost(udp *transport.UDP, fo *room.Failover, state room.Sta
 	// del host viejo), y lo propio va según lo local.
 	state.SetSharing(a.participantID, "", a.screenShare.Load() != nil)
 	state.SetWatching(a.participantID, "", a.watchTarget())
+	// La lista de confianza: la del host viejo junta con la guardada acá (F10).
+	state.Trusted = a.trust.merge(state.Trusted)
 	udp.SetScreenRate(transport.ScreenRateBytes) // como host la cola entera es para reenviar
 	a.roomState = state
 	if a.roomStore == nil {

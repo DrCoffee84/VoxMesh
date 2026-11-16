@@ -41,6 +41,9 @@ const (
 	// PeerLag: host → clientes cada 2 s, el lag que midió con cada participante (room.PeerLag). El
 	// cliente solo lo acepta de su host.
 	PacketPeerLag = 20
+	// RoomTrust: cliente → host, sumar a la lista de confianza de la sala ("Dejar entrar siempre",
+	// F10). El host solo lo acepta de la dirección de un participante conectado.
+	PacketRoomTrust = 21
 )
 
 func PacketKindName(kind byte) string {
@@ -83,6 +86,8 @@ func PacketKindName(kind byte) string {
 		return "ScreenRepair"
 	case PacketPeerLag:
 		return "PeerLag"
+	case PacketRoomTrust:
+		return "RoomTrust"
 	default:
 		return fmt.Sprintf("Unknown(%d)", kind)
 	}

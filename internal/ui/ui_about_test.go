@@ -27,7 +27,7 @@ func TestAboutContent(t *testing.T) {
 		setLanguage(t, c.lang)
 		version.Value, version.Commit = c.value, c.commit
 		checked := false
-		content := aboutContent(func() { checked = true })
+		content := aboutContent("K7QF-2M9X", func() { checked = true })
 		var labels []string
 		var link *widget.Hyperlink
 		var button *widget.Button
@@ -41,8 +41,8 @@ func TestAboutContent(t *testing.T) {
 				button = o
 			}
 		})
-		if !contains(labels, c.want) || !contains(labels, i18n.T("about.license")) || !contains(labels, i18n.T("about.author")) {
-			t.Errorf("%s: textos %q, quería %q, la licencia y el autor", c.lang, labels, c.want)
+		if !contains(labels, c.want) || !contains(labels, i18n.T("about.license")) || !contains(labels, i18n.T("about.author")) || !contains(labels, i18n.T("about.id", "K7QF-2M9X")) {
+			t.Errorf("%s: textos %q, quería %q, el ID, la licencia y el autor", c.lang, labels, c.want)
 		}
 		if link == nil || link.Text != aboutAuthor || link.URL == nil || link.URL.String() != aboutRepoURL {
 			t.Errorf("%s: link del autor %+v", c.lang, link)

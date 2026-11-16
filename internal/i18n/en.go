@@ -705,6 +705,7 @@ var en = map[string]string{
 	"about.version": "Version %s · commit %s",
 	"about.author":  "Made by",
 	"about.license": "MIT License",
+	"about.id":      "Your ID: %s",
 
 	// Detalle de lag por participante (ui_lag.go, C18).
 	"lag.show":         "Show lag detail",

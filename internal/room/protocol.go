@@ -35,6 +35,9 @@ const (
 	// RoomFullMessage (host → cliente, PacketRoomLeave): la sala llegó a MaxParticipants y no hay
 	// desconectados viejos para podar; el cliente deja de intentar (Failover.Refused).
 	RoomFullMessage = "room_full"
+	// TrustMessage (PacketRoomTrust, cliente → host): sumar a la lista de confianza de la sala
+	// (Envelope.Trusted). El host la junta con la suya y difunde el estado.
+	TrustMessage = "trust"
 )
 
 type Envelope struct {
@@ -53,6 +56,11 @@ type Envelope struct {
 	Sound       *Sound            `json:"sound,omitempty"`
 	Sounds      []Sound           `json:"sounds,omitempty"`
 	DeletedIDs  []string          `json:"deleted_ids,omitempty"`
+	// Signature (Hello): la firma de la llave del participante sobre la sesión (SignHello).
+	Signature []byte `json:"signature,omitempty"`
+	// Trusted (TrustMessage, cliente → host): entradas de la lista de confianza que el host no
+	// tiene (marcadas por el cliente, o de su confianza.json).
+	Trusted []Trusted `json:"trusted,omitempty"`
 }
 
 type Image struct {

@@ -33,13 +33,14 @@ func (a *App) showAbout() {
 	if a.window == nil {
 		return
 	}
-	content := aboutContent(func() { go a.checkForUpdates(true) })
+	content := aboutContent(a.ident().Public().Short(), func() { go a.checkForUpdates(true) })
 	dialog.NewCustom(i18n.T("about.title"), i18n.T("common.close"), content, a.window).Show()
 }
 
-// aboutContent arma el cuerpo del diálogo: ícono, versión y commit, autor con el link al repo,
-// licencia y "Buscar actualizaciones" (que deja el diálogo abierto: su resultado sale encima).
-func aboutContent(checkUpdates func()) fyne.CanvasObject {
+// aboutContent arma el cuerpo del diálogo: ícono, versión y commit, el ID corto de esta instalación
+// (F10: para comparar a ojo si es la misma), autor con el link al repo, licencia y "Buscar
+// actualizaciones" (que deja el diálogo abierto: su resultado sale encima).
+func aboutContent(shortID string, checkUpdates func()) fyne.CanvasObject {
 	center := func(text string, style fyne.TextStyle) *widget.Label {
 		return widget.NewLabelWithStyle(text, fyne.TextAlignCenter, style)
 	}
@@ -54,6 +55,7 @@ func aboutContent(checkUpdates func()) fyne.CanvasObject {
 	rows = append(rows,
 		center("VoxMesh", fyne.TextStyle{Bold: true}),
 		center(aboutVersionText(), fyne.TextStyle{}),
+		center(i18n.T("about.id", shortID), fyne.TextStyle{Monospace: true}),
 	)
 	author := widget.NewLabel(i18n.T("about.author"))
 	if repo, err := url.Parse(aboutRepoURL); err == nil {

@@ -613,6 +613,7 @@ func (a *App) initHistory(roomName string) {
 	}
 	a.historyStore.Store(store)
 	a.viewStore.Store(store)
+	a.trust.open(store) // la lista de confianza de la sala (F10): la del archivo
 	a.activeRoomName = roomName
 	a.viewingRoomName = roomName
 	messages, err := store.Load()

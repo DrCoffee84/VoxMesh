@@ -50,6 +50,8 @@ Para descargar e instalar, ver el [README](README.es.md). Acá está el detalle 
 
 Cada "Iniciar sala" genera una clave nueva (solo en memoria) que viaja dentro de la invitación. Todo lo de la sala (voz, chat, imágenes, sonidos, control) va cifrado y autenticado con esa clave (AES-256-GCM): sin la invitación nadie puede escuchar ni entrar, aunque sepa la `IP:puerto`. **Quien tenga la invitación puede entrar**. Lo que no se oculta son las IPs de los participantes.
 
+Cada instalación tiene su ID: un par de llaves Ed25519 que se genera la primera vez en `%AppData%\VoxMesh\identidad.json` (Go puro, sin APIs de Windows; la privada en texto plano, con permisos solo del usuario). "Acerca de" muestra una versión corta de la pública (ej. `K7QF-2M9X`) para comparar a ojo. El Hello de la sala lleva la llave pública firmada sobre la sesión (el SHA-256 de la clave de la sala más el ID de participante), así nadie se anota con la llave de otro; el estado de la sala lleva la llave de cada uno y la lista de confianza de la sala ("Dejar entrar siempre"), que cada miembro guarda en `salas\<sala>\confianza.json`.
+
 "En tu red" (presencia en la LAN/VPN) va aparte y sin la clave: el aviso solo lleva un ID al azar de la sesión, el nombre y si estás en una sala. Cualquiera de la misma red puede mandar avisos o "llamar": la lista tiene topes (20, 4 por IP, vence a los 10 s), hay una llamada a la vez y una por IP cada 10 s, nada se guarda ni se ejecuta, y se descarta todo lo que viene de una IP de internet. La invitación (con la clave) va en claro por la red local, solo a quien atendió la llamada, con el ID de esa llamada.
 
 ## Red
@@ -141,6 +143,7 @@ internal/history/   Historial, imágenes y sonidos por sala
 internal/config/    voxmesh.json, tabla de parámetros de audio, perfiles
 internal/i18n/      Textos de la interfaz en inglés y español (en.go, es.go)
 internal/netinfo/   IP local/pública, broadcast por interfaz y UPnP
+internal/identity/  ID por instalación: par de llaves Ed25519, firmar y verificar (Go puro)
 internal/presence/  "En tu red": avisos en la LAN/VPN, lista de quién está y la llamada (sin la clave de la sala)
 internal/phonemic/  Servidor del celular como micrófono
 internal/updater/   Actualización desde GitHub Releases

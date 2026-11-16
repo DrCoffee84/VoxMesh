@@ -536,6 +536,33 @@ func (s *Store) ListSounds() ([]SoundMeta, error) {
 	return sounds, scanErr
 }
 
+// TrustFileName es la lista de confianza de la sala ("Dejar entrar siempre", AGENDA F10): el
+// formato lo arma room.EncodeTrustFile.
+const TrustFileName = "confianza.json"
+
+// ReadTrust lee confianza.json de la sala. Si no existe, nil sin error.
+func (s *Store) ReadTrust() ([]byte, error) {
+	data, err := s.readInRoom(TrustFileName)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	return data, err
+}
+
+// WriteTrust guarda confianza.json (al lado y renombrado encima: un corte no lo deja a medias),
+// con permisos solo para el usuario.
+func (s *Store) WriteTrust(data []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inRoom(func(root *os.Root) error {
+		tmp := TrustFileName + ".tmp"
+		if err := root.WriteFile(tmp, data, 0600); err != nil {
+			return err
+		}
+		return root.Rename(tmp, TrustFileName)
+	})
+}
+
 // ListRooms returns the names of rooms that already have local history under root.
 func ListRooms(root string) ([]string, error) {
 	entries, err := os.ReadDir(filepath.Join(root, "salas"))

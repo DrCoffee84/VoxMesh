@@ -24,6 +24,7 @@ import (
 	"voxmesh/internal/config"
 	"voxmesh/internal/history"
 	"voxmesh/internal/i18n"
+	"voxmesh/internal/identity"
 	"voxmesh/internal/logging"
 	"voxmesh/internal/netinfo"
 	"voxmesh/internal/phonemic"
@@ -225,6 +226,12 @@ type App struct {
 	callUI    *callUI         // el cartel de la llamada en curso (nil = ninguna); solo el hilo de UI
 	callSeq   atomic.Uint64   // cambia al cortar: una llamada que todavía abría la sala no sale
 	ringGen   atomic.Uint64   // cambia al parar el timbre
+
+	// El ID de esta instalación (F10, room_trust.go: loadIdentity en Run, ident) y la lista de
+	// confianza de la sala en la que estoy (trustBook, con su mutex).
+	identity          atomic.Pointer[identity.Identity]
+	trust             trustBook
+	helloRejectLogged time.Time // último Hello sin firma válida en el log; solo receiveLoop
 }
 
 // appTitle es el título de la ventana principal (un nombre: no se traduce). Mientras comparto
@@ -332,6 +339,7 @@ func (a *App) Run(onShowRequest func(func())) {
 		appIcon := fyne.NewStaticResource("icon.png", appIconBytes)
 		application.SetIcon(appIcon)
 	}
+	a.loadIdentity() // un archivo chico, antes de la ventana y de "En tu red" (lo firma todo)
 	a.window = application.NewWindow(appTitle)
 	if len(appIconBytes) > 0 {
 		appIcon := fyne.NewStaticResource("icon.png", appIconBytes)

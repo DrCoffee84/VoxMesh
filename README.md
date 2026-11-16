@@ -9,7 +9,7 @@ Voice and text chat for gaming or hanging out with friends, on **Windows**. It's
 - 💻 **PC (Windows 10 or 11):** [**Download VoxMesh for Windows**](https://github.com/DrCoffee84/VoxMesh/releases/latest/download/voxmesh.exe)
 - 📱 **Phone as a microphone** (Android, optional): [**Download VoxMesh Mic**](https://github.com/DrCoffee84/VoxMesh/releases/download/v1.0.0/voxmesh-mic.apk)
 
-The PC app updates itself: when a new version comes out, it asks whether you want to install it. **Everyone in the room needs the same version.** To see yours, click the version at the bottom right (or Settings → System → **About VoxMesh**).
+The PC app updates itself: when a new version comes out, it asks whether you want to install it. **Everyone in the room needs the same version.** To see yours, click the version at the bottom right (or Settings → System → **About VoxMesh**). There you also see **your ID** (like `K7QF-2M9X`): it belongs to this installation, not to your name, and it's how VoxMesh recognizes you.
 
 ## Install on the PC
 
