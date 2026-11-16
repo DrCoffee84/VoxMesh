@@ -18,6 +18,10 @@ func (a *App) showStopSoundBindDialog() {
 	// Fallback when global hotkeys are not available
 }
 
+func (a *App) showStopAllSoundBindDialog() {
+	// Fallback when global hotkeys are not available
+}
+
 func (a *App) showToggleHotkeysBindDialog() {
 	// Fallback when global hotkeys are not available
 }

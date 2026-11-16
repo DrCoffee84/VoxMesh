@@ -181,9 +181,10 @@ func (a *App) triggerSoundByID(id string) {
 type hotkeyAction int
 
 const (
-	hotkeySound  hotkeyAction = iota // un sonido (boundHotkey.soundID)
-	hotkeyStop                       // "Detener"
-	hotkeyToggle                     // prender/apagar los atajos de la botonera (AGENDA C20)
+	hotkeySound   hotkeyAction = iota // un sonido (boundHotkey.soundID)
+	hotkeyStop                        // "Detener"
+	hotkeyToggle                      // prender/apagar los atajos de la botonera (AGENDA C20)
+	hotkeyStopAll                     // "Detener para todos" (AGENDA C37)
 )
 
 // boundHotkey es un atajo ya parseado; soundID solo con hotkeySound.
@@ -200,6 +201,8 @@ func (b boundHotkey) pollKey() string {
 		return "__stop__"
 	case hotkeyToggle:
 		return "__toggle__"
+	case hotkeyStopAll:
+		return "__stop_all__"
 	}
 	return b.soundID
 }
@@ -221,6 +224,9 @@ func hotkeyBinds(cfg *config.Config) []boundHotkey {
 	}
 	if hk, ok := parseHotkeyString(cfg.StopSoundBind); ok {
 		list = append(list, boundHotkey{action: hotkeyStop, hk: hk})
+	}
+	if hk, ok := parseHotkeyString(cfg.StopAllSoundBind); ok {
+		list = append(list, boundHotkey{action: hotkeyStopAll, hk: hk})
 	}
 	for soundID, bind := range cfg.SoundBinds {
 		if hk, ok := parseHotkeyString(bind); ok {
@@ -284,6 +290,8 @@ func (a *App) pollHotkeys() {
 			switch bound.action {
 			case hotkeyStop:
 				a.stopSoundboard()
+			case hotkeyStopAll:
+				a.stopSoundsForAll() // corta acá y manda sound_stop en su propia goroutine
 			case hotkeyToggle:
 				fyne.Do(a.toggleSoundHotkeys)
 			default:
@@ -293,8 +301,8 @@ func (a *App) pollHotkeys() {
 	}
 }
 
-// bindTarget es el dueño de un atajo: un sonido (por ID), "Detener" o el que prende y apaga los
-// atajos.
+// bindTarget es el dueño de un atajo: un sonido (por ID), "Detener", "Detener para todos" o el que
+// prende y apaga los atajos.
 type bindTarget struct {
 	action  hotkeyAction
 	soundID string
@@ -318,6 +326,9 @@ func bindConflict(cfg *config.Config, soundNames map[string]string, combo string
 	if self.action != hotkeyStop && same(cfg.StopSoundBind) {
 		return i18n.T("sound.stop"), true
 	}
+	if self.action != hotkeyStopAll && same(cfg.StopAllSoundBind) {
+		return i18n.T("hotkey.stop_all_title"), true
+	}
 	for _, id := range slices.Sorted(maps.Keys(cfg.SoundBinds)) {
 		if self.action == hotkeySound && id == self.soundID {
 			continue
@@ -340,8 +351,8 @@ func (a *App) soundNames() map[string]string {
 	return names
 }
 
-// bindDialog es el diálogo que elige un atajo: el de un sonido, el de "Detener" y el que prende y
-// apaga los atajos son iguales salvo los textos y qué se guarda.
+// bindDialog es el diálogo que elige un atajo: el de un sonido, el de "Detener", el de "Detener para
+// todos" y el que prende y apaga los atajos son iguales salvo los textos y qué se guarda.
 type bindDialog struct {
 	dialogTitle string
 	title       string
@@ -501,6 +512,32 @@ func (a *App) showStopSoundBindDialog() {
 		unbind: func() {
 			set("")
 			a.setStatus(i18n.M("hotkey.stop_removed"))
+		},
+	})
+}
+
+// showStopAllSoundBindDialog elige el atajo de "Detener para todos" (C37).
+func (a *App) showStopAllSoundBindDialog() {
+	set := func(combo string) {
+		a.updateConfig(func(c *config.Config) { c.StopAllSoundBind = combo })
+		a.publishHotkeys()
+		a.saveConfig()
+		if a.stopAllBindBtn != nil {
+			a.stopAllBindBtn.SetCombo(combo)
+		}
+	}
+	a.showBindDialog(bindDialog{
+		dialogTitle: i18n.T("hotkey.stop_all_dialog_title"),
+		title:       i18n.T("hotkey.stop_all_title"),
+		current:     a.conf().StopAllSoundBind,
+		target:      bindTarget{action: hotkeyStopAll},
+		accept: func(combo string) {
+			set(combo)
+			a.setStatus(i18n.M("hotkey.stop_all_assigned", combo))
+		},
+		unbind: func() {
+			set("")
+			a.setStatus(i18n.M("hotkey.stop_all_removed"))
 		},
 	})
 }

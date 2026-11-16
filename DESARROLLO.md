@@ -25,7 +25,7 @@ Para descargar e instalar, ver el [README](README.es.md). Acá está el detalle 
 
 **Texto y sonidos**
 - Chat con imágenes (botón 📎 o pegar con Ctrl+V; PNG, JPG, GIF o WebP, hasta 8 MiB) e historial por sala que se sincroniza al reconectar. Con el mouse sobre el ícono de copiar de un mensaje, ese renglón se ilumina (y destella al copiar), así se ve qué se copia.
-- Botonera de sonidos (MP3/WAV, con recorte de hasta ~87 s) con atajos de teclado globales, que también funcionan con un juego en primer plano. Se sincroniza con la sala: los audios se bajan cuando alguien los usa. **Detener** corta en tu PC; **Detener para todos** corta en toda la sala (también un sonido que todavía se estaba bajando).
+- Botonera de sonidos (MP3/WAV, con recorte de hasta ~87 s) con atajos de teclado globales, que también funcionan con un juego en primer plano. Se sincroniza con la sala: los audios se bajan cuando alguien los usa. **Detener** corta en tu PC; **Para todos** (Detener para todos) corta en toda la sala (también un sonido que todavía se estaba bajando). Los dos tienen atajo, y los dos se apagan con "Atajos: no".
 - **Atajos: sí / no** (debajo de Detener, con su propio atajo al lado): apaga los atajos de la botonera, también el de Detener, para jugar con teclado sin que suenen. Solo sigue andando el suyo; al cambiarlo suena un tono local (siempre, aunque los sonidos de eventos estén apagados) y queda una línea en el registro de actividad. Se guarda en `voxmesh.json` (`sound_hotkeys_off`, `toggle_hotkeys_bind`). Los tres diálogos de atajo rechazan una tecla que ya usa otro atajo de la botonera.
 
 **Pantalla compartida** (para dar soporte: ayudar a alguien a configurar algo viendo su escritorio)

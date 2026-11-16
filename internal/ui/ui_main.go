@@ -145,6 +145,7 @@ type App struct {
 	soundPicking    atomic.Bool            // hay un selector de sonido abierto (evita abrir dos con doble clic)
 	soundPlayer     *audio.Player
 	stopBindBtn     *bindButton
+	stopAllBindBtn  *bindButton    // el atajo de "Detener para todos" (C37)
 	hotkeysButton   *widget.Button // prende y apaga los atajos de la botonera (C20); solo el hilo de UI
 	toggleBindBtn   *bindButton    // su atajo
 	tooltip         *tooltip       // leyenda de la ventana principal (atajos de la botonera); solo el hilo de UI

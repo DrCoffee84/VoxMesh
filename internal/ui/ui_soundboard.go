@@ -75,9 +75,16 @@ func (a *App) buildSoundPanel() {
 	stopActions := container.NewHBox(stopBindWrap, delSpacer)
 	stopRow := container.NewBorder(nil, nil, nil, stopActions, stopButton)
 
-	// "Detener" (y su atajo) corta solo acá; este corta para toda la sala (sound_stop). Va a todo
-	// el ancho: con el botón de atajo al lado el texto no entra en la columna.
-	stopAllButton := widget.NewButtonWithIcon(i18n.T("sound.stop_all"), theme.MediaStopIcon(), a.stopSoundsForAll)
+	// "Detener" (y su atajo) corta solo acá; "Para todos" corta en toda la sala (sound_stop), con su
+	// atajo al lado como "Detener" (C37). Dice solo "Para todos" para entrar en la columna con el
+	// botón de atajo; la leyenda al pasar el mouse dice el nombre entero.
+	stopAllButton := a.newHintButton(theme.MediaStopIcon(), i18n.T("sound.stop_all_hint"), a.stopSoundsForAll)
+	stopAllButton.Text = i18n.T("sound.stop_all")
+	stopAllButton.Importance = widget.MediumImportance // como "Detener" (newHintButton es para íconos sueltos)
+	a.stopAllBindBtn = a.newBindButton(cfg.StopAllSoundBind, a.showStopAllSoundBindDialog)
+	stopAllBindWrap := container.NewGridWrap(fyne.NewSize(bindButtonWidth, 34), a.stopAllBindBtn)
+	stopAllSpacer := container.NewGridWrap(fyne.NewSize(34, 34), layout.NewSpacer())
+	stopAllRow := container.NewBorder(nil, nil, nil, container.NewHBox(stopAllBindWrap, stopAllSpacer), stopAllButton)
 
 	// Prender y apagar los atajos de la botonera (C20), para jugar con teclado sin que suenen. Con
 	// la forma de "Detener": el botón (muestra el estado) y su atajo, que sigue andando apagados.
@@ -108,7 +115,7 @@ func (a *App) buildSoundPanel() {
 		muteCheck,
 		volRow,
 		stopRow,
-		stopAllButton,
+		stopAllRow,
 		hotkeysRow,
 		searchEntry,
 		widget.NewSeparator(),
