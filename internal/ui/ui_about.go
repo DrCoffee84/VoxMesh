@@ -27,7 +27,7 @@ func aboutVersionText() string {
 	return i18n.T("about.version", version.Value, version.CommitText())
 }
 
-// showAbout (hilo de UI) abre "Acerca de VoxMesh": desde Ajustes → Interfaz y Sistema y desde la
+// showAbout (hilo de UI) abre "Acerca de VoxMesh": desde Ajustes → Sistema y desde la
 // versión de la barra de estado.
 func (a *App) showAbout() {
 	if a.window == nil {

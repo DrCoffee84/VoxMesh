@@ -29,8 +29,8 @@ func TestProblemLine(t *testing.T) {
 		lang i18n.Lang
 		want string
 	}{
-		{i18n.ES, "No encontré el micrófono «Auriculares USB»: uso el predeterminado de Windows. Si lo querés usar, conectalo y tocá Reiniciar audio, o elegí otro en Ajustes."},
-		{i18n.EN, "Couldn't find the mic «Auriculares USB»: using the Windows default. To use it, plug it in and click Restart audio, or pick another one in Settings."},
+		{i18n.ES, "No encontré el micrófono «Auriculares USB»: uso el predeterminado de Windows. Si lo querés usar, conectalo y tocá Reiniciar audio, o elegí otro en Ajustes → Entrada y salida."},
+		{i18n.EN, "Couldn't find the mic «Auriculares USB»: using the Windows default. To use it, plug it in and click Restart audio, or pick another one in Settings → Input and output."},
 	} {
 		if got := problemLine(problemDevice, missing).In(tc.lang); got != tc.want {
 			t.Errorf("%s:\n got %q\nwant %q", tc.lang, got, tc.want)
@@ -140,7 +140,7 @@ func TestReportProblemInActivityLog(t *testing.T) {
 		t.Errorf("barra de estado: %q", status)
 	}
 	rows := activityTexts(a)
-	if len(rows) != 1 || !strings.HasSuffix(rows[0], "Si lo querés usar, conectalo y tocá Reiniciar audio, o elegí otro en Ajustes.") {
+	if len(rows) != 1 || !strings.HasSuffix(rows[0], "Si lo querés usar, conectalo y tocá Reiniciar audio, o elegí otro en Ajustes → Entrada y salida.") {
 		t.Fatalf("registro: %q", rows)
 	}
 	a.applyResolvedDevices(want, present.Device, missing, present)

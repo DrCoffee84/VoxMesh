@@ -122,6 +122,7 @@ type App struct {
 	mainView        fyne.CanvasObject
 	mainFrame       *fyne.Container // barra de arriba (+ banner de pantalla) | centro | barra de estado
 	settingsStatus  *widget.Label
+	settingsTab     int // última pestaña de Ajustes que se miró (C33); solo hilo de UI, no va a la config
 	assetAssembler  *assets.Assembler
 	assetRejects    rejectedAssets
 	roomFullLogged  time.Time // último "Sala llena" en el log; solo receiveLoop

@@ -599,11 +599,8 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 	showStatusBarCheck := otherControls.control("show_status_bar")
 	closeToTrayCheck := otherControls.control("close_to_tray")
 	showLANInvitesCheck := otherControls.control("show_lan_invites")
-	profileCard := uiCard(container.NewVBox(
-		widget.NewLabelWithStyle(i18n.T("settings.card.profile"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		widget.NewLabel(i18n.T("settings.username")),
-		username,
-	))
+	// Entrada y Salida comparten pestaña: su título dice cuál es cuál. Las demás pestañas tienen
+	// una sola tarjeta, sin título (ya lo dice la pestaña).
 	inputCard := uiCard(container.NewVBox(
 		widget.NewLabelWithStyle(i18n.T("settings.card.input"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		widget.NewLabel(i18n.T("settings.input_source")),
@@ -629,11 +626,12 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 		container.NewHBox(outputFilterCheck, outputAdvancedButton, resetOutputFilters),
 		outputAdvanced,
 	))
+	phoneBufferHint := widget.NewLabel(i18n.T("settings.phone_buffer_hint"))
+	phoneBufferHint.Wrapping = fyne.TextWrapWord // la ruta es larga: que baje de línea antes que ensanchar Ajustes
 	phoneCard := uiCard(container.NewVBox(
-		widget.NewLabelWithStyle(i18n.T("settings.card.phone"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		container.NewBorder(nil, nil, container.NewGridWrap(fyne.NewSize(12, 12), serverLED), nil, serverLabel),
 		container.NewBorder(nil, nil, container.NewGridWrap(fyne.NewSize(12, 12), connectionLED), nil, connectionLabel),
-		widget.NewLabel(i18n.T("settings.phone_buffer_hint")),
+		phoneBufferHint,
 		container.NewGridWithColumns(2, showQR, stopPhone),
 	))
 	eventSoundsCheck := otherControls.control("event_sounds_enabled")
@@ -641,13 +639,13 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 	upnpLeaseControl := otherControls.control("upnp_lease_hours")
 
 	networkCard := uiCard(container.NewVBox(
-		widget.NewLabelWithStyle(i18n.T("settings.card.network"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		widget.NewLabel(i18n.T("settings.room_port", config.DefaultListenPort)),
 		roomPortEntry,
 		widget.NewLabel(i18n.T("settings.phone_port", config.DefaultPhoneMicPort)),
 		phonePortEntry,
 		allowHostCheck,
 		upnpLeaseControl,
+		showLANInvitesCheck,
 	))
 	openDataDirButton := widget.NewButtonWithIcon(i18n.T("settings.open_data"), theme.FolderOpenIcon(), func() {
 		if err := openDataDirectory(); err != nil {
@@ -682,15 +680,17 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 	}
 	_, paletteRow := a.newPaletteBar(palettes)
 	interfaceCard := uiCard(container.NewVBox(
-		widget.NewLabelWithStyle(i18n.T("settings.card.interface"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		widget.NewLabel(i18n.T("settings.username")),
+		username,
 		widget.NewLabel(languageLabel),
 		languageSelect,
 		languageHint,
 		paletteRow,
 		closeToTrayCheck,
 		showStatusBarCheck,
-		showLANInvitesCheck,
 		eventSoundsCheck,
+	))
+	systemCard := uiCard(container.NewVBox(
 		logLevelLabel,
 		logLevelSelect,
 		// Uno debajo del otro: en tres columnas cada una medía lo que el texto más largo.
@@ -699,17 +699,41 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 		checkUpdatesButton,
 		aboutButton,
 	))
-	settingsBody := container.NewVScroll(container.NewVBox(
-		profileCard,
+	tabs := a.settingsTabs(
 		container.NewGridWithColumns(2, inputCard, outputCard),
 		phoneCard,
 		networkCard,
 		interfaceCard,
-	))
+		systemCard,
+	)
 	back := widget.NewButtonWithIcon(i18n.T("settings.back"), theme.NavigateBackIcon(), askBack)
 	header := container.NewBorder(nil, nil, back, nil, widget.NewLabelWithStyle(i18n.T("settings.title"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}))
+	// Volver, el estado, Cancelar y Guardar quedan afuera de las pestañas: Guardar guarda todo,
+	// se esté mirando la pestaña que sea.
 	footer := container.NewBorder(nil, nil, nil, container.NewHBox(widget.NewButton(i18n.T("common.cancel"), askCancel), widget.NewButton(i18n.T("common.save"), saveSettings)), a.settingsStatus)
-	a.window.SetContent(container.NewBorder(header, footer, nil, nil, settingsBody))
+	a.window.SetContent(container.NewBorder(header, footer, nil, nil, tabs))
+}
+
+// settingsTabKeys son los títulos de las pestañas de Ajustes (C33), en orden: Entrada y salida ·
+// Celular · Red · Interfaz · Sistema.
+var settingsTabKeys = []string{"settings.tab.audio", "settings.tab.phone", "settings.tab.network", "settings.tab.interface", "settings.tab.system"}
+
+// settingsTabs arma las pestañas de Ajustes, arriba (como las ventanas de propiedades de Windows),
+// con un contenido por cada settingsTabKeys. Cada pestaña tiene su propio scroll, que estira una
+// tarjeta sola hasta llenarla. El ancho mínimo es el de la pestaña más ancha (Entrada y salida).
+// Abre en la última que se miró mientras la app siga abierta (a.settingsTab).
+func (a *App) settingsTabs(contents ...fyne.CanvasObject) *container.AppTabs {
+	items := make([]*container.TabItem, len(contents))
+	for i, content := range contents {
+		items[i] = container.NewTabItem(i18n.T(settingsTabKeys[i]), container.NewVScroll(content))
+	}
+	tabs := container.NewAppTabs(items...)
+	tabs.SetTabLocation(container.TabLocationTop)
+	if a.settingsTab > 0 && a.settingsTab < len(items) {
+		tabs.SelectIndex(a.settingsTab)
+	}
+	tabs.OnSelected = func(*container.TabItem) { a.settingsTab = tabs.SelectedIndex() }
+	return tabs
 }
 
 // showPhoneMic arranca el servidor del celular (si hace falta) y muestra el QR. Arrancar el
