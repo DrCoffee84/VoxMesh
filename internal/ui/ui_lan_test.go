@@ -108,20 +108,25 @@ func testLANCard(t *testing.T, lang string) {
 		t.Fatalf("con 3: hint visible=%v, %d renglones", a.lanHint.Visible(), len(a.lanList.Objects))
 	}
 	for i, want := range []struct {
-		name, status string
-		importance   widget.Importance
+		name, status string // status "" = el botón Llamar
 	}{
-		{"Juan", i18n.T("lan.available"), widget.SuccessImportance},
-		{"Pedro", i18n.T("lan.in_room"), widget.WarningImportance},
-		{long, i18n.T("lan.available"), widget.SuccessImportance},
+		{"Juan", ""},
+		{"Pedro", i18n.T("lan.in_room")},
+		{long, ""},
 	} {
-		labels := labelsIn(a.lanList.Objects[i])
-		if len(labels) != 2 || labels[0].Text != want.name || labels[1].Text != want.status || labels[1].Importance != want.importance {
+		row := a.lanList.Objects[i]
+		labels := labelsIn(row)
+		if len(labels) == 0 || labels[0].Text != want.name || labels[0].Truncation != fyne.TextTruncateEllipsis {
 			t.Errorf("renglón %d: %+v", i, labels)
 			continue
 		}
-		if labels[0].Truncation != fyne.TextTruncateEllipsis {
-			t.Errorf("renglón %d: el nombre se tiene que cortar con …", i)
+		call := findInTree(row, buttonWithText(i18n.T("lan.call")))
+		if want.status == "" {
+			if call == nil || len(labels) != 1 {
+				t.Errorf("renglón %d: disponible, con Llamar y sin estado", i)
+			}
+		} else if call != nil || len(labels) != 2 || labels[1].Text != want.status || labels[1].Importance != widget.WarningImportance {
+			t.Errorf("renglón %d: en una sala, sin Llamar: %+v", i, labels)
 		}
 	}
 	if width := a.connectionPanel.MinSize().Width; width != connectionPanelWidth {

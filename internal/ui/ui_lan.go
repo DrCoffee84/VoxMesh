@@ -5,10 +5,12 @@ package ui
 import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"voxmesh/internal/i18n"
+	"voxmesh/internal/logging"
 	"voxmesh/internal/presence"
 )
 
@@ -105,7 +107,7 @@ func (a *App) showLANPeers(state lanState, peers []presence.Peer) {
 	}
 	rows := make([]fyne.CanvasObject, 0, len(peers))
 	for _, peer := range peers {
-		rows = append(rows, lanPeerRow(peer))
+		rows = append(rows, lanPeerRow(peer, func() { a.callPeer(peer) }))
 	}
 	a.lanList.Objects = rows
 	a.lanList.Refresh()
@@ -121,17 +123,145 @@ func (a *App) showLANPeers(state lanState, peers []presence.Peer) {
 	}
 }
 
+// callIcon es el teléfono de Material ("call"), del color del texto.
+var callIcon = theme.NewThemedResource(fyne.NewStaticResource("call.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path d="M20.01 15.38c-1.23 0-2.42-.2-3.53-.56-.35-.12-.74-.03-1.01.24l-1.57 1.97c-2.83-1.35-5.48-3.9-6.89-6.83l1.95-1.66c.27-.28.35-.67.24-1.02-.37-1.11-.56-2.3-.56-3.53 0-.54-.45-.99-.99-.99H4.19C3.65 3 3 3.24 3 3.99 3 13.28 10.73 21 20.01 21c.71 0 .99-.63.99-1.18v-3.45c0-.54-.45-.99-.99-.99z"/></svg>`)))
+
 // lanPeerRow es el renglón de una persona: el punto verde (disponible) o naranja (en una sala), el
-// nombre (cortado con "…" si no entra: nunca ensancha la columna) y el estado a la derecha.
-func lanPeerRow(peer presence.Peer) fyne.CanvasObject {
-	dotColor, status, importance := theme.ColorNameSuccess, i18n.T("lan.available"), widget.SuccessImportance
+// nombre (cortado con "…" si no entra: nunca ensancha la columna) y a la derecha Llamar (onCall) o,
+// si está en una sala, "En una sala": por ahora no se llama a alguien que está en otra llamada.
+func lanPeerRow(peer presence.Peer, onCall func()) fyne.CanvasObject {
+	dotColor := theme.ColorNameSuccess
+	var right fyne.CanvasObject
 	if peer.InRoom {
-		dotColor, status, importance = theme.ColorNameWarning, i18n.T("lan.in_room"), widget.WarningImportance
+		dotColor = theme.ColorNameWarning
+		state := widget.NewLabel(i18n.T("lan.in_room"))
+		state.Importance = widget.WarningImportance
+		right = state
+	} else {
+		call := widget.NewButtonWithIcon(i18n.T("lan.call"), callIcon, onCall)
+		call.Importance = widget.LowImportance
+		right = call
 	}
 	dot := container.NewCenter(container.NewGridWrap(fyne.NewSize(10, 10), newThemedCircle(dotColor)))
 	name := widget.NewLabel(peer.Name)
 	name.Truncation = fyne.TextTruncateEllipsis
-	state := widget.NewLabel(status)
-	state.Importance = importance
-	return container.NewBorder(nil, nil, dot, state, name)
+	return container.NewBorder(nil, nil, dot, right, name)
+}
+
+// callUI es el cartel de una llamada: "Llamando a Juan… [Cortar]" para el que llama, "Coffee te
+// está llamando · Sala: Los pibes · [Rechazar] [Atender]" para el llamado. Solo el hilo de UI.
+type callUI struct {
+	dialog  dialog.Dialog
+	text    *widget.Label
+	buttons *fyne.Container
+	name    string // el otro
+	seq     uint64 // del que llama: a.callSeq de esta llamada
+}
+
+// openCallUI abre el cartel con text y buttons.
+func (a *App) openCallUI(name, text string, buttons ...fyne.CanvasObject) *callUI {
+	ui := &callUI{text: widget.NewLabel(text), buttons: container.NewGridWithColumns(max(1, len(buttons)), buttons...), name: name}
+	ui.text.Wrapping = fyne.TextWrapWord
+	ui.text.Alignment = fyne.TextAlignCenter
+	ui.dialog = dialog.NewCustomWithoutButtons(i18n.T("lan.call_title"), container.NewVBox(ui.text, ui.buttons), a.window)
+	ui.dialog.Resize(fyne.NewSize(360, 0))
+	ui.dialog.Show()
+	a.callUI = ui
+	return ui
+}
+
+// showOutgoingCall: "Llamando a Juan…" con Cortar.
+func (a *App) showOutgoingCall(name string) {
+	ui := a.openCallUI(name, i18n.T("lan.calling", name), widget.NewButtonWithIcon(i18n.T("lan.hang_up"), theme.CancelIcon(), a.hangUpCall))
+	ui.seq = a.callSeq.Load()
+}
+
+// finishOutgoingCall deja el cartel del que llama con el resultado y Cerrar (si sigue siendo esa
+// llamada).
+func (a *App) finishOutgoingCall(seq uint64, text string) {
+	if a.callUI == nil || a.callUI.seq != seq {
+		return
+	}
+	a.callSeq.Add(1)
+	a.setCallText(text)
+	a.callUI.buttons.Objects = []fyne.CanvasObject{widget.NewButton(i18n.T("common.close"), a.closeCallUI)}
+	a.callUI.buttons.Refresh()
+}
+
+// setCallText cambia el texto del cartel.
+func (a *App) setCallText(text string) {
+	if a.callUI != nil {
+		a.callUI.text.SetText(text)
+	}
+}
+
+// closeCallUI cierra el cartel (y el timbre).
+func (a *App) closeCallUI() {
+	a.stopRing()
+	if a.callUI != nil {
+		a.callUI.dialog.Hide()
+		a.callUI = nil
+	}
+}
+
+// showCallEvent muestra lo que pasó con la llamada (hilo de UI, onCallEvent).
+func (a *App) showCallEvent(event presence.CallEvent) {
+	switch event.Kind {
+	case presence.CallIncoming:
+		if a.callUI != nil {
+			// Estoy llamando a otro (todavía abriendo la sala): esta no se atiende.
+			if service := a.lanService(); service != nil {
+				service.Answer(false)
+			}
+			return
+		}
+		a.showMainWindow() // aunque esté en la bandeja
+		text := i18n.T("lan.incoming", event.Name)
+		if event.Room != "" {
+			text += "\n" + i18n.T("lan.incoming_room", event.Room)
+		}
+		reject := widget.NewButtonWithIcon(i18n.T("lan.reject"), theme.CancelIcon(), func() { a.answerCall(false) })
+		reject.Importance = widget.DangerImportance
+		answer := widget.NewButtonWithIcon(i18n.T("lan.answer"), callIcon, func() { a.answerCall(true) })
+		answer.Importance = widget.SuccessImportance
+		a.openCallUI(event.Name, text, reject, answer)
+		a.ring()
+		logging.Infof("Red local: llamada de %q (%s)", event.Name, event.Peer)
+	case presence.CallIncomingEnded:
+		if a.callUI != nil && a.callUI.seq == 0 {
+			a.closeCallUI()
+			a.setStatus(i18n.M("lan.call_ended", event.Name))
+		}
+	case presence.CallInvite:
+		a.closeCallUI()
+		a.connectClient(event.Invite) // como si la hubiera pegado (la valida invite.Parse)
+	case presence.CallInviteMissing:
+		if a.callUI != nil {
+			a.setCallText(i18n.T("lan.invite_missing"))
+			a.callUI.buttons.Objects = []fyne.CanvasObject{widget.NewButton(i18n.T("common.close"), a.closeCallUI)}
+			a.callUI.buttons.Refresh()
+		}
+	case presence.CallAccepted:
+		if a.callUI != nil {
+			a.setStatus(i18n.M("lan.accepted", a.callUI.name))
+			a.closeCallUI()
+		}
+	case presence.CallDeclined, presence.CallNoAnswer:
+		if a.callUI == nil {
+			return
+		}
+		key := "lan.no_answer"
+		switch {
+		case event.Kind == presence.CallNoAnswer:
+		case event.Reason == presence.ReasonBusy:
+			key = "lan.busy"
+		case event.Reason == presence.ReasonInRoom:
+			key = "lan.busy_in_room"
+		default:
+			key = "lan.declined"
+		}
+		msg := i18n.M(key, a.callUI.name)
+		logging.Infof("%s", msg.In(i18n.ES))
+		a.finishOutgoingCall(a.callUI.seq, msg.String())
+	}
 }

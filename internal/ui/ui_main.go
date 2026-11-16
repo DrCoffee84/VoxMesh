@@ -205,6 +205,9 @@ type App struct {
 	lanList   *fyne.Container
 	lanScroll *container.Scroll
 	lanColumn *fyne.Container // "En tu red" + el registro de actividad (lanColumnLayout)
+	callUI    *callUI         // el cartel de la llamada en curso (nil = ninguna); solo el hilo de UI
+	callSeq   atomic.Uint64   // cambia al cortar: una llamada que todavía abría la sala no sale
+	ringGen   atomic.Uint64   // cambia al parar el timbre
 }
 
 // appTitle es el título de la ventana principal (un nombre: no se traduce). Mientras comparto

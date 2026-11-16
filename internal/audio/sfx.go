@@ -11,6 +11,9 @@ var (
 	// desconectar, para no confundirlos con alguien que entra o sale.
 	SFXHotkeysOn  = generateTwoTone(783.99, 1046.50, 0.06, 0.09, 0.6) // G5 -> C6
 	SFXHotkeysOff = generateTwoTone(1046.50, 783.99, 0.06, 0.09, 0.6) // C6 -> G5
+	// Timbre de una llamada de "En tu red" (F9): dos repiques, se repite cada 2 s mientras el
+	// cartel está abierto.
+	SFXRing = append(generateTwoTone(880.00, 1108.73, 0.12, 0.12, 0.55), generateTwoTone(880.00, 1108.73, 0.12, 0.18, 0.55)...) // A5 -> C#6, dos veces
 )
 
 func generateTwoTone(freq1, freq2 float64, dur1, dur2 float64, gain float64) []byte {

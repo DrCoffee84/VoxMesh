@@ -3,10 +3,18 @@
 package ui
 
 import (
+	"errors"
+	"net"
+	"net/netip"
 	"sync"
 	"time"
 
+	"fyne.io/fyne/v2"
+
+	"voxmesh/internal/audio"
+	"voxmesh/internal/history"
 	"voxmesh/internal/i18n"
+	"voxmesh/internal/invite"
 	"voxmesh/internal/logging"
 	"voxmesh/internal/presence"
 	"voxmesh/internal/room"
@@ -70,6 +78,7 @@ func (a *App) syncLANPresence(now time.Time) bool {
 			Targets:  presence.InterfaceTargets(presence.Port),
 			Status:   a.lanStatus,
 			OnChange: a.refreshLANCard,
+			OnCall:   a.onCallEvent,
 		}
 		if l.testConfig != nil {
 			l.testConfig(&config)
@@ -134,3 +143,162 @@ func (a *App) lanSnapshot() (lanState, []presence.Peer) {
 	}
 	return state, service.Peers()
 }
+
+// lanService es el servicio de ahora (nil = apagado).
+func (a *App) lanService() *presence.Service {
+	a.lan.mu.Lock()
+	defer a.lan.mu.Unlock()
+	return a.lan.service
+}
+
+// callRoomName es la sala que abre "Llamar" fuera de una sala: la elegida en "Ver otra sala…" del
+// chat y, si no hay, la última (cfg.RoomName).
+func callRoomName(viewing, last string) string {
+	if name := history.ClampRoomName(viewing); name != "" {
+		return name
+	}
+	return history.ClampRoomName(last)
+}
+
+// callPeer es el botón Llamar (hilo de UI). Fuera de una sala, primero abre una (callRoomName) y
+// recién con el socket abierto sale el "te llamo": la invitación se arma cuando atiende.
+func (a *App) callPeer(peer presence.Peer) {
+	service := a.lanService()
+	if service == nil || a.callUI != nil {
+		return
+	}
+	seq := a.callSeq.Add(1)
+	a.showOutgoingCall(peer.Name)
+	name := a.lanStatus().Name
+	connected := a.connected()
+	roomName := a.activeRoomName
+	if !connected {
+		roomName = callRoomName(a.viewingRoomName, a.conf().RoomName)
+		if roomName == "" {
+			roomName = i18n.T("default.room_name")
+		}
+	}
+	go func() {
+		if !connected {
+			a.openHost(roomName, name)
+			if !a.waitForRoom(5 * time.Second) {
+				fyne.Do(func() { a.finishOutgoingCall(seq, i18n.T("lan.no_room")) })
+				return
+			}
+		}
+		if a.callSeq.Load() != seq {
+			return // cortó mientras se abría la sala
+		}
+		if _, err := service.Call(peer.Addr, name, roomName); err != nil {
+			logging.Infof("Red local: no se pudo llamar a %s: %s", peer.Addr, err)
+			fyne.Do(func() { a.finishOutgoingCall(seq, i18n.T("lan.call_failed", err.Error())) })
+			return
+		}
+		logging.Infof("Red local: llamando a %q (%s), sala %q", peer.Name, peer.Addr, roomName)
+	}()
+}
+
+// waitForRoom espera a que la sala que se está abriendo tenga su socket.
+func (a *App) waitForRoom(limit time.Duration) bool {
+	deadline := time.Now().Add(limit)
+	for time.Now().Before(deadline) {
+		if a.transport.Load() != nil {
+			return true
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return false
+}
+
+// hangUpCall es Cortar (hilo de UI).
+func (a *App) hangUpCall() {
+	a.callSeq.Add(1)
+	if service := a.lanService(); service != nil {
+		service.CancelCall()
+	}
+	a.closeCallUI()
+}
+
+// answerCall es Atender (true) o Rechazar (hilo de UI).
+func (a *App) answerCall(accept bool) {
+	a.stopRing()
+	if service := a.lanService(); service != nil {
+		service.Answer(accept)
+	}
+	if !accept {
+		a.closeCallUI()
+		return
+	}
+	a.setCallText(i18n.T("lan.joining"))
+}
+
+// onCallEvent llega desde el servicio. Si el llamado atendió, manda la invitación ahí mismo (nunca
+// al log ni a la barra de estado: lleva la clave); lo demás va al cartel, en el hilo de UI.
+func (a *App) onCallEvent(event presence.CallEvent) {
+	if event.Kind == presence.CallAccepted {
+		code, err := a.callInvite(event.Peer)
+		if err == nil {
+			if service := a.lanService(); service != nil {
+				err = service.SendInvite(event.Call, code)
+			}
+		}
+		if err != nil {
+			logging.Infof("Red local: atendió %s pero no salió la invitación: %s", event.Peer, err)
+			fyne.Do(func() { a.finishOutgoingCall(a.callSeq.Load(), i18n.T("lan.no_room")) })
+			return
+		}
+		logging.Infof("Red local: %s atendió, invitación enviada", event.Peer)
+	}
+	fyne.Do(func() { a.showCallEvent(event) })
+}
+
+var errNoRoom = errors.New("no hay sala abierta")
+
+// callInvite es la invitación para quien atendió desde peer: con la IP de esta PC que llega a él
+// (por Radmin, la 26.x; nunca la pública ni la de la ruta por defecto) si soy el host, o la del
+// host como la veo yo si soy cliente.
+func (a *App) callInvite(peer netip.AddrPort) (string, error) {
+	udp := a.transport.Load()
+	if udp == nil {
+		return "", errNoRoom
+	}
+	var addr netip.AddrPort
+	if a.hostMode.Load() {
+		ip, err := localIPToward(peer.Addr())
+		if err != nil {
+			return "", err
+		}
+		addr = netip.AddrPortFrom(ip, uint16(udp.Address().Port))
+	} else {
+		var err error
+		if addr, err = netip.ParseAddrPort(a.endpointText()); err != nil {
+			return "", err
+		}
+	}
+	return invite.Format(addr, udp.Key()), nil
+}
+
+// localIPToward es la IP de esta PC por la que sale un paquete hacia ip (la de la interfaz de esa
+// red). Un "connect" de UDP no manda nada.
+func localIPToward(ip netip.Addr) (netip.Addr, error) {
+	conn, err := net.DialUDP("udp4", nil, net.UDPAddrFromAddrPort(netip.AddrPortFrom(ip, presence.Port)))
+	if err != nil {
+		return netip.Addr{}, err
+	}
+	defer conn.Close()
+	return conn.LocalAddr().(*net.UDPAddr).AddrPort().Addr().Unmap(), nil
+}
+
+// ring hace sonar el timbre cada 2 s hasta stopRing. Suena siempre, aunque los sonidos de eventos
+// estén apagados o esté ensordecido: con la app en la bandeja es el aviso de verdad.
+func (a *App) ring() {
+	gen := a.ringGen.Add(1)
+	go func() {
+		for a.ringGen.Load() == gen {
+			a.playCue(audio.SFXRing)
+			time.Sleep(2 * time.Second)
+		}
+	}()
+}
+
+func (a *App) stopRing() { a.ringGen.Add(1) }

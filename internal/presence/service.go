@@ -33,6 +33,7 @@ type Config struct {
 	Targets  func() []netip.AddrPort // adónde va el aviso; se vuelve a pedir en cada aviso periódico
 	Status   func() Status           // se lee cada 250 ms: un cambio sale en el momento
 	OnChange func()                  // cambió la lista; otra goroutine, nunca con un lock tomado
+	OnCall   func(CallEvent)         // algo pasó con una llamada (calls.go); otra goroutine
 	Interval time.Duration           // 0 = AnnounceInterval
 	TTL      time.Duration           // 0 = PeerTTL
 }
@@ -53,6 +54,12 @@ type Service struct {
 	stopOnce sync.Once
 	announce sync.WaitGroup
 	receive  sync.WaitGroup
+
+	callMu   sync.Mutex
+	out      *outCall                 // la llamada que hago (una a la vez)
+	in       *inCall                  // la que me hacen (una a la vez)
+	callFrom map[netip.Addr]time.Time // última llamada por IP (CallCooldown)
+	heard    map[netip.Prefix]bool    // se escuchó a alguien desde esa red (HeardFrom)
 
 	rejectMu     sync.Mutex
 	rejected     uint64 // en total (los tests lo miran)
@@ -89,6 +96,9 @@ func Start(cfg Config) (*Service, error) {
 		direct: direct,
 		roster: NewRoster(self, cfg.TTL),
 		stop:   make(chan struct{}),
+
+		callFrom: map[netip.Addr]time.Time{},
+		heard:    map[netip.Prefix]bool{},
 	}
 	s.receive.Add(2)
 	go s.receiveLoop(listen)
@@ -104,7 +114,8 @@ func Start(cfg Config) (*Service, error) {
 func (s *Service) Stop() {
 	s.stopOnce.Do(func() {
 		close(s.stop)
-		s.announce.Wait() // el "me voy" sale de announceLoop, que es la única que manda
+		s.CancelCall()
+		s.announce.Wait() // el "me voy" sale de announceLoop
 		_ = s.listen.Close()
 		_ = s.direct.Close()
 		s.receive.Wait()
@@ -147,6 +158,7 @@ func (s *Service) announceLoop() {
 			if s.roster.Expire(now) {
 				s.changed()
 			}
+			s.checkCalls(now)
 		}
 	}
 }
@@ -206,6 +218,7 @@ func (s *Service) handle(data []byte, from netip.AddrPort, now time.Time) {
 	}
 	switch m.Kind {
 	case KindPresence:
+		s.markHeard(from.Addr())
 		if s.roster.Seen(m.From, m.Name, m.InRoom, from, now) {
 			s.changed()
 		}
@@ -213,7 +226,30 @@ func (s *Service) handle(data []byte, from netip.AddrPort, now time.Time) {
 		if s.roster.Bye(m.From, from) {
 			s.changed()
 		}
+	default:
+		s.handleCall(m, from, now)
 	}
+}
+
+// radmin es la red de Radmin VPN (HeardFrom).
+var radmin = netip.MustParsePrefix("26.0.0.0/8")
+
+func (s *Service) markHeard(ip netip.Addr) {
+	if !radmin.Contains(ip) {
+		return
+	}
+	s.callMu.Lock()
+	s.heard[radmin] = true
+	s.callMu.Unlock()
+}
+
+// HeardFromRadmin dice si llegó algún aviso por Radmin (26.0.0.0/8) desde que arrancó: si hay una
+// interfaz de Radmin y nunca llegó nada, puede ser el firewall (Radmin suele quedar como red
+// "Pública").
+func (s *Service) HeardFromRadmin() bool {
+	s.callMu.Lock()
+	defer s.callMu.Unlock()
+	return s.heard[radmin]
 }
 
 var errInternetSource = errors.New("viene de una IP de internet")
