@@ -10,7 +10,7 @@
 
 **VoxMesh** is a low-latency, decentralized peer-to-peer and star-topology voice & text communications app built in Go with native CGO audio filters and a Fyne GUI.
 
-* **Language**: Go 1.26 (`go.mod`; `os.Root`, `testing/synctest`, `runtime/trace.FlightRecorder` are available). Requires `CGO_ENABLED=1`, see §4 build trap. `release.yml` still pins `go-version: '1.24'` and relies on toolchain auto-download (AGENDA T1).
+* **Language**: Go 1.27 (`go.mod`; `os.Root`, `testing/synctest`, `runtime/trace.FlightRecorder` are available). Requires `CGO_ENABLED=1`, see §4 build trap. `release.yml` takes the version from `go.mod` (`go-version-file`). **Never build a release with Go 1.26.0**: its Windows `WSARecvFrom` kept `lpFromlen` on the goroutine stack, and the kernel later wrote 28 (`sizeof(sockaddr_in6)`) over reused stack memory (crashes in Fyne's `walkTree` with a fault address `0x0000001c_xxxxxxxx`; fixed upstream, 1.27 has it).
 * **GUI Toolkit**: Fyne v2.6.3.
 * **Audio Engine**: `malgo` (miniaudio wrapper) + `rnnoise-go` (AI neural noise suppression) + WebRTC Audio Processing 1.3 (AEC3 echo cancellation, opt-in, static lib built by `third_party/webrtc-apm/build.ps1`, see §4) + `gopkg.in/hraban/opus.v2` (cgo over libopus, build tag `nolibopusfile`, see §4).
 * **Audio Spec**: 48,000 Hz, 16-bit S16LE, Mono, 20 ms frames (960 samples = 1920 bytes) inside the app. **Network audio is always Opus** (one packet per 20 ms frame, ~100–130 bytes). Phone mic frames are PCM of the same size over the LAN; the PC encodes them like its own mic.

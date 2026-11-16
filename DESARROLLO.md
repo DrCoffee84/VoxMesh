@@ -80,7 +80,7 @@ Nivel de log (Ajustes → Sistema): **1 Normal** (por defecto) registra eventos,
 
 ## Compilar
 
-Requisitos: **Go 1.26+** y **MSYS2 UCRT64** (gcc, libopus y pkg-config; meson, ninja y abseil para compilar la cancelación de eco). Fyne, malgo y WebRTC AEC3 necesitan CGO. El `.exe` resultante es estático: tus amigos no necesitan instalar nada.
+Requisitos: **Go 1.27+** y **MSYS2 UCRT64** (gcc, libopus y pkg-config; meson, ninja y abseil para compilar la cancelación de eco). Fyne, malgo y WebRTC AEC3 necesitan CGO. El `.exe` resultante es estático: tus amigos no necesitan instalar nada.
 
 1. Instalar MSYS2 (PowerShell): `winget install --id MSYS2.MSYS2`
 2. En la terminal **MSYS2 UCRT64**:
