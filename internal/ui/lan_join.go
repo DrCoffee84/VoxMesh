@@ -274,7 +274,7 @@ func (a *App) showJoinResult(event presence.JoinEvent) {
 		ui.buttons.Objects = nil
 		ui.buttons.Refresh()
 		logging.Infof("Red local: %s me dejó entrar", event.Peer)
-		a.connectClient(event.Invite) // como si la hubiera pegado (la valida invite.Parse)
+		a.connectClientVia(event.Invite, true) // como si la hubiera pegado (la valida invite.Parse); no da confianza (F11)
 		time.AfterFunc(joinAdmittedClose, func() {
 			fyne.Do(func() {
 				if a.callUI == ui && ui.seq == seq {

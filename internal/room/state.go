@@ -39,6 +39,9 @@ type State struct {
 	// Trusted es la lista de confianza de la sala ("Dejar entrar siempre", F10): viaja en el estado
 	// y cada miembro la guarda (confianza.json), así cualquiera de adentro deja pasar al marcado.
 	Trusted []Trusted `json:"trusted,omitempty"`
+	// TrustInvited (F11): el que abrió la sala marcó que los que entran con la invitación quedan de
+	// confianza. Viaja en el estado: el que quede de host lo sigue aplicando.
+	TrustInvited bool `json:"trust_invited,omitempty"`
 }
 
 func New(name, username string, address *net.UDPAddr) State {

@@ -233,7 +233,8 @@ type App struct {
 	// confianza de la sala en la que estoy (trustBook, con su mutex).
 	identity          atomic.Pointer[identity.Identity]
 	trust             trustBook
-	helloRejectLogged time.Time // último Hello sin firma válida en el log; solo receiveLoop
+	viaLAN            atomic.Bool // entré a esta sala por un pedido de "En tu red" (F11): va en el Hello
+	helloRejectLogged time.Time   // último Hello sin firma válida en el log; solo receiveLoop
 }
 
 // appTitle es el título de la ventana principal (un nombre: no se traduce). Mientras comparto

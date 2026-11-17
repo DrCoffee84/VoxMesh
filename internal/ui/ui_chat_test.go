@@ -376,3 +376,36 @@ func TestStartRoomDialogDeletesRoom(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// TestStartRoomDialogTrustInvited (F11): "Iniciar sala" tiene "Los invitados quedan de confianza",
+// prendido de fábrica; tocarlo cambia la config y la guarda (vale para la próxima).
+func TestStartRoomDialogTrustInvited(t *testing.T) {
+	setLanguage(t, "es")
+	a, _ := newRoomTestApp(t)
+	a.createHost()
+	pop, ok := a.window.Canvas().Overlays().Top().(*widget.PopUp)
+	if !ok {
+		t.Fatal("no hay un diálogo abierto")
+	}
+	var check *widget.Check
+	walkWithScrolls(pop.Content, func(o fyne.CanvasObject) {
+		if c, ok := o.(*widget.Check); ok && c.Text == i18n.T("conn.trust_invited") {
+			check = c
+		}
+	})
+	if check == nil || !check.Checked {
+		t.Fatalf("el check tiene que estar y venir prendido: %+v", check)
+	}
+	if labels := labelTexts(pop.Content); !contains(labels, i18n.T("conn.trust_invited_help")) {
+		t.Errorf("falta la ayuda del check: %v", labels)
+	}
+	saveShot(t, a.window, "start_room_trust")
+	test.Tap(check)
+	if a.conf().TrustInvited {
+		t.Error("apagado no llegó a la config")
+	}
+	test.Tap(check)
+	if !a.conf().TrustInvited {
+		t.Error("prendido otra vez no llegó a la config")
+	}
+}

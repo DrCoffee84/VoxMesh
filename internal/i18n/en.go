@@ -265,6 +265,8 @@ var en = map[string]string{
 	"conn.create_and_open":      "Create and open",
 	"conn.room_name_missing":    "Type a name for the new room.",
 	"conn.saved_rooms":          "Saved rooms",
+	"conn.trust_invited":        "Trust invited people",
+	"conn.trust_invited_help":   "People who join with the invite (or by answering your call) can later get in by themselves from “On your network”, without anyone accepting them. You, who start the room, always can.",
 	"conn.new_room":             "New room",
 	"conn.start_room_title":     "Start room",
 	"conn.already_active_at":    "The room is already running at %s",

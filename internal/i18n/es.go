@@ -265,6 +265,8 @@ var es = map[string]string{
 	"conn.create_and_open":      "Crear y abrir",
 	"conn.room_name_missing":    "Escribe un nombre para la nueva sala.",
 	"conn.saved_rooms":          "Salas guardadas",
+	"conn.trust_invited":        "Los invitados quedan de confianza",
+	"conn.trust_invited_help":   "Los que entren con la invitación (o atendiendo tu llamada) después entran solos desde «En tu red», sin que nadie los acepte. Vos, que creás la sala, siempre.",
 	"conn.new_room":             "Nueva sala",
 	"conn.start_room_title":     "Iniciar Sala",
 	"conn.already_active_at":    "La sala ya está activa en %s",

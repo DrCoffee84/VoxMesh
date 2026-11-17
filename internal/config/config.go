@@ -46,6 +46,9 @@ type Config struct {
 	// Los escribe la botonera (botón, su atajo, el menú de la bandeja); Ajustes no los toca.
 	ToggleHotkeysBind string `json:"toggle_hotkeys_bind,omitempty"`
 	SoundHotkeysOff   bool   `json:"sound_hotkeys_off,omitempty"`
+	// TrustInvited: el check de "Iniciar sala" (AGENDA F11, prendido de fábrica). Los que entran a
+	// la sala con la invitación (o atendiendo una llamada) quedan en su lista de confianza.
+	TrustInvited bool `json:"trust_invited"`
 	// PeerVolumes guarda el volumen por usuario (slider debajo de cada avatar) por nombre de
 	// usuario: el ID de participante cambia con la dirección, el nombre no. 1.0 no se guarda.
 	PeerVolumes map[string]float64 `json:"peer_volumes,omitempty"`
@@ -217,6 +220,7 @@ func Default() Config {
 		SoundBinds:       make(map[string]string),
 		WindowWidth:      DefaultWindowWidth,
 		WindowHeight:     DefaultWindowHeight,
+		TrustInvited:     true,
 	}
 }
 

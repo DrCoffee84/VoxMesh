@@ -66,6 +66,7 @@ func (a *App) helloEnvelope(udp *transport.UDP, participant *room.Participant) r
 		Kind:        room.HelloMessage,
 		Participant: participant,
 		Signature:   room.SignHello(id, [32]byte(udp.Key()), participant.ID),
+		ViaLAN:      a.viaLAN.Load(),
 	}
 }
 
@@ -223,6 +224,35 @@ func (a *App) handleTrustPacket(udp *transport.UDP, addr *net.UDPAddr, payload [
 	a.roomState.Trusted = merged
 	logging.Infof("Lista de confianza de la sala: %d (sumó %s)", len(merged), from)
 	a.broadcastRoomState(udp, nil)
+}
+
+// trustCreator (host, openHost): el que crea la sala queda siempre en su lista de confianza (F11):
+// si se va y queda otro de host, vuelve desde "En tu red" sin que nadie lo acepte. Deja la lista en
+// a.roomState.Trusted.
+func (a *App) trustCreator(name string) {
+	key := a.ident().Public()
+	if a.trust.has(key) {
+		a.roomState.Trusted = a.trust.snapshot()
+		return
+	}
+	a.roomState.Trusted = a.trust.merge([]room.Trusted{{Key: key.String(), Name: name, By: name, At: time.Now().UTC()}})
+}
+
+// trustInvitedJoin (host, handleRoomHello): con el check de "Iniciar sala" (State.TrustInvited, F11),
+// el que entró con la invitación o atendiendo una llamada queda en la lista de confianza. El que
+// entró por un pedido de "En tu red" (Envelope.ViaLAN) no: para eso está "Dejar entrar siempre".
+// Lo dice el propio cliente, como todo dentro de la sala (los miembros son de confianza, §K).
+func (a *App) trustInvitedJoin(p room.Participant, viaLAN bool, host string) {
+	if !a.roomState.TrustInvited || viaLAN {
+		return
+	}
+	key, err := identity.ParseKey(p.Key)
+	if err != nil || room.TrustedHas(a.roomState.Trusted, key) {
+		return
+	}
+	entry := room.Trusted{Key: p.Key, Name: p.Username, By: host, At: time.Now().UTC()}
+	a.roomState.Trusted = a.trust.merge(room.MergeTrusted(a.roomState.Trusted, []room.Trusted{entry}))
+	logging.Infof("Lista de confianza: suma a %q (%s), entró con la invitación", p.Username, key.Short())
 }
 
 // addTrusted suma entry a la lista de la sala ("Dejar entrar siempre"): la guarda y, si soy el

@@ -179,3 +179,21 @@ func TestLoadLanguage(t *testing.T) {
 		t.Fatalf("Default().Language = %q", Default().Language)
 	}
 }
+
+// F11: "Los invitados quedan de confianza" viene prendido, también en una config guardada antes de
+// que existiera; apagado se respeta.
+func TestLoadTrustInvited(t *testing.T) {
+	for stored, want := range map[string]bool{``: true, `"trust_invited":true,`: true, `"trust_invited":false,`: false} {
+		path := filepath.Join(t.TempDir(), "voxmesh.json")
+		if err := os.WriteFile(path, []byte(`{`+stored+`"username":"Coffee"}`), 0600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.TrustInvited != want {
+			t.Errorf("%q → TrustInvited %v, quería %v", stored, cfg.TrustInvited, want)
+		}
+	}
+}

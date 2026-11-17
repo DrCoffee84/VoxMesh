@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"voxmesh/internal/config"
 	"voxmesh/internal/history"
 	"voxmesh/internal/identity"
 	"voxmesh/internal/room"
@@ -168,5 +169,76 @@ func noKind(t *testing.T, ch chan received, kind byte) {
 		case <-deadline:
 			return
 		}
+	}
+}
+
+// TestTrustInvitedAndCreator (F11): con el check de "Iniciar sala", el que entra con la invitación
+// (o atendiendo una llamada) queda en la lista de la sala; el que entró por un pedido de "En tu
+// red" no; sin el check, nadie. El que crea la sala, siempre.
+func TestTrustInvitedAndCreator(t *testing.T) {
+	host, clientUDP, fo := helloHost(t, []room.Participant{{ID: "host", Username: "Coffee", Address: "127.0.0.1:1", Connected: true}})
+	host.updateConfig(func(c *config.Config) { c.Username = "Coffee" })
+	store, err := history.New(filepath.Join(t.TempDir(), "host"), "sala")
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.trust.open(store)
+
+	// El que crea la sala: adentro, y abrirla otra vez no lo vuelve a escribir.
+	host.trustCreator("Coffee")
+	me := host.ident().Public()
+	if !room.TrustedHas(host.roomState.Trusted, me) || !host.trust.has(me) {
+		t.Fatalf("el que crea la sala no quedó: %+v", host.roomState.Trusted)
+	}
+	first := host.roomState.Trusted[0].At
+	host.trustCreator("Coffee")
+	if len(host.roomState.Trusted) != 1 || !host.roomState.Trusted[0].At.Equal(first) {
+		t.Errorf("abrirla de nuevo: %+v", host.roomState.Trusted)
+	}
+
+	hello := func(id, name string, signer *identity.Identity, viaLAN bool) {
+		t.Helper()
+		p := &room.Participant{ID: id, Username: name, Connected: true, Key: signer.Public().String()}
+		envelope := room.Envelope{Kind: room.HelloMessage, Participant: p, Signature: room.SignHello(signer, [32]byte(host.transport.Load().Key()), id), ViaLAN: viaLAN}
+		payload, err := room.Encode(envelope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		host.handleRoomHello(host.transport.Load(), fo, payload, clientUDP.Address(), clientUDP.Address().String(), time.Now())
+	}
+
+	// Sin el check: nadie.
+	pepe := identity.New()
+	hello("pepe", "Pepe", pepe, false)
+	if room.TrustedHas(host.roomState.Trusted, pepe.Public()) {
+		t.Error("sin el check quedó de confianza")
+	}
+
+	host.roomState.TrustInvited = true
+	juan, ana := identity.New(), identity.New()
+	hello("juan", "Juan", juan, false)
+	var entry room.Trusted
+	for _, e := range host.roomState.Trusted {
+		if e.Key == juan.Public().String() {
+			entry = e
+		}
+	}
+	if entry.Name != "Juan" || entry.By != "Coffee" || !host.trust.has(juan.Public()) {
+		t.Errorf("entró con la invitación: %+v", entry)
+	}
+	waitFor(t, "se guarda en confianza.json", func() bool { return len(trustedIn(t, store)) == 2 })
+
+	hello("ana", "Ana", ana, true) // la dejaron pasar desde "En tu red", sin el check
+	if room.TrustedHas(host.roomState.Trusted, ana.Public()) {
+		t.Error("entró por un pedido de En tu red y quedó de confianza")
+	}
+
+	// El check viaja en el estado: el que quede de host lo sigue aplicando.
+	data, err := room.Encode(room.Envelope{Kind: room.StateMessage, Room: &host.roomState})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back, err := room.Decode(data); err != nil || !back.Room.TrustInvited {
+		t.Errorf("el estado no lleva el check: %v", err)
 	}
 }

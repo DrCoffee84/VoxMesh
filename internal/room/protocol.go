@@ -61,6 +61,9 @@ type Envelope struct {
 	// Trusted (TrustMessage, cliente → host): entradas de la lista de confianza que el host no
 	// tiene (marcadas por el cliente, o de su confianza.json).
 	Trusted []Trusted `json:"trusted,omitempty"`
+	// ViaLAN (Hello, F11): entró porque alguien aceptó su pedido de "En tu red" (sin "Dejar entrar
+	// siempre"): no queda de confianza aunque la sala tenga TrustInvited.
+	ViaLAN bool `json:"via_lan,omitempty"`
 }
 
 type Image struct {

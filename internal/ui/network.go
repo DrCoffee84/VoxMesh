@@ -312,6 +312,9 @@ func (a *App) handleRoomHello(udp *transport.UDP, fo *room.Failover, payload []b
 		a.removePeerAddress(udp, old.Address)
 		logging.Infof("Vuelve %s (%s): reemplaza su registro anterior %s (%s, id %s)", joining.Username, addrStr, old.Username, old.Address, old.ID)
 	}
+	// Con el check de "Iniciar sala", el que entró con la invitación queda de confianza (F11); el
+	// estado que sigue ya lo lleva.
+	a.trustInvitedJoin(*joining, envelope.ViaLAN, a.conf().Username)
 	if a.roomStore != nil {
 		a.roomStore.Replace(a.roomState)
 	}

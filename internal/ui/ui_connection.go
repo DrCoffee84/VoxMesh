@@ -209,10 +209,23 @@ func (a *App) createHost() {
 	}
 	showRooms(rooms)
 
+	// F11: vale para la sala que se abra ahora (guardada o nueva) y queda para la próxima.
+	trustInvited := widget.NewCheck(i18n.T("conn.trust_invited"), func(on bool) {
+		a.updateConfig(func(c *config.Config) { c.TrustInvited = on })
+		a.saveConfig()
+	})
+	trustInvited.SetChecked(a.conf().TrustInvited)
+	trustHelp := widget.NewLabel(i18n.T("conn.trust_invited_help"))
+	trustHelp.Wrapping = fyne.TextWrapWord
+	trustHelp.Importance = widget.LowImportance
+
 	content := container.NewVBox(
 		savedSection,
 		widget.NewLabelWithStyle(i18n.T("conn.new_room"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		container.NewBorder(nil, nil, nil, btnCreate, newRoomEntry),
+		widget.NewSeparator(),
+		trustInvited,
+		trustHelp,
 	)
 	d = dialog.NewCustom(i18n.T("conn.start_room_title"), i18n.T("common.cancel"), content, a.window)
 	d.Resize(fyne.NewSize(startRoomWidth, 0)) // el alto, el mínimo del contenido
@@ -328,12 +341,15 @@ func (a *App) openHost(roomName, username string) {
 			state.Participants[0].Muted = a.isMuted.Load()
 			state.Participants[0].Key = a.ident().Public().String()
 		}
+		state.TrustInvited = cfg.TrustInvited // el check de "Iniciar sala" (F11)
+		a.viaLAN.Store(false)
 		a.roomState = state
 		a.roomStore = room.NewStore(state)
 
 		// Operaciones de disco
 		a.initHistory(roomName)
-		a.roomState.Trusted = a.trust.snapshot() // la lista de confianza guardada de la sala (F10)
+		// La lista de confianza guardada de la sala (F10), con el que la crea siempre adentro (F11).
+		a.trustCreator(username)
 		a.roomStore.Replace(a.roomState)
 		a.refreshPeersFromRoom()
 
@@ -566,7 +582,12 @@ func (a *App) publishRoomCloudFlare() {
 	// TODO: Implementación de la publicación en CloudFlare
 }
 
-func (a *App) connectClient(raw string) {
+// connectClient entra a la sala de la invitación raw (pegada, o la de una llamada de F9).
+func (a *App) connectClient(raw string) { a.connectClientVia(raw, false) }
+
+// connectClientVia es connectClient; viaLAN dice que la invitación llegó porque aceptaron un pedido
+// de "En tu red" (F11): va en el Hello y el host no lo suma a la lista de confianza por eso.
+func (a *App) connectClientVia(raw string, viaLAN bool) {
 	if a.connected() {
 		a.setStatus(i18n.M("conn.udp_exists"))
 		return
@@ -630,6 +651,7 @@ func (a *App) connectClient(raw string) {
 			return
 		}
 		a.hostMode.Store(false)
+		a.viaLAN.Store(viaLAN)
 		a.rejoinInvite.Store(&raw)
 		cfg := a.updateConfig(func(c *config.Config) {
 			c.RoomName = strings.TrimSpace(c.RoomName)
