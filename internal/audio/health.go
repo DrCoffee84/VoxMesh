@@ -8,9 +8,10 @@ import "time"
 const DeviceSilenceLimit = 3 * time.Second
 
 // deviceHealth decide si el audio sigue vivo. started, lastCapture y lastPlayback son UnixNano
-// (0 = nunca hubo callback); lost es el dispositivo que avisó que se detuvo ("" = ninguno). Los
-// primeros DeviceSilenceLimit después de abrir no cuentan: WASAPI tarda en arrancar.
-func deviceHealth(now time.Time, started, lastCapture, lastPlayback int64, lost string) (ok bool, reason string) {
+// (0 = nunca hubo callback); capture dice si hay micrófono abierto (sin él solo se mira la salida);
+// lost es el dispositivo que avisó que se detuvo ("" = ninguno). Los primeros DeviceSilenceLimit
+// después de abrir no cuentan: WASAPI tarda en arrancar.
+func deviceHealth(now time.Time, started int64, capture bool, lastCapture, lastPlayback int64, lost string) (ok bool, reason string) {
 	if lost != "" {
 		return false, lost + " detenido por el sistema"
 	}
@@ -18,7 +19,7 @@ func deviceHealth(now time.Time, started, lastCapture, lastPlayback int64, lost 
 	if started > limit {
 		return true, ""
 	}
-	if max(lastCapture, started) < limit {
+	if capture && max(lastCapture, started) < limit {
 		return false, "el micrófono dejó de entregar audio"
 	}
 	if max(lastPlayback, started) < limit {

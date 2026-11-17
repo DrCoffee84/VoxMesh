@@ -415,6 +415,8 @@ var es = map[string]string{
 	"audio.busy_pc_help":       "Cerrá los programas que no uses o bajá la calidad del juego.",
 	"audio.echo_failed":        "La cancelación de eco falló y quedó apagada.",
 	"audio.echo_failed_help":   "Si los demás escuchan eco, usá auriculares; Reiniciar audio la vuelve a probar.",
+	"audio.no_mic":             "No se pudo abrir el micrófono: escuchás a los demás pero no te escuchan.",
+	"audio.no_mic_help":        "Conectá un micrófono o elegí otro en Ajustes → Entrada y salida (o usá el celular), y tocá Reiniciar audio.",
 	"phone.disconnected_help":  "Desbloquealo y dejá la página abierta con la pantalla prendida; si no vuelve, escaneá de nuevo el QR (Ajustes → Celular).",
 	"phone.server_help":        "Elegí de nuevo el celular en Ajustes → Entrada y salida para reiniciarlo, o usá otro micrófono.",
 	"status.config_save_help":  "Los cambios valen hasta que cierres la app. Revisá que haya espacio en el disco y que un antivirus no bloquee la carpeta de datos.",

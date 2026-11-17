@@ -18,7 +18,7 @@ import (
 // TestProblemLine: cada problema trae su ayuda (en los dos idiomas) detrás del mismo texto de la
 // barra de estado, separados por un espacio.
 func TestProblemLine(t *testing.T) {
-	for kind := problemDevice; kind <= problemWrongKey; kind++ {
+	for kind := problemDevice; kind <= problemNoMic; kind++ {
 		help, ok := problemHelp[kind]
 		if !ok || !i18n.Has(help) {
 			t.Errorf("problema %d sin ayuda en el catálogo (%q)", kind, help)
@@ -42,6 +42,18 @@ func TestProblemLine(t *testing.T) {
 	}
 	if got := problemLine(problemWrongKey, i18n.M("conn.wrong_key")).In(i18n.ES); got != "Alguien intenta entrar con una invitación vieja o de otra sala. Si es de los tuyos, pasale una nueva con «Invitar»." {
 		t.Errorf("invitación vieja: %q", got)
+	}
+	noMic := problemLine(problemNoMic, i18n.M("audio.no_mic"))
+	for _, tc := range []struct {
+		lang i18n.Lang
+		want string
+	}{
+		{i18n.ES, "No se pudo abrir el micrófono: escuchás a los demás pero no te escuchan. Conectá un micrófono o elegí otro en Ajustes → Entrada y salida (o usá el celular), y tocá Reiniciar audio."},
+		{i18n.EN, "Couldn't open the mic: you hear the others but they can't hear you. Plug in a mic or pick another one in Settings → Input and output (or use your phone), then click Restart audio."},
+	} {
+		if got := noMic.In(tc.lang); got != tc.want {
+			t.Errorf("sin micrófono, %s:\n got %q\nwant %q", tc.lang, got, tc.want)
+		}
 	}
 }
 
@@ -82,10 +94,15 @@ func TestSendProblem(t *testing.T) {
 		"tirados":            {captureInterval{elapsed: 10 * time.Second, frames: 500, dropped: captureWarnDropped}, problemBusyPC},
 		"pocos tirados":      {captureInterval{elapsed: 10 * time.Second, frames: 500, dropped: captureWarnDropped - 1}, 0},
 		"cola y frame lento": {captureInterval{elapsed: 10 * time.Second, frames: 500, maxQueue: 4, maxProc: 30 * time.Millisecond}, 0},
+		// Sin micrófono de la PC (no abrió, o el celular de entrada, R11) no hay captura que medir.
+		"sin micrófono": {captureInterval{elapsed: 10 * time.Second, noInput: true}, 0},
 	} {
 		if got := sendProblem(tc.c); got != tc.want {
 			t.Errorf("%s: %d, quería %d", name, got, tc.want)
 		}
+	}
+	if (captureInterval{elapsed: 10 * time.Second, sent: 300, noInput: true}).problem() {
+		t.Error("sin micrófono: capturados=0 no tiene que ir al log como problema")
 	}
 }
 

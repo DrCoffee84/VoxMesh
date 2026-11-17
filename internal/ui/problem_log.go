@@ -32,6 +32,7 @@ const (
 	problemPortFailed                              // "Iniciar sala" no pudo abrir el puerto UDP
 	problemInviteInvalid                           // lo pegado no es una invitación válida
 	problemWrongKey                                // host: llegan paquetes de VoxMesh con otra clave
+	problemNoMic                                   // el micrófono no abrió: la sala suena solo con la salida (R11)
 )
 
 // problemLineCooldown es el tope por tipo: después de la primera línea, como mucho una cada tanto.
@@ -52,6 +53,7 @@ var problemHelp = map[problemKind]string{
 	problemPortFailed:       "conn.port_failed_help",
 	problemInviteInvalid:    "conn.invite_invalid_help",
 	problemWrongKey:         "conn.wrong_key_help",
+	problemNoMic:            "audio.no_mic_help",
 }
 
 // problemLine es la línea del registro: el texto del problema y qué hacer.
@@ -117,10 +119,10 @@ const sendSustain = 2
 
 // sendProblem dice qué problema del lado que envía muestra un intervalo: el micrófono entrega menos
 // audio que tiempo (Bluetooth, driver) o la PC tuvo que tirar frames (estaba ocupada). Una cola o un
-// frame lento solo atrasan: quedan en el log.
+// frame lento solo atrasan: quedan en el log. Sin micrófono abierto no hay ritmo que medir.
 func sendProblem(c captureInterval) problemKind {
 	switch {
-	case c.rate() < captureMinRate:
+	case !c.noInput && c.rate() < captureMinRate:
 		return problemSlowMic
 	case c.dropped >= captureWarnDropped:
 		return problemBusyPC
@@ -158,7 +160,7 @@ var sendProblemKeys = map[problemKind]string{
 }
 
 // watchSend es el paso de audioMonitorLoop después de medir un intervalo del envío. Con el celular
-// de entrada la captura que se mide es la del micrófono de la PC, que no se usa; muteado (o
+// de entrada lo que se mide no es su audio (la sala ni abre el micrófono de la PC, R11); muteado (o
 // ensordecido) no sale nada, así que no hay a quién avisarle que te escuchan cortado.
 func (a *App) watchSend(w *sendWatch, interval captureInterval, measured bool) {
 	var kind problemKind

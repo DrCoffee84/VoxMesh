@@ -61,6 +61,9 @@ type Engine struct {
 	playback *malgo.Device
 	// Lo que se abrió para cada elección (Devices); fijo desde NewEngine.
 	inputDevice, outputDevice Resolved
+	// inputErr es por qué no se abrió el micrófono (nil si se abrió o si no se pidió): el Engine
+	// sigue solo con la salida (InputErr).
+	inputErr error
 	// Captura → goroutine de envío: frames de buffers preasignados (captureFree), así el callback
 	// de malgo (hilo de tiempo real) no pide memoria. Ver captureInput.
 	captureFrames chan CapturedFrame
@@ -212,9 +215,12 @@ func newEngineState() *Engine {
 	return e
 }
 
-// NewEngine abre micrófono y salida. onFrame recibe cada frame capturado en una goroutine propia
-// con prioridad de audio (LockAudioThread); el PCM del frame vale solo durante la llamada. Si un
-// dispositivo elegido ya no está abre el predeterminado (Devices dice cuál se abrió).
+// NewEngine abre la salida y, si onFrame no es nil, el micrófono. onFrame recibe cada frame
+// capturado en una goroutine propia con prioridad de audio (LockAudioThread); el PCM del frame vale
+// solo durante la llamada. Si un dispositivo elegido ya no está abre el predeterminado (Devices dice
+// cuál se abrió). Si el micrófono no abre (o no arranca) el Engine sigue solo con la salida, así
+// las voces se escuchan igual: HasInput da false e InputErr dice por qué. Solo si la salida falla
+// devuelve error. Con onFrame nil (el celular de entrada) no toca el micrófono de la PC.
 func NewEngine(input, output Device, onFrame func(CapturedFrame)) (*Engine, error) {
 	context, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
 	if err != nil {
@@ -222,31 +228,13 @@ func NewEngine(input, output Device, onFrame func(CapturedFrame)) (*Engine, erro
 	}
 	engine := newEngineState()
 	engine.context = context
-	inputID, inputResolved, _ := resolveDevice(context, malgo.Capture, input)
 	outputID, outputResolved, _ := resolveDevice(context, malgo.Playback, output)
-	engine.inputDevice, engine.outputDevice = inputResolved, outputResolved
-
-	captureConfig := malgo.DefaultDeviceConfig(malgo.Capture)
-	captureConfig.Capture.Format = malgo.FormatS16
-	captureConfig.Capture.Channels = Channels
-	captureConfig.SampleRate = SampleRate
-	captureConfig.PerformanceProfile = malgo.LowLatency
-	if inputID != nil {
-		captureConfig.Capture.DeviceID = inputID.Pointer()
+	engine.outputDevice = outputResolved
+	if onFrame != nil {
+		inputID, inputResolved, _ := resolveDevice(context, malgo.Capture, input)
+		engine.inputDevice = inputResolved
+		engine.inputErr = engine.openCapture(inputID)
 	}
-	capture, err := malgo.InitDevice(context.Context, captureConfig, malgo.DeviceCallbacks{
-		Data: func(_, input []byte, _ uint32) {
-			now := time.Now()
-			engine.lastCapture.Store(now.UnixNano())
-			engine.captureInput(input, now)
-		},
-		Stop: func() { engine.deviceStopped("micrófono") },
-	})
-	if err != nil {
-		engine.Stop()
-		return nil, fmt.Errorf("abrir micrófono: %w", err)
-	}
-	engine.capture = capture
 
 	playbackConfig := malgo.DefaultDeviceConfig(malgo.Playback)
 	playbackConfig.Playback.Format = malgo.FormatS16
@@ -271,13 +259,18 @@ func NewEngine(input, output Device, onFrame func(CapturedFrame)) (*Engine, erro
 	engine.playback = playback
 
 	engine.started.Store(time.Now().UnixNano())
-	if err := engine.capture.Start(); err != nil {
-		engine.Stop()
-		return nil, fmt.Errorf("iniciar micrófono: %w", err)
+	if engine.capture != nil {
+		if err := engine.capture.Start(); err != nil {
+			engine.closeCapture()
+			engine.inputErr = fmt.Errorf("iniciar micrófono: %w", err)
+		}
 	}
 	if err := engine.playback.Start(); err != nil {
 		engine.Stop()
 		return nil, fmt.Errorf("iniciar salida: %w", err)
+	}
+	if engine.capture == nil {
+		return engine, nil // sin micrófono no hay frames que enviar
 	}
 
 	go func() {
@@ -292,6 +285,43 @@ func NewEngine(input, output Device, onFrame func(CapturedFrame)) (*Engine, erro
 		}
 	}()
 	return engine, nil
+}
+
+// openCapture abre el micrófono (inputID nil = el predeterminado de Windows). Si falla, el Engine
+// queda sin captura y devuelve por qué.
+func (e *Engine) openCapture(inputID *malgo.DeviceID) error {
+	captureConfig := malgo.DefaultDeviceConfig(malgo.Capture)
+	captureConfig.Capture.Format = malgo.FormatS16
+	captureConfig.Capture.Channels = Channels
+	captureConfig.SampleRate = SampleRate
+	captureConfig.PerformanceProfile = malgo.LowLatency
+	if inputID != nil {
+		captureConfig.Capture.DeviceID = inputID.Pointer()
+	}
+	capture, err := malgo.InitDevice(e.context.Context, captureConfig, malgo.DeviceCallbacks{
+		Data: func(_, input []byte, _ uint32) {
+			now := time.Now()
+			e.lastCapture.Store(now.UnixNano())
+			e.captureInput(input, now)
+		},
+		Stop: func() { e.deviceStopped("micrófono") },
+	})
+	if err != nil {
+		return fmt.Errorf("abrir micrófono: %w", err)
+	}
+	e.capture = capture
+	return nil
+}
+
+// closeCapture cierra un micrófono que abrió pero no arrancó. Su Stop no cuenta como caída: el
+// Engine sigue solo con la salida.
+func (e *Engine) closeCapture() {
+	e.stopping.Store(true)
+	_ = e.capture.Stop()
+	e.capture.Uninit()
+	e.capture = nil
+	e.lost.Store(nil)
+	e.stopping.Store(false)
 }
 
 // captureInput arma frames de 20 ms con lo que entrega el micrófono y los encola para la
@@ -326,9 +356,9 @@ func (e *Engine) deviceStopped(device string) {
 	}
 }
 
-// Health dice si los dos dispositivos siguen vivos: ninguno detenido por el sistema y los dos
-// con callbacks en los últimos DeviceSilenceLimit. Si no, reason dice qué pasó (para el log y la
-// barra de estado) y hay que reabrir el audio.
+// Health dice si los dispositivos abiertos siguen vivos: ninguno detenido por el sistema y todos
+// con callbacks en los últimos DeviceSilenceLimit (sin micrófono, solo la salida). Si no, reason
+// dice qué pasó (para el log y la barra de estado) y hay que reabrir el audio.
 func (e *Engine) Health(now time.Time) (ok bool, reason string) {
 	if e == nil || e.stopping.Load() {
 		return true, ""
@@ -337,7 +367,21 @@ func (e *Engine) Health(now time.Time) (ok bool, reason string) {
 	if device := e.lost.Load(); device != nil {
 		lost = *device
 	}
-	return deviceHealth(now, e.started.Load(), e.lastCapture.Load(), e.lastPlayback.Load(), lost)
+	return deviceHealth(now, e.started.Load(), e.HasInput(), e.lastCapture.Load(), e.lastPlayback.Load(), lost)
+}
+
+// HasInput dice si el Engine tiene el micrófono de la PC abierto. Sin él (no se pidió, o no abrió:
+// InputErr) solo suena la salida.
+func (e *Engine) HasInput() bool {
+	return e != nil && e.capture != nil
+}
+
+// InputErr es por qué no se abrió el micrófono pedido (nil si se abrió o si no se pidió).
+func (e *Engine) InputErr() error {
+	if e == nil {
+		return nil
+	}
+	return e.inputErr
 }
 
 // SendThreadPriority dice qué prioridad consiguió la goroutine de envío ("" si todavía no arrancó).

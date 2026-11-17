@@ -255,6 +255,9 @@ type captureInterval struct {
 	echoERLESum   float64
 	echoERLECount int
 	echoDelayMS   int
+	// noInput: el Engine no tiene el micrófono de la PC (no abrió, o el celular de entrada, R11):
+	// capturados=0 no es un problema.
+	noInput bool
 }
 
 func (c captureInterval) rate() float64 {
@@ -269,7 +272,7 @@ func (c captureInterval) rate() float64 {
 // lento son audio que los demás reciben tarde o nunca. Los descartados se mandan como pérdida (los
 // demás los ocultan); la cola atrasada llega tarde y en ráfaga.
 func (c captureInterval) problem() bool {
-	return c.rate() < captureMinRate || c.dropped > 0 || c.maxQueue > captureMaxQueue || c.maxProc > captureMaxProc
+	return (!c.noInput && c.rate() < captureMinRate) || c.dropped > 0 || c.maxQueue > captureMaxQueue || c.maxProc > captureMaxProc
 }
 
 func (c *captureInterval) add(o captureInterval) {
@@ -279,6 +282,7 @@ func (c *captureInterval) add(o captureInterval) {
 	c.sent += o.sent
 	c.maxQueue = max(c.maxQueue, o.maxQueue)
 	c.maxProc = max(c.maxProc, o.maxProc)
+	c.noInput = o.noInput // un resumen es de un solo Engine
 	c.echoFrames += o.echoFrames
 	c.echoERLESum += o.echoERLESum
 	c.echoERLECount += o.echoERLECount
@@ -290,6 +294,9 @@ func (c *captureInterval) add(o captureInterval) {
 func (c captureInterval) String() string {
 	line := fmt.Sprintf("capturados=%d (%.1f/s) descartados=%d enviados=%d | cola máx=%d frames proc máx=%.1f ms",
 		c.frames, c.rate(), c.dropped, c.sent, c.maxQueue, float64(c.maxProc)/float64(time.Millisecond))
+	if c.noInput {
+		line = fmt.Sprintf("sin micrófono de la PC enviados=%d", c.sent)
+	}
 	if c.echoFrames == 0 {
 		return line
 	}
@@ -314,7 +321,11 @@ func logCaptureStats(st *audioLogState, current captureSnapshot) (interval captu
 	if previous.engine != current.engine || previous.at.IsZero() {
 		// Engine nuevo: todavía no hay intervalo para comparar.
 		flushSendSummary(st)
-		logging.Infof("Envío: hilo de envío con %s", current.engine.SendThreadPriority())
+		if current.engine.HasInput() {
+			logging.Infof("Envío: hilo de envío con %s", current.engine.SendThreadPriority())
+		} else {
+			logging.Infof("Envío: sin micrófono de la PC")
+		}
 		return captureInterval{}, false
 	}
 	interval = captureInterval{
@@ -328,6 +339,7 @@ func logCaptureStats(st *audioLogState, current captureSnapshot) (interval captu
 		echoERLESum:   current.stats.EchoERLESum,
 		echoERLECount: current.stats.EchoERLECount,
 		echoDelayMS:   current.stats.EchoDelayMS,
+		noInput:       !current.engine.HasInput(),
 	}
 	logf := logging.Tracef
 	if interval.problem() {

@@ -415,6 +415,8 @@ var en = map[string]string{
 	"audio.busy_pc_help":       "Close the programs you don't need or lower the game's graphics.",
 	"audio.echo_failed":        "Echo cancellation failed and was turned off.",
 	"audio.echo_failed_help":   "If the others hear an echo, use headphones; Restart audio tries it again.",
+	"audio.no_mic":             "Couldn't open the mic: you hear the others but they can't hear you.",
+	"audio.no_mic_help":        "Plug in a mic or pick another one in Settings → Input and output (or use your phone), then click Restart audio.",
 	"phone.disconnected_help":  "Unlock it and keep the page open with the screen on; if it doesn't come back, scan the QR again (Settings → Phone).",
 	"phone.server_help":        "Pick the phone again in Settings → Input and output to restart it, or use another mic.",
 	"status.config_save_help":  "Changes last until you close the app. Check that there's free disk space and that no antivirus blocks the data folder.",

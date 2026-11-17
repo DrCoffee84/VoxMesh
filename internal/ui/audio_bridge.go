@@ -161,6 +161,10 @@ func (a *App) startMicPreview(input, output audio.Device) error {
 	if err != nil {
 		return err
 	}
+	if err := engine.InputErr(); err != nil {
+		engine.Stop() // la escucha de prueba es del micrófono: sin él, el error se ve en Ajustes
+		return err
+	}
 	a.previewMu.Lock()
 	a.previewEngine = engine
 	a.previewMu.Unlock()
@@ -305,12 +309,19 @@ func (a *App) startAudio(udp *transport.UDP) {
 	a.resetEncoder()
 	a.effects.Reset()
 	a.voiceProcessor.Reset()
-	engine, err := audio.NewEngine(inputWant, outputWant, func(frame audio.CapturedFrame) {
-		if a.phoneMicEnabled() {
-			return
+	// Con el celular de entrada no se abre el micrófono de la PC (onFrame nil): no se usa y sería
+	// un lugar más donde fallar. Pasar del celular al micrófono en Ajustes reabre el audio.
+	phone := cfg.InputDevice == phoneMicInput
+	var onFrame func(audio.CapturedFrame)
+	if !phone {
+		onFrame = func(frame audio.CapturedFrame) {
+			if a.phoneMicEnabled() {
+				return
+			}
+			a.sendOutgoingPCM(frame, udp)
 		}
-		a.sendOutgoingPCM(frame, udp)
-	})
+	}
+	engine, err := audio.NewEngine(inputWant, outputWant, onFrame)
 	if err != nil {
 		logging.Errorf("audio no disponible: %s", logging.FormatError(err))
 		msg := i18n.M("audio.unavailable")
@@ -330,14 +341,22 @@ func (a *App) startAudio(udp *transport.UDP) {
 	// este Engine.
 	engine.SetDeafened(a.isDeafened.Load())
 	ready := i18n.M("audio.ready", audioDevicesText(cfg, input, output))
+	micErr := engine.InputErr()
+	if micErr != nil {
+		// El micrófono no abrió: la sala suena igual, pero no te escuchan (R11).
+		logging.Errorf("micrófono no disponible (la sala sigue solo con la salida): %s", logging.FormatError(micErr))
+		ready = i18n.M("audio.no_mic")
+	}
 	a.setStatus(i18n.Join(notice, ready))
-	if a.audioDropReported.Swap(false) {
+	reported := micErr != nil && a.reportProblem(problemNoMic, ready)
+	if a.audioDropReported.Swap(false) && !reported {
 		a.addActivity(ready.String()) // el registro dijo que se cayó: con qué quedó (C14)
 	}
 }
 
 // inputChoice es el micrófono elegido en la config. El celular no es un dispositivo de Windows:
-// con él la sala abre el predeterminado (su captura se ignora, ver startAudio).
+// con él la sala no abre el micrófono de la PC (ver startAudio); fuera de la sala se resuelve el
+// predeterminado.
 func inputChoice(cfg *config.Config) audio.Device {
 	if cfg.InputDevice == phoneMicInput {
 		return audio.DefaultChoice
