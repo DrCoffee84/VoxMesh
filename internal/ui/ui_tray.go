@@ -32,12 +32,12 @@ func (a *App) setupTray(application fyne.App) {
 	}
 	// Siempre el mismo *fyne.Menu: cuando la bandeja termina de arrancar, Fyne vuelve a cargar el
 	// menú que recibió la primera vez; con el mismo objeto, carga los ítems de ese momento.
-	a.trayMenu = fyne.NewMenu(appTitle)
+	a.trayMenu = fyne.NewMenu(appTitle())
 	a.trayMenu.Items = a.trayMenuItems()
 	desk.SetSystemTrayMenu(a.trayMenu)
 	a.trayDesk = desk
-	a.hookTrayLeftClick()        // clic izquierdo = abrir (C27); el derecho sigue abriendo el menú
-	systray.SetTooltip(appTitle) // Fyne no le pone leyenda en Windows
+	a.hookTrayLeftClick()          // clic izquierdo = abrir (C27); el derecho sigue abriendo el menú
+	systray.SetTooltip(appTitle()) // Fyne no le pone leyenda en Windows
 	// El cierre de esa ventana oculta llamaba al Quit de Fyne, que no manda el Leave ni borra la
 	// regla UPnP: ahora es "Salir".
 	for _, w := range application.Driver().AllWindows() {
@@ -159,7 +159,7 @@ func (a *App) hideToTray() {
 	logging.Infof("Ventana oculta: VoxMesh sigue en el área de notificaciones")
 }
 
-// showMainWindow muestra la ventana principal y la pasa adelante: "Abrir VoxMesh" del menú y
+// showMainWindow muestra la ventana principal y la pasa adelante: "Abrir la app de Coffee" del menú y
 // otra instancia que se abrió (main → OnShowRequest). Hilo de UI.
 func (a *App) showMainWindow() {
 	if a.window == nil || a.quitting.Load() {
@@ -167,6 +167,10 @@ func (a *App) showMainWindow() {
 	}
 	a.hiddenToTray = false
 	a.window.Show()
+	if a.maximizeOnShow {
+		a.maximizeOnShow = false // la primera vez después de arrancar escondida (F12)
+		a.maximizeWindow()
+	}
 	restoreWindow(a.window) // Show no la saca de minimizada
 	a.window.RequestFocus()
 }
@@ -192,7 +196,7 @@ type trayHint struct {
 
 // showTrayHint avisa, cuando la X oculta la app y hasta que se marque "No volver a mostrar", que
 // VoxMesh sigue abierto y cómo salir: para un usuario común, si no, parece que se cerró.
-// "Entendido" la oculta; "Salir de VoxMesh" sale del todo. Hilo de UI.
+// "Entendido" la oculta; "Salir de la app de Coffee" sale del todo. Hilo de UI.
 func (a *App) showTrayHint() *trayHint {
 	if a.trayHintOpen {
 		return nil // la X otra vez con el aviso abierto

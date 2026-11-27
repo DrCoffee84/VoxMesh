@@ -145,7 +145,7 @@ func TestShareBannerPushesContentDown(t *testing.T) {
 	test.NewTempApp(t).Settings().SetTheme(voxTheme{})
 	a := New(filepath.Join(t.TempDir(), "voxmesh.exe"))
 	window := test.NewTempWindow(t, a.content())
-	window.SetTitle(appTitle)
+	window.SetTitle(appTitle())
 	a.window = window
 	window.Resize(fyne.NewSize(960, 700))
 	center := a.mainFrame.Objects[0]
@@ -168,7 +168,7 @@ func TestShareBannerPushesContentDown(t *testing.T) {
 	if a.shareBanner.Visible() || center.Position().Y != before {
 		t.Fatalf("after stopping: banner visible=%v, content at y=%v (want %v)", a.shareBanner.Visible(), center.Position().Y, before)
 	}
-	if got := window.Title(); got != appTitle {
-		t.Fatalf("title after stopping = %q, want %q", got, appTitle)
+	if got := window.Title(); got != appTitle() {
+		t.Fatalf("title after stopping = %q, want %q", got, appTitle())
 	}
 }

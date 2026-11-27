@@ -681,6 +681,7 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 		logLevelSelect.SetSelected(logNormal)
 	}
 	_, paletteRow := a.newPaletteBar(palettes)
+	autostartCheck, autostartHelp := a.newAutostartCheck()
 	interfaceCard := uiCard(container.NewVBox(
 		widget.NewLabel(i18n.T("settings.username")),
 		username,
@@ -693,6 +694,8 @@ func (a *App) renderSettingsView(devices audio.DeviceLists, inputProfiles, outpu
 		eventSoundsCheck,
 	))
 	systemCard := uiCard(container.NewVBox(
+		autostartCheck,
+		autostartHelp,
 		logLevelLabel,
 		logLevelSelect,
 		// Uno debajo del otro: en tres columnas cada una medía lo que el texto más largo.

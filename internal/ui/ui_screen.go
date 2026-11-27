@@ -223,7 +223,7 @@ func (a *App) refreshShareControls() {
 }
 
 // setSharingIndicator prende o apaga el aviso de que comparto que se ve fuera de la ventana: el
-// título ("VoxMesh · Compartiendo", también en Alt+Tab) y el punto rojo sobre el botón de la barra
+// título ("La app de Coffee · Compartiendo", también en Alt+Tab) y el punto rojo sobre el botón de la barra
 // de tareas (taskbar_windows.go). Se llama solo desde refreshShareControls, junto con el banner,
 // así nunca quedan distintos: Detener, desconectarse (también al cerrar la app) y una falla o
 // panic de la captura pasan todos por stopScreenShare. Hilo de UI.
@@ -231,7 +231,7 @@ func (a *App) setSharingIndicator(on bool) {
 	if a.window == nil {
 		return // tests que arman solo el contenido
 	}
-	title := appTitle
+	title := appTitle()
 	if on {
 		title = i18n.T("main.title_sharing")
 	}

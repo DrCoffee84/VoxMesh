@@ -223,7 +223,7 @@ func (a *App) content() fyne.CanvasObject {
 	a.topHangupBtn.Importance = widget.LowImportance
 	a.topHangupBtn.Disable()
 
-	title := widget.NewLabelWithStyle("VoxMesh", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	title := widget.NewLabelWithStyle(appTitle(), fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	// Nombre propio e indicador de voz: los actualizan la conexión, Ajustes y flashVoiceIndicator.
 	a.voiceIndicator = newThemedCircle(colorNameIdle)
 	voiceDot := container.NewCenter(container.NewGridWrap(fyne.NewSize(10, 10), a.voiceIndicator))

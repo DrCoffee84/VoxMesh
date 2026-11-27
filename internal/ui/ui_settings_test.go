@@ -64,6 +64,7 @@ func testSettingsTabs(t *testing.T, lang string) {
 		{"nombre", 3, entryWithText("Pepe")},
 		{"idioma", 3, labelWithText(languageLabel)},
 		{"X a la bandeja", 3, checkWithText(paramLabel(config.ParamByKey("close_to_tray")))},
+		{"iniciar con Windows", 4, checkWithText(i18n.T("settings.autostart"))},
 		{"nivel de log", 4, labelWithText(i18n.T("settings.log_level"))},
 		{"Acerca de", 4, buttonWithText(i18n.T("about.title"))},
 	} {

@@ -141,7 +141,7 @@ func newTrayApp(t *testing.T) (*App, *fakeTray) {
 	a.window.Resize(fyne.NewSize(900, 620))
 	tray := &fakeTray{}
 	a.trayDesk = tray
-	a.trayMenu = fyne.NewMenu(appTitle)
+	a.trayMenu = fyne.NewMenu(appTitle())
 	return a, tray
 }
 
@@ -185,7 +185,7 @@ func TestTrayMenuFollowsState(t *testing.T) {
 
 // TestTrayHint (C21, C26): la primera X muestra el aviso; "Ocultar" oculta la ventana (sin foco en
 // una entrada, para los atajos de una tecla) y, con el check, la próxima X oculta directo.
-// "Abrir VoxMesh" la vuelve a mostrar.
+// "Abrir la app de Coffee" la vuelve a mostrar.
 func TestTrayHint(t *testing.T) {
 	a, _ := newTrayApp(t)
 	a.window.Canvas().Focus(a.chatInput)
@@ -208,7 +208,7 @@ func TestTrayHint(t *testing.T) {
 
 	a.showMainWindow()
 	if a.hiddenToTray {
-		t.Fatal("Abrir VoxMesh no la mostró")
+		t.Fatal("Abrir la app de Coffee no la mostró")
 	}
 	a.closeWindow()
 	if !a.hiddenToTray || len(a.window.Canvas().Overlays().List()) != 0 {

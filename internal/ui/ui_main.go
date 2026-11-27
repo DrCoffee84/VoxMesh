@@ -209,11 +209,12 @@ type App struct {
 
 	// Ícono del área de notificaciones (C21, ui_tray.go). trayDesk nil = sin ícono (la X sale);
 	// trayMenu es siempre el mismo objeto (setupTray). Los bool, solo el hilo de UI.
-	trayDesk     desktop.App
-	trayMenu     *fyne.Menu
-	hiddenToTray bool        // la X ocultó la ventana (su estado ya se guardó al ocultarla)
-	trayHintOpen bool        // el aviso de la primera vez está abierto
-	quitting     atomic.Bool // quit ya empezó: corre una sola vez y nada vuelve a mostrar la ventana
+	trayDesk       desktop.App
+	trayMenu       *fyne.Menu
+	hiddenToTray   bool        // la X ocultó la ventana (su estado ya se guardó al ocultarla)
+	maximizeOnShow bool        // arrancó escondida (F12) y estaba maximizada: se maximiza al abrirla
+	trayHintOpen   bool        // el aviso de la primera vez está abierto
+	quitting       atomic.Bool // quit ya empezó: corre una sola vez y nada vuelve a mostrar la ventana
 
 	// "En tu red" (F9): el servicio de presencia (lan_presence.go, con su mutex) y la tarjeta de la
 	// columna izquierda (ui_lan.go, solo el hilo de UI).
@@ -237,9 +238,11 @@ type App struct {
 	helloRejectLogged time.Time   // último Hello sin firma válida en el log; solo receiveLoop
 }
 
-// appTitle es el título de la ventana principal (un nombre: no se traduce). Mientras comparto
-// pantalla pasa a main.title_sharing (setSharingIndicator).
-const appTitle = "VoxMesh"
+// appTitle es el nombre que ve el usuario ("La app de Coffee" / "Coffee's App", AGENDA C41): título
+// de la ventana, menú y leyenda de la bandeja, arriba a la izquierda y Acerca de. El nombre técnico
+// (voxmesh.exe, la carpeta de datos, el updater, los protocolos) sigue siendo VoxMesh. Mientras
+// comparto pantalla el título pasa a main.title_sharing (setSharingIndicator).
+func appTitle() string { return i18n.T("app.name") }
 
 // phoneMicInput es el valor que se guarda en InputDevice cuando la entrada es el celular (un
 // identificador: no se traduce; el select muestra deviceOptionLabel).
@@ -343,7 +346,7 @@ func (a *App) Run(onShowRequest func(func())) {
 		application.SetIcon(appIcon)
 	}
 	a.loadIdentity() // un archivo chico, antes de la ventana y de "En tu red" (lo firma todo)
-	a.window = application.NewWindow(appTitle)
+	a.window = application.NewWindow(appTitle())
 	if len(appIconBytes) > 0 {
 		appIcon := fyne.NewStaticResource("icon.png", appIconBytes)
 		a.window.SetIcon(appIcon)
@@ -377,12 +380,21 @@ func (a *App) Run(onShowRequest func(func())) {
 	// frenaba las goroutines que asignan (también la de envío de audio) y competía con el hilo de
 	// UI. El runtime devuelve sola la memoria libre al sistema, de a poco.
 	debug.SetMemoryLimit(memoryLimit)
-	// Equivale a ShowAndRun, pero maximizar necesita la ventana ya creada (el HWND existe
-	// recién después de Show). Se muestra un instante con el tamaño normal guardado, que es
-	// al que vuelve al restaurar.
-	a.window.Show()
-	if cfg.WindowMaximized {
-		a.maximizeWindow()
+	a.refreshAutostart()
+	if winproc.LaunchedAtLogin(os.Args[1:]) && a.trayReady() {
+		// La abrió Windows al iniciar sesión (F12): arranca escondida junto al reloj, sin tapar
+		// nada. Sin ícono no habría cómo abrirla: ahí se muestra como siempre.
+		a.hiddenToTray = true
+		a.maximizeOnShow = cfg.WindowMaximized
+		logging.Infof("Iniciada con Windows: queda en el área de notificaciones")
+	} else {
+		// Equivale a ShowAndRun, pero maximizar necesita la ventana ya creada (el HWND existe
+		// recién después de Show). Se muestra un instante con el tamaño normal guardado, que es
+		// al que vuelve al restaurar.
+		a.window.Show()
+		if cfg.WindowMaximized {
+			a.maximizeWindow()
+		}
 	}
 	// Primero el nombre, si es el de fábrica; las actualizaciones se buscan cuando se cierra ese
 	// diálogo, así su aviso nunca lo tapa.

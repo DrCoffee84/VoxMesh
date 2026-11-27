@@ -19,3 +19,12 @@ func (*Instance) RequestShow() {}
 
 // OnShowRequest no hace nada fuera de Windows.
 func (*Instance) OnShowRequest(func()) {}
+
+// Autostart siempre es false fuera de Windows.
+func Autostart() bool { return false }
+
+// SetAutostart no hace nada fuera de Windows.
+func SetAutostart(bool) error { return nil }
+
+// RefreshAutostart no hace nada fuera de Windows.
+func RefreshAutostart() (bool, error) { return false, nil }

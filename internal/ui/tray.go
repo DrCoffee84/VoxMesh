@@ -41,11 +41,11 @@ type trayEntry struct {
 	disabled bool
 }
 
-// trayMenuEntries arma el menú del ícono. "Abrir VoxMesh" va primero: en Windows el clic
+// trayMenuEntries arma el menú del ícono. "Abrir la app de Coffee" va primero: en Windows el clic
 // izquierdo abre este mismo menú, no la ventana (Fyne 2.6.3). "Salir" va último: si no, Fyne
 // agrega su propio "Quit", que cierra sin mandar el Leave ni borrar la regla UPnP.
 //
-// Los pedidos para entrar que esperan (F10) van debajo de "Abrir VoxMesh", cada uno con su
+// Los pedidos para entrar que esperan (F10) van debajo de "Abrir la app de Coffee", cada uno con su
 // submenú: así se contestan sin abrir la ventana ni sacar el juego.
 func trayMenuEntries(s trayState) []trayEntry {
 	entries := []trayEntry{{action: trayOpen, key: "tray.open"}}

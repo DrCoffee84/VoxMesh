@@ -53,7 +53,7 @@ func aboutContent(shortID string, checkUpdates func()) fyne.CanvasObject {
 		rows = append(rows, container.NewCenter(icon))
 	}
 	rows = append(rows,
-		center("VoxMesh", fyne.TextStyle{Bold: true}),
+		center(appTitle(), fyne.TextStyle{Bold: true}),
 		center(aboutVersionText(), fyne.TextStyle{}),
 		center(i18n.T("about.id", shortID), fyne.TextStyle{Monospace: true}),
 	)

@@ -31,7 +31,7 @@ func TestUserErrorsKeepSpanishText(t *testing.T) {
 	if got := errorMsg(wrapped).In(i18n.EN); got != "the invite has no valid key (31 bytes)" {
 		t.Fatalf("envuelto en inglés = %q", got)
 	}
-	if _, err := invite.Parse("192.168.0.10:47830"); errorMsg(err).In(i18n.EN) != "it's not a VoxMesh invite" {
+	if _, err := invite.Parse("192.168.0.10:47830"); errorMsg(err).In(i18n.EN) != "it's not a Coffee's App invite" {
 		t.Fatalf("invite.Parse: %q", errorMsg(err).In(i18n.EN))
 	}
 	// Un error técnico va tal cual en cualquier idioma.

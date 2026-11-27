@@ -14,7 +14,7 @@ var (
 )
 
 func showHeadlessWarning() {
-	title, _ := windows.UTF16PtrFromString("VoxMesh no se pudo iniciar")
+	title, _ := windows.UTF16PtrFromString("La app de Coffee no se pudo iniciar")
 	message, _ := windows.UTF16PtrFromString("Este ejecutable fue compilado sin CGO_ENABLED=1, por lo que no incluye la interfaz Fyne. Instala MinGW-w64 y recompila con CGO_ENABLED=1.")
 	_, _, _ = messageBoxW.Call(0, uintptr(unsafe.Pointer(message)), uintptr(unsafe.Pointer(title)), 0x10)
 }
